@@ -1,0 +1,15 @@
+# Render 一键部署蓝图（免费档）
+# 用法：代码推到 GitHub 后，Render 控制台 → New → Blueprint → 选此仓库，自动按本文件部署。
+services:
+  - type: web
+    name: gdys
+    runtime: node
+    plan: free
+    region: singapore # 离国内较近
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 24

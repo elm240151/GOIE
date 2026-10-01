@@ -1,0 +1,17 @@
+{
+  "name": "@gdys/shared",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./roles/loader.node": "./src/roles/loader.node.ts",
+    "./roles/loader.client": "./src/roles/loader.client.ts"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "build": "tsc -p tsconfig.build.json"
+  }
+}

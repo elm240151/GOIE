@@ -1,0 +1,391 @@
+// 房间：座位/角色选择/准备/开局/rematch/掉线自动过/技能询问/事件广播。
+// 服务端权威：所有游戏动作走 shared 的 GameEngine，结果以事件 + 按人过滤的快照广播。
+import { randomUUID } from 'node:crypto';
+import {
+  defaultRules,
+  GameEngine,
+  mulberry32,
+  SERVER_EVENTS,
+  type ActionResult,
+  type EnginePlayer,
+  type GameEvent,
+  type RoleRegistry,
+  type RoomState,
+  type SkillAsk,
+  type SkillUsePayload,
+} from '@gdys/shared';
+import { autoPlayFallback, generatePlayerSecret } from './reconnect';
+import type { ScoreStore } from './scoreStore';
+
+/** 房间对 socket 的最小依赖（Socket.IO 的 Socket 结构上满足；测试用假 socket） */
+export interface RoomSocket {
+  id: string;
+  emit(ev: string, payload: unknown): unknown;
+}
+
+interface Seat {
+  id: string;
+  name: string;
+  roleId: string;
+  ready: boolean;
+  connected: boolean;
+  isHost: boolean;
+  secret: string;
+  socketId: string | null;
+}
+
+export interface RoomOptions {
+  code: string;
+  roles: RoleRegistry;
+  scoreStore: ScoreStore;
+  autoPassMs: number;
+  /** 测试注入：自定义引擎（如指定手牌）；不传则正常随机发牌 */
+  engineFactory?: (opts: { players: EnginePlayer[]; startPlayerId: string; scores: Record<string, number> }) => GameEngine;
+}
+
+export class Room {
+  readonly code: string;
+  phase: 'lobby' | 'playing' | 'finished' = 'lobby';
+  private hostId = '';
+  private readonly seats: Seat[] = [];
+  private readonly sockets = new Map<string, RoomSocket>();
+  private readonly roles: RoleRegistry;
+  private readonly scoreStore: ScoreStore;
+  private readonly autoPassMs: number;
+  private readonly engineFactory: RoomOptions['engineFactory'];
+  private engine: GameEngine | null = null;
+  private totals: Record<string, number> = {};
+  private lastWinnerId: string | null = null;
+  private lastDeltas: Record<string, number> | null = null;
+  private rematchVotes = new Set<string>();
+  private autoPassTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private askTimer: ReturnType<typeof setTimeout> | null = null;
+
+  constructor(opts: RoomOptions) {
+    this.code = opts.code;
+    this.roles = opts.roles;
+    this.scoreStore = opts.scoreStore;
+    this.autoPassMs = opts.autoPassMs;
+    this.engineFactory = opts.engineFactory;
+  }
+
+  get playerCount(): number {
+    return this.seats.length;
+  }
+
+  state(): RoomState {
+    return {
+      code: this.code,
+      phase: this.phase,
+      hostId: this.hostId,
+      players: this.seats.map((s) => ({
+        id: s.id,
+        name: s.name,
+        roleId: s.roleId,
+        ready: s.ready,
+        connected: s.connected,
+        isHost: s.isHost,
+      })),
+      winnerId: this.lastWinnerId,
+      scoreDeltas: this.lastDeltas,
+      totals: { ...this.totals },
+      rematchVotes: [...this.rematchVotes],
+    };
+  }
+
+  // ---------- 大厅 ----------
+
+  addPlayer(name: string, socket: RoomSocket, isHost: boolean): { playerId: string; secret: string } {
+    name = name.trim();
+    if (!name || name.length > 12) throw new Error('名字需为 1-12 个字符');
+    if (this.phase !== 'lobby') throw new Error('游戏已开始，无法加入');
+    if (this.seats.length >= 6) throw new Error('房间已满（最多 6 人）');
+    if (this.seats.some((s) => s.name === name)) throw new Error('名字已被使用');
+    const playerId = randomUUID();
+    const secret = generatePlayerSecret();
+    this.seats.push({ id: playerId, name, roleId: '', ready: false, connected: true, isHost, secret, socketId: socket.id });
+    this.sockets.set(playerId, socket);
+    if (isHost) this.hostId = playerId;
+    return { playerId, secret };
+  }
+
+  rejoin(playerId: string, secret: string, socket: RoomSocket): void {
+    const seat = this.seats.find((s) => s.id === playerId);
+    if (!seat) throw new Error('该房间没有这个座位');
+    if (seat.secret !== secret) throw new Error('身份校验失败');
+    seat.socketId = socket.id;
+    seat.connected = true;
+    this.cancelAutoPass(playerId);
+    this.sockets.set(playerId, socket);
+    this.broadcastState();
+    if (this.engine) {
+      socket.emit(SERVER_EVENTS.snapshot, this.engine.snapshotFor(playerId));
+      // 重连时把未决的技能询问重新发给被询问者
+      const ask = this.engine.currentAsk(playerId);
+      if (ask) socket.emit(SERVER_EVENTS.skillAsk, ask);
+    }
+  }
+
+  selectRole(playerId: string, roleId: string): void {
+    if (this.phase !== 'lobby') throw new Error('游戏中不能更换角色');
+    const seat = this.seatOf(playerId);
+    const role = this.roles.get(roleId);
+    if (!role) throw new Error('角色不存在');
+    const taken = this.seats.filter((s) => s.roleId === roleId && s.id !== playerId).length;
+    if (taken >= (role.maxPerRoom ?? 1)) throw new Error('该角色已被别人选择');
+    seat.roleId = roleId;
+    this.broadcastState();
+  }
+
+  setReady(playerId: string, ready: boolean): void {
+    if (this.phase !== 'lobby') throw new Error('当前不能更改准备状态');
+    this.seatOf(playerId).ready = ready;
+    this.broadcastState();
+  }
+
+  /** 房主开局：全员连接、选好角色、准备完毕 */
+  startGame(hostId: string): void {
+    if (this.phase !== 'lobby') throw new Error('游戏已在进行中');
+    if (hostId !== this.hostId) throw new Error('只有房主可以开始游戏');
+    if (this.seats.length < 2) throw new Error('至少需要 2 名玩家');
+    if (!this.seats.every((s) => s.connected)) throw new Error('有玩家掉线，无法开始');
+    if (!this.seats.every((s) => s.roleId)) throw new Error('还有玩家未选角色');
+    if (!this.seats.every((s) => s.ready)) throw new Error('还有玩家未准备');
+    for (const s of this.seats) {
+      if (!this.roles.has(s.roleId)) throw new Error('存在未注册的角色');
+    }
+    // 先手：上局赢家；首局房主
+    const startPlayerId =
+      this.lastWinnerId && this.seats.some((s) => s.id === this.lastWinnerId)
+        ? this.lastWinnerId
+        : this.hostId;
+    const players = this.seats.map((s) => ({ id: s.id, name: s.name, roleId: s.roleId }));
+    this.engine = this.engineFactory
+      ? this.engineFactory({ players, startPlayerId, scores: this.totals })
+      : new GameEngine(defaultRules, players, {
+          rng: mulberry32(Math.floor(Math.random() * 2 ** 31)),
+          startPlayerId,
+          roles: this.roles,
+          scores: this.totals,
+        });
+    this.phase = 'playing';
+    this.engine.start();
+    this.dispatchEvents(this.engine.drainEvents());
+    this.syncSnapshots();
+    this.broadcastState();
+  }
+
+  // ---------- 对局 ----------
+
+  play(playerId: string, cardIds: number[]): void {
+    const r = this.requireEngine().playCards(playerId, cardIds);
+    if (!r.ok) {
+      this.sendTo(playerId, SERVER_EVENTS.error, r.reason);
+      return;
+    }
+    this.afterAction(r);
+  }
+
+  pass(playerId: string): void {
+    const r = this.requireEngine().pass(playerId);
+    if (!r.ok) {
+      this.sendTo(playerId, SERVER_EVENTS.error, r.reason);
+      return;
+    }
+    this.afterAction(r);
+  }
+
+  /** 主动技（无 askId）或回答技能询问（有 askId） */
+  useSkill(playerId: string, req: SkillUsePayload): void {
+    const engine = this.requireEngine();
+    const r = req.askId
+      ? engine.resolveAsk(playerId, {
+          askId: req.askId,
+          choice: req.choice,
+          cardIds: req.cardIds,
+          targetPlayerId: req.targetPlayerId,
+        })
+      : engine.useSkillAction(playerId, { skillId: req.skillId ?? '' });
+    if (!r.ok) {
+      this.sendTo(playerId, SERVER_EVENTS.error, r.reason);
+      return;
+    }
+    this.cancelAskTimer();
+    this.afterAction(r);
+  }
+
+  rematch(playerId: string): void {
+    if (this.phase !== 'finished') throw new Error('当前不能发起再来一局');
+    this.rematchVotes.add(playerId);
+    this.broadcastState();
+    // 全员投票 → 回到房间，可重新选角色、重新准备（房主开局；先手仍给上局赢家）
+    if (this.rematchVotes.size >= this.seats.length) {
+      this.rematchVotes.clear();
+      this.phase = 'lobby';
+      this.engine = null;
+      for (const s of this.seats) s.ready = false;
+      this.broadcastState();
+    }
+  }
+
+  leave(socketId: string): void {
+    const seat = this.seats.find((s) => s.socketId === socketId);
+    if (!seat) return;
+    if (this.phase !== 'lobby') {
+      // 对局中离开按掉线处理：座位保留，可随时重连回来
+      this.onSocketDisconnect(socketId);
+      return;
+    }
+    this.sockets.delete(seat.id);
+    this.rematchVotes.delete(seat.id);
+    this.seats.splice(this.seats.indexOf(seat), 1);
+    if (this.hostId === seat.id) {
+      const next = this.seats[0];
+      if (next) {
+        next.isHost = true;
+        this.hostId = next.id;
+      }
+    }
+    this.broadcastState();
+  }
+
+  onSocketDisconnect(socketId: string): void {
+    const seat = this.seats.find((s) => s.socketId === socketId);
+    if (!seat) return;
+    seat.socketId = null;
+    seat.connected = false;
+    this.sockets.delete(seat.id);
+    // 轮到掉线者 → 超时自动过（起牌者自动出最小牌）
+    if (this.phase === 'playing' && this.engine) {
+      const turnId = this.engine.snapshotFor(this.seats[0]!.id).turnPlayerId;
+      if (turnId === seat.id) this.scheduleAutoPass(seat.id);
+    }
+    this.broadcastState();
+  }
+
+  clearTimers(): void {
+    for (const t of this.autoPassTimers.values()) clearTimeout(t);
+    this.autoPassTimers.clear();
+    this.cancelAskTimer();
+  }
+
+  // ---------- 内部 ----------
+
+  private seatOf(playerId: string): Seat {
+    const seat = this.seats.find((s) => s.id === playerId);
+    if (!seat) throw new Error('你不是这个房间的成员');
+    return seat;
+  }
+
+  private requireEngine(): GameEngine {
+    if (!this.engine || this.phase !== 'playing') throw new Error('游戏不在进行中');
+    return this.engine;
+  }
+
+  private afterAction(r: ActionResult): void {
+    if (!r.ok) return;
+    this.dispatchEvents(r.events);
+    this.syncSnapshots();
+    this.handlePendingAsk();
+    if (this.engine!.snapshotFor(this.seats[0]!.id).phase === 'finished') void this.onFinished();
+  }
+
+  /** 动作后出现技能询问：把完整询问发给被询问者并启动超时自动弃权 */
+  private handlePendingAsk(): void {
+    this.cancelAskTimer();
+    const engine = this.engine;
+    if (!engine || this.phase !== 'playing') return;
+    const askedId = engine.pendingAskPlayerId;
+    if (!askedId) return;
+    const ask = engine.currentAsk(askedId);
+    if (!ask) return;
+    this.sendTo(askedId, SERVER_EVENTS.skillAsk, ask);
+    this.askTimer = setTimeout(() => {
+      this.askTimer = null;
+      const cur = this.engine?.currentAsk(askedId);
+      if (!cur || this.phase !== 'playing') return;
+      const r = this.engine!.resolveAsk(askedId, { askId: cur.askId!, choice: 'decline' });
+      if (r.ok) this.afterAction(r);
+    }, ask.timeoutMs ?? defaultRules.timeout.skillAskMs);
+  }
+
+  private cancelAskTimer(): void {
+    if (this.askTimer) {
+      clearTimeout(this.askTimer);
+      this.askTimer = null;
+    }
+  }
+
+  private async onFinished(): Promise<void> {
+    const snap = this.engine!.snapshotFor(this.seats[0]!.id);
+    this.phase = 'finished';
+    this.lastWinnerId = snap.winnerId;
+    this.lastDeltas = snap.scoreDeltas;
+    this.totals = { ...snap.totals };
+    this.broadcastState();
+    void this.scoreStore
+      .add({
+        at: new Date().toISOString(),
+        roomId: this.code,
+        winnerId: snap.winnerId,
+        players: this.seats.map((s) => ({
+          id: s.id,
+          name: s.name,
+          roleId: s.roleId,
+          score: snap.scoreDeltas?.[s.id] ?? 0,
+        })),
+      })
+      .catch((e) => console.error('[战绩] 写入失败', e));
+  }
+
+  private scheduleAutoPass(playerId: string): void {
+    this.cancelAutoPass(playerId);
+    const timer = setTimeout(() => {
+      this.autoPassTimers.delete(playerId);
+      const seat = this.seats.find((s) => s.id === playerId);
+      if (!seat || seat.connected || !this.engine) return;
+      const turnId = this.engine.snapshotFor(this.seats[0]!.id).turnPlayerId;
+      if (turnId !== playerId) return;
+      // 有技能询问挂起：动作全部被拦，等询问了结后重排定时器
+      if (this.engine.pendingAskPlayerId) {
+        this.scheduleAutoPass(playerId);
+        return;
+      }
+      const r = autoPlayFallback(this.engine, playerId, defaultRules);
+      if (r && r.ok) this.afterAction(r);
+    }, this.autoPassMs);
+    this.autoPassTimers.set(playerId, timer);
+  }
+
+  private cancelAutoPass(playerId: string): void {
+    const t = this.autoPassTimers.get(playerId);
+    if (t) {
+      clearTimeout(t);
+      this.autoPassTimers.delete(playerId);
+    }
+  }
+
+  private dispatchEvents(events: GameEvent[]): void {
+    for (const e of events) this.broadcast(SERVER_EVENTS.event, e);
+  }
+
+  private syncSnapshots(): void {
+    for (const s of this.seats) {
+      const socket = this.sockets.get(s.id);
+      if (socket) socket.emit(SERVER_EVENTS.snapshot, this.engine!.snapshotFor(s.id));
+    }
+  }
+
+  private sendTo(playerId: string, ev: string, payload: unknown): void {
+    const socket = this.sockets.get(playerId);
+    if (socket) socket.emit(ev, payload);
+  }
+
+  private broadcast(ev: string, payload: unknown): void {
+    for (const socket of this.sockets.values()) socket.emit(ev, payload);
+  }
+
+  broadcastState(): void {
+    this.broadcast(SERVER_EVENTS.roomUpdated, this.state());
+  }
+}
