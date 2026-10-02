@@ -1,4 +1,4 @@
-// 扇形手牌：按点数排序，点选放大，最多叠压显示。
+// 手牌一横排：按点数排序、全部正立，牌多时自动加大叠压保证一排装得下；点选上浮。
 import { isJoker, type Card as CardT } from '@gdys/shared';
 import Card from './Card';
 
@@ -26,27 +26,16 @@ export default function Hand({ cards, selectedIds, onToggle, order, enteredIds }
         .map((id) => cards.find((c) => c.id === id))
         .filter((c): c is CardT => c !== undefined)
     : sortHand(cards);
-  const n = sorted.length;
-  const angle = Math.min(24, 130 / Math.max(n, 1)); // 每张牌的张角，牌多时收拢
   // 入场顺序错开（多张同时摸入时逐张飞入，封顶 6 张）
   const enteredIndex = new Map<number, number>();
   (enteredIds ?? []).forEach((id, i) => enteredIndex.set(id, i));
   return (
     <div className="hand">
-      {sorted.map((c, i) => {
-        const deg = (i - (n - 1) / 2) * angle;
-        const lift = Math.abs(i - (n - 1) / 2);
+      {sorted.map((c) => {
         const enteredIdx = enteredIndex.get(c.id);
         return (
-          <div
-            key={c.id}
-            className="hand-slot"
-            style={{
-              transform: `rotate(${deg}deg) translateY(${lift * lift * 2.2}px)`,
-              zIndex: 100 + i - Math.round(lift), // 中间牌在上
-            }}
-          >
-            {/* 内层跑入场动画，避免与扇形 transform / 移位 transition 冲突 */}
+          <div key={c.id} className="hand-slot">
+            {/* 内层跑入场动画，与叠压布局互不干扰 */}
             <div
               className={`hand-slot-inner${enteredIdx !== undefined ? ' hand-enter' : ''}`}
               style={enteredIdx !== undefined ? { animationDelay: `${Math.min(enteredIdx, 5) * 0.06}s` } : undefined}

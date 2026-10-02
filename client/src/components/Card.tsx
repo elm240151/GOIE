@@ -1,4 +1,4 @@
-// 单张牌面。王显示为竖排"王"，颜色用共享 cardColor（大王红、小王黑）。
+// 单张牌面。王：双角标「王」+ 中央星徽与大小徽章，颜色用共享 cardColor（大王红、小王黑）。
 import { cardColor, isJoker, JOKER_BIG, rankLabel, SUITS, type Card as CardT, type Rank } from '@gdys/shared';
 
 interface Props {
@@ -20,10 +20,15 @@ export default function Card({ card, asRank, selected, onClick, disabled }: Prop
   return (
     <button type="button" className={cls} onClick={onClick} disabled={disabled || !onClick}>
       {joker ? (
-        <span className="card-joker-text">
-          {card.rank === JOKER_BIG ? '大王' : '小王'}
+        <>
+          <span className="card-corner">王</span>
+          <span className="card-corner card-corner-br">王</span>
+          <span className="card-center joker-center">
+            <span className="joker-star">✦</span>
+            <span className="joker-tag">{card.rank === JOKER_BIG ? '大' : '小'}</span>
+          </span>
           {asRank !== undefined && <em className="card-as-rank">当{label}</em>}
-        </span>
+        </>
       ) : (
         <>
           <span className="card-corner">{label}</span>

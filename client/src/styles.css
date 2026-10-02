@@ -556,9 +556,19 @@ body {
 .reveal-cards .card-corner {
   font-size: 12px;
 }
-.reveal-cards .card-joker-text {
-  font-size: 11px;
-  letter-spacing: 1px;
+.reveal-cards .joker-star {
+  font-size: 20px;
+}
+.reveal-cards .joker-tag {
+  width: 13px;
+  height: 13px;
+  font-size: 9px;
+  margin-top: 3px;
+  border-width: 1px;
+}
+.reveal-cards .card-corner-br {
+  right: 4px;
+  bottom: 3px;
 }
 .reveal-slot {
   perspective: 400px;
@@ -806,25 +816,21 @@ body {
   color: var(--text-dim);
 }
 
-/* 扇形手牌 */
+/* 手牌一横排：全部正立；牌多时槽位自动收缩（flex-shrink），牌面叠压保证一排装得下 */
 .hand {
   display: flex;
   justify-content: center;
   align-items: flex-end;
-  height: calc(var(--card-h) + 52px);
-  padding: 26px 40px 0;
+  height: calc(var(--card-h) + 34px);
+  padding: 22px 12px 0;
   overflow: visible;
 }
 .hand-slot {
-  margin-left: calc(var(--card-w) * -0.42);
-  flex: 0 0 auto;
-  transition: transform 0.12s;
-}
-.hand-slot:first-child {
-  margin-left: 0;
+  flex: 0 1 var(--card-w);
+  min-width: calc(var(--card-w) * 0.3);
 }
 
-/* 新摸入牌的飞入动画（内层 wrapper：不与扇形 transform / 移位 transition 冲突） */
+/* 新摸入牌的飞入动画（内层 wrapper：与横排叠压布局互不干扰） */
 .hand-enter {
   animation: hand-enter 0.45s cubic-bezier(0.2, 0.8, 0.3, 1) backwards;
 }
@@ -857,7 +863,9 @@ body {
   top: 0;
   width: 34px;
   height: 50px;
-  background: linear-gradient(160deg, #2a4a6e, #1a3050);
+  background:
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.06) 0 5px, transparent 5px 10px),
+    linear-gradient(160deg, #2f5278, #1c3452);
   border: 1px solid #4a6a92;
   border-radius: 6px;
   box-shadow: 0 2px 5px rgba(0, 0, 0, 0.35);
@@ -866,7 +874,7 @@ body {
   content: '';
   position: absolute;
   inset: 4px;
-  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border: 1px dashed rgba(233, 196, 106, 0.4);
   border-radius: 4px;
 }
 .deck-stack .deck-back:nth-child(n + 2) {
@@ -919,22 +927,39 @@ body {
   color: #20242a;
 }
 .card-joker {
-  background: linear-gradient(160deg, #fff7e0, #ffe9a8);
-  border-color: var(--gold-dark);
+  background: radial-gradient(circle at 50% 36%, #fffdf6, #f6e9c3 78%);
+  border: 1.5px solid var(--gold-dark);
+}
+.card-joker::before {
+  content: '';
+  position: absolute;
+  inset: 5px;
+  border: 1px dashed rgba(176, 132, 34, 0.5);
+  border-radius: 5px;
+  pointer-events: none;
+}
+.joker-center {
+  flex-direction: column;
+}
+.joker-star {
+  font-size: 30px;
+  line-height: 1;
+  color: var(--gold-dark);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+.joker-tag {
+  margin-top: 4px;
+  width: 18px;
+  height: 18px;
+  border: 1.5px solid currentColor;
+  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #a06a00;
-}
-.card-joker-text {
-  writing-mode: vertical-lr;
-  font-size: 15px;
+  font-size: 12px;
   font-weight: 800;
-  letter-spacing: 2px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 2px;
+  line-height: 1;
+  background: rgba(255, 255, 255, 0.8);
 }
 .card-corner {
   position: absolute;
@@ -943,6 +968,13 @@ body {
   font-size: 15px;
   font-weight: 800;
   line-height: 1;
+}
+.card-corner-br {
+  top: auto;
+  left: auto;
+  right: 6px;
+  bottom: 4px;
+  transform: rotate(180deg);
 }
 .card-center {
   position: absolute;
@@ -953,13 +985,17 @@ body {
   font-size: 26px;
 }
 .card-as-rank {
+  position: absolute;
+  left: 50%;
+  bottom: 4px;
+  transform: translateX(-50%);
   font-style: normal;
   font-size: 10px;
   background: var(--gold);
   color: #222;
   border-radius: 4px;
-  padding: 1px 3px;
-  margin-top: 3px;
+  padding: 1px 4px;
+  white-space: nowrap;
 }
 .card-selected {
   transform: translateY(-16px);
@@ -1137,7 +1173,9 @@ body {
 .cardback {
   width: 48px;
   height: 68px;
-  background: linear-gradient(160deg, #2a4a6e, #1a3050);
+  background:
+    repeating-linear-gradient(45deg, rgba(255, 255, 255, 0.06) 0 5px, transparent 5px 10px),
+    linear-gradient(160deg, #2f5278, #1c3452);
   border: 2px solid #4a6a92;
   border-radius: 8px;
   cursor: pointer;
@@ -1149,7 +1187,7 @@ body {
   content: '';
   position: absolute;
   inset: 4px;
-  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border: 1px dashed rgba(233, 196, 106, 0.45);
   border-radius: 5px;
 }
 .cardback-selected {
@@ -1333,5 +1371,25 @@ body {
   }
   .game-table {
     min-height: 200px;
+  }
+}
+
+/* 桌面端悬停微交互（触屏设备不触发） */
+@media (hover: hover) {
+  .btn:not(:disabled):hover {
+    filter: brightness(1.1);
+  }
+  .card:not(:disabled):not(.card-selected):hover {
+    transform: translateY(-6px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.45);
+  }
+  .cardback:hover,
+  .ask-cards .cardback:hover {
+    transform: translateY(-6px);
+    box-shadow: 0 6px 12px rgba(0, 0, 0, 0.45);
+  }
+  .my-skill-chip:hover {
+    border-color: var(--gold);
+    color: var(--text);
   }
 }
