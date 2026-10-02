@@ -65,6 +65,33 @@ describe('末席 肖亡（观股）', () => {
     expect(handCards + snap.deckCount + snap.discardCount).toBe(162);
   });
 
+  it('大跌选牌阶段弃权（超时同路径）：判定牌弃置、正常摸牌、不触发守恒断言', () => {
+    // 消耗牌堆最末 15 张（♦3..♦2小王大王）→ 牌堆顶 5 张 = ♣J♣Q♣K♣A♣2（全黑）
+    const hands = {
+      p0: byRank(3, 5),
+      p1: [...byRank(13, 5), ...deck.slice(147, 152)],
+      p2: [...byRank(11, 5), ...deck.slice(152, 162)],
+    };
+    const engine = mkEngine(hands, { p0: zecheng });
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true);
+    const r = engine.pass('p2');
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    const r2 = engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'yes' });
+    const ask2 = r2.ok ? (r2.pendingAsk as SkillAsk) : null;
+    expect(ask2?.kind).toBe('pickCards');
+    // 修复前：此弃权让 5 张判定牌留在翻牌池，引擎直接抛「翻牌池未清空」
+    const d = engine.resolveAsk('p0', { askId: ask2!.askId!, choice: 'decline' });
+    expect(d.ok).toBe(true);
+    const events = d.ok ? d.events : [];
+    expect(events.some((e) => e.type === 'round:ended' && e.drew === 1)).toBe(true); // 弃权 → 正常摸牌
+    const snap = engine.snapshotFor('p0');
+    expect(snap.revealed).toHaveLength(0); // 展示池已清空
+    expect(snap.players[0]!.handCount).toBe(5); // 4 + 正常摸 1
+    const handCards = snap.players.reduce((x, p) => x + p.handCount, 0);
+    expect(handCards + snap.deckCount + snap.discardCount).toBe(162);
+  });
+
   it('大跌：展示 5 张黑多 → 自己选 2 张拿走，抑制摸牌', () => {
     // 消耗牌堆最末 15 张（♦3..♦2小王大王）→ 牌堆顶 5 张 = ♣J♣Q♣K♣A♣2（全黑）
     const hands = {

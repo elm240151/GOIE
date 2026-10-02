@@ -28,7 +28,15 @@ const zecheng: RoleDef = {
       if (!a) {
         return { ok: true, ask: { kind: 'confirm', prompt: '是否发动【观股】？展示 5 张：红多则大涨，否则大跌' } };
       }
-      if (a.choice === 'decline') return;
+      if (a.choice === 'decline') {
+        // 弃权（含超时自动弃权）：弃置已展示的判定牌，按正常摸牌处理——不清空会触发引擎守恒断言
+        if (st.revealedIds) {
+          ctx.game.discardRevealed();
+          st.revealedIds = null;
+          ctx.game.announce('zecheng', 'guan-gu', '【观股】弃权，判定牌弃置');
+        }
+        return;
+      }
       // 大跌选牌阶段：复用已展示的牌
       if (st.revealedIds) {
         const takeIds = a.cardIds?.filter((id) => st.revealedIds!.includes(id)) ?? [];

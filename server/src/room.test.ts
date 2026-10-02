@@ -423,3 +423,68 @@ describe('重连与掉线兜底', () => {
     expect(snap2.turnPlayerId).not.toBe(leaderId);
   });
 });
+
+describe('引擎异常安全网', () => {
+  it('回答技能询问时引擎抛异常：本局安全终止、不向上抛出、全员可再来一局', () => {
+    // 真实引擎外套 Proxy：resolveAsk 抛「翻牌池未清空」式守恒断言（模拟角色 bug）
+    const registry: RoleRegistry = new Map(listRoles().map((r) => [r.id, r]));
+    const deck = buildDeck(3);
+    const pick = (ids: number[]) => ids.map((id) => deck[id]!);
+    const p0Hand = pick([0, 6, 7, 8, 9]);
+    const p1Hand = pick([1, 2, 3, 54, 55]);
+    const factory: RoomOptions['engineFactory'] = ({ players }) => {
+      const real = new GameEngine(defaultRules, players, {
+        rng: mulberry32(1),
+        startPlayerId: players[0]!.id,
+        roles: registry,
+        scores: {},
+        handsOverride: { [players[0]!.id]: p0Hand, [players[1]!.id]: p1Hand },
+      });
+      return new Proxy(real, {
+        get(t, k) {
+          if (k === 'resolveAsk') {
+            return () => {
+              throw new Error('翻牌池未清空（角色技能泄漏）');
+            };
+          }
+          return Reflect.get(t, k);
+        },
+      });
+    };
+    const mgr = new RoomManager({
+      roles: registry,
+      scoreStore: new MemoryScoreStore(),
+      autoPassMs: 30_000,
+      engineFactory: factory,
+    });
+    const sockets = [mkSocket('s0'), mkSocket('s1')];
+    const { code, playerId, secret } = mgr.create('房主', sockets[0]!);
+    const ids = [playerId];
+    const secrets: Record<string, string> = { [playerId]: secret };
+    const r1 = mgr.join(code, '玩家2', sockets[1]!);
+    ids.push(r1.playerId);
+    secrets[r1.playerId] = r1.secret;
+    mgr.selectRole(sockets[0]!.id, 'zecheng');
+    mgr.selectRole(sockets[1]!.id, 'flashpoint');
+    for (const s of sockets) mgr.setReady(s.id, true);
+    // 打出一轮 → 观股确认询问
+    mgr.startGame(sockets[0]!.id);
+    const snap0 = lastEmit<GameSnapshot>(sockets[0]!, SERVER_EVENTS.snapshot)!;
+    const hostHand = snap0.players.find((p) => p.id === ids[0])!.hand!;
+    mgr.play(sockets[0]!.id, [hostHand.find((c) => c.rank === 3)!.id]);
+    mgr.pass(sockets[1]!.id);
+    const ask = lastEmit<SkillAsk>(sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.kind).toBe('confirm');
+    // 回答 → 引擎抛异常 → 安全网接住：不向外抛出、本局终止、不记分
+    expect(() => mgr.useSkill(sockets[0]!.id, { askId: ask.askId!, choice: 'yes' })).not.toThrow();
+    const st = lastEmit<RoomState>(sockets[0]!, SERVER_EVENTS.roomUpdated)!;
+    expect(st.phase).toBe('finished');
+    expect(st.winnerId).toBeNull();
+    expect(st.scoreDeltas).toBeNull();
+    // 全员可再来一局（房间没被带崩）
+    mgr.rematch(sockets[0]!.id);
+    mgr.rematch(sockets[1]!.id);
+    const st2 = lastEmit<RoomState>(sockets[0]!, SERVER_EVENTS.roomUpdated)!;
+    expect(st2.phase).toBe('lobby');
+  });
+});

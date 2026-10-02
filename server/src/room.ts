@@ -178,7 +178,14 @@ export class Room {
   // ---------- 对局 ----------
 
   play(playerId: string, cardIds: number[]): void {
-    const r = this.requireEngine().playCards(playerId, cardIds);
+    const engine = this.requireEngine(); // 大厅/终局动作照常抛「游戏不在进行中」
+    let r: ActionResult;
+    try {
+      r = engine.playCards(playerId, cardIds);
+    } catch (e) {
+      this.abortGame(e);
+      return;
+    }
     if (!r.ok) {
       this.sendTo(playerId, SERVER_EVENTS.error, r.reason);
       return;
@@ -187,7 +194,14 @@ export class Room {
   }
 
   pass(playerId: string): void {
-    const r = this.requireEngine().pass(playerId);
+    const engine = this.requireEngine();
+    let r: ActionResult;
+    try {
+      r = engine.pass(playerId);
+    } catch (e) {
+      this.abortGame(e);
+      return;
+    }
     if (!r.ok) {
       this.sendTo(playerId, SERVER_EVENTS.error, r.reason);
       return;
@@ -198,14 +212,20 @@ export class Room {
   /** 主动技（无 askId）或回答技能询问（有 askId） */
   useSkill(playerId: string, req: SkillUsePayload): void {
     const engine = this.requireEngine();
-    const r = req.askId
-      ? engine.resolveAsk(playerId, {
-          askId: req.askId,
-          choice: req.choice,
-          cardIds: req.cardIds,
-          targetPlayerId: req.targetPlayerId,
-        })
-      : engine.useSkillAction(playerId, { skillId: req.skillId ?? '' });
+    let r: ActionResult;
+    try {
+      r = req.askId
+        ? engine.resolveAsk(playerId, {
+            askId: req.askId,
+            choice: req.choice,
+            cardIds: req.cardIds,
+            targetPlayerId: req.targetPlayerId,
+          })
+        : engine.useSkillAction(playerId, { skillId: req.skillId ?? '' });
+    } catch (e) {
+      this.abortGame(e);
+      return;
+    }
     if (!r.ok) {
       this.sendTo(playerId, SERVER_EVENTS.error, r.reason);
       return;
@@ -282,6 +302,20 @@ export class Room {
     return this.engine;
   }
 
+  /** 引擎异常安全网：本局终止并通知全员，绝不让角色 bug 杀死服务器进程 */
+  private abortGame(e: unknown): void {
+    console.error(`[房间 ${this.code}] 引擎异常，本局终止:`, e);
+    if (this.phase !== 'playing') return;
+    this.cancelAskTimer();
+    for (const t of this.autoPassTimers.values()) clearTimeout(t);
+    this.autoPassTimers.clear();
+    this.phase = 'finished';
+    this.lastWinnerId = null;
+    this.lastDeltas = null;
+    this.broadcast(SERVER_EVENTS.error, '牌局出现异常，本局已终止');
+    this.broadcastState();
+  }
+
   private afterAction(r: ActionResult): void {
     if (!r.ok) return;
     this.dispatchEvents(r.events);
@@ -302,10 +336,14 @@ export class Room {
     this.sendTo(askedId, SERVER_EVENTS.skillAsk, ask);
     this.askTimer = setTimeout(() => {
       this.askTimer = null;
-      const cur = this.engine?.currentAsk(askedId);
-      if (!cur || this.phase !== 'playing') return;
-      const r = this.engine!.resolveAsk(askedId, { askId: cur.askId!, choice: 'decline' });
-      if (r.ok) this.afterAction(r);
+      try {
+        const cur = this.engine?.currentAsk(askedId);
+        if (!cur || this.phase !== 'playing') return;
+        const r = this.engine!.resolveAsk(askedId, { askId: cur.askId!, choice: 'decline' });
+        if (r.ok) this.afterAction(r);
+      } catch (e) {
+        this.abortGame(e);
+      }
     }, ask.timeoutMs ?? defaultRules.timeout.skillAskMs);
   }
 
@@ -342,17 +380,21 @@ export class Room {
     this.cancelAutoPass(playerId);
     const timer = setTimeout(() => {
       this.autoPassTimers.delete(playerId);
-      const seat = this.seats.find((s) => s.id === playerId);
-      if (!seat || seat.connected || !this.engine) return;
-      const turnId = this.engine.snapshotFor(this.seats[0]!.id).turnPlayerId;
-      if (turnId !== playerId) return;
-      // 有技能询问挂起：动作全部被拦，等询问了结后重排定时器
-      if (this.engine.pendingAskPlayerId) {
-        this.scheduleAutoPass(playerId);
-        return;
+      try {
+        const seat = this.seats.find((s) => s.id === playerId);
+        if (!seat || seat.connected || !this.engine) return;
+        const turnId = this.engine.snapshotFor(this.seats[0]!.id).turnPlayerId;
+        if (turnId !== playerId) return;
+        // 有技能询问挂起：动作全部被拦，等询问了结后重排定时器
+        if (this.engine.pendingAskPlayerId) {
+          this.scheduleAutoPass(playerId);
+          return;
+        }
+        const r = autoPlayFallback(this.engine, playerId, defaultRules);
+        if (r && r.ok) this.afterAction(r);
+      } catch (e) {
+        this.abortGame(e);
       }
-      const r = autoPlayFallback(this.engine, playerId, defaultRules);
-      if (r && r.ok) this.afterAction(r);
     }, this.autoPassMs);
     this.autoPassTimers.set(playerId, timer);
   }
