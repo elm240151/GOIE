@@ -114,6 +114,34 @@ describe('GameEngine 游戏循环', () => {
     expect(snap.scoreDeltas!.p1).toBe(-1);
   });
 
+  it('归属改写不改变出完即胜：谁打完谁赢（按物理出牌者判定）', () => {
+    // 模拟阿色再问范式：别人压了自己的牌就归属改写为自己（p0 手牌未空）
+    const attr = mkRole('attr', {
+      hooks: {
+        afterPlay(ctx) {
+          if (ctx.game.respondedTo() === ctx.self.id) ctx.game.attributeTable(ctx.self.id);
+          return;
+        },
+      },
+    });
+    const deck = buildDeck(3);
+    const c = (r: number, s: number) => deck.find((x) => x.rank === r && x.suit === s)!;
+    const hands = { p0: [c(3, 0), c(5, 0)], p1: [c(4, 0)] };
+    const { engine } = mkEngine(2, {
+      hands,
+      startPlayerId: 'p0',
+      roles: new Map([['attr', attr]]),
+      roleIds: { p0: 'attr' },
+    });
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
+    // p1 用最后一张 4♠ 压（恰好大一级）→ 归属改写为 p0 → 但 p1 手牌已空：仍判 p1 获胜
+    const r = engine.playCards('p1', [hands.p1[0]!.id]);
+    expect(r.ok).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p1');
+  });
+
   it('留2规则：最后打出单2/对2算输（淘汰继续），2炸与王炸正常获胜', () => {
     const deck = buildDeck(3);
     const twos = (n: number) => deck.filter((c) => c.rank === 15).slice(0, n);

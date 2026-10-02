@@ -627,13 +627,14 @@ export class GameEngine {
         return this.ok();
       }
     }
-    // 出完即胜（被淘汰者不算）；留2规则：最后一手是单2/对2 → 判负淘汰，牌局继续
-    if (!this.eliminated.has(ownerId) && this.hands.get(ownerId)!.length === 0) {
+    // 出完即胜（被淘汰者不算）：谁打完谁赢——归属改写（再问）不改胜利判定，按物理出牌者判；
+    // 留2规则：最后一手是单2/对2 → 判负淘汰，牌局继续
+    if (!this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0) {
       if (this.isLeftTwo(this.tableCombo!)) {
-        this.eliminate(ownerId, '最后留 2 算输');
+        this.eliminate(playerId, '最后留 2 算输');
         if (this.phase !== 'playing') return this.ok();
       } else {
-        this.finishGame(ownerId);
+        this.finishGame(playerId);
         return this.ok();
       }
     }

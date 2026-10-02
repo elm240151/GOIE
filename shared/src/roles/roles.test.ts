@@ -69,6 +69,7 @@ describe('角色注册表', () => {
 });
 
 describe('席位排序（seatOrder）', () => {
+  // 前 8 席按 seatOrder 排列；captain 起的新角色不带席位前缀、无 seatOrder，按注册序排在后面
   const SEAT_ORDER_IDS = ['skywalker', 'elm-yao', 'unhumanity', 'flashpoint', 'yy-xue', 'cs-champion', 'patrick', 'zecheng', 'captain'];
 
   it('listRoles 按席位顺序（首席 → 末席）排列', async () => {

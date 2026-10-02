@@ -1,9 +1,10 @@
-// 角色：第九席 阿色 —— 技能【抽你】【再问】。
+// 角色：阿色 —— 技能【抽你】【再问】。
 // 【抽你】整备阶段（拥有牌权、摸牌前）发动，每局限 X+2 次（X = 人数）：指定一人，
 //   新起的一轮里只有其能响应你的牌（被指定者淘汰/掉线限制继续有效）。
 // 【再问】每轮限一次（确认弃权即消耗）：有人压你的牌（插队也算）时，压牌者须再打出一张
 //   与其那手牌中任意一张同点数或同花色的牌（王按实际代表点数与包含花色），明置桌旁；
 //   打不出/弃权/超时 → 那手牌视作你打出（归属改写：轮转从你下家继续，判定对你生效）。
+//   压牌者已打出最后一张牌时不再问（谁打完谁赢，引擎收尾直接判其获胜）。
 import { isJoker, JOKER_BIG, type Card } from '../cards';
 import type { Combo } from '../engine/combos';
 import type { RoleDef } from './types';
@@ -41,8 +42,7 @@ export function matchesRankOrSuit(card: Card, combo: Combo): boolean {
 
 const captain: RoleDef = {
   id: 'captain',
-  seatOrder: 9,
-  name: '第九席 阿色',
+  name: '阿色',
   // 高优先级：再问的归属改写必须先于其他角色对同一手牌的判定钩子（如地坛≥3张判定）
   priority: 900,
   skills: [
@@ -64,6 +64,8 @@ const captain: RoleDef = {
       // 再问：只关心有人压自己的牌（插队也算——插队同样走 afterPlay 流水线）
       if (ctx.game.respondedTo() !== ctx.self.id) return;
       if (st.zwUsed) return;
+      // 压牌者已打出最后一张牌：谁打完谁赢，不再问（引擎收尾直接判其获胜）
+      if (ctx.game.handOf(ctx.game.roundLastPlayerId()!).length === 0) return;
       if (st.zwBeater) {
         // 阶段二：压牌者作答（弃权/超时/不合规 → 归属改写）
         const beater = st.zwBeater;

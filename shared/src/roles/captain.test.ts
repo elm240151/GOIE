@@ -40,7 +40,7 @@ function total(engine: GameEngine): number {
   return n;
 }
 
-describe('第九席 阿色（抽你/再问）', () => {
+describe('阿色（抽你/再问）', () => {
   it('抽你：指定后只有指定者能响应（其他人出牌被拦、过牌后轮末阿色再问）', () => {
     const hands = { p0: byRank(3, 5), p1: byRank(10, 5), p2: byRank(5, 5), p3: byRank(6, 5) };
     const engine = mkEngine(hands, { p0: captain });
@@ -153,6 +153,20 @@ describe('第九席 阿色（抽你/再问）', () => {
     expect(r.ok && !r.pendingAsk).toBe(true);
     expect(r.ok && r.events.some((e) => e.type === 'round:ended' && e.drew === 1)).toBe(true);
     expect(engine.snapshotFor('p0').turnPlayerId).toBe('p0');
+  });
+
+  it('再问：压牌者打出最后一张牌直接获胜（谁打完谁赢，不再问）', () => {
+    const hands = { p0: byRank(3, 3), p1: [pick(4, 0)], p2: byRank(10, 5) };
+    const engine = mkEngine(hands, { p0: captain });
+    // 阿色出3 → p1 用最后一张 4♠ 压 → 不再问，直接判 p1 获胜
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
+    const r = engine.playCards('p1', [hands.p1[0]!.id]);
+    expect(r.ok).toBe(true);
+    expect(r.ok && !r.pendingAsk).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p1');
+    expect(snap.players[1]!.handCount).toBe(0);
   });
 
   it('再问：弃权即消耗，同一轮第二次被压不再询问', () => {
