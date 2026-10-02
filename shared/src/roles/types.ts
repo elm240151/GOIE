@@ -49,6 +49,8 @@ export interface SkillAsk {
   max?: number;
   /** pickTarget 的可选目标 */
   targetCandidates?: string[];
+  /** 被询问的玩家 id（缺省 = 技能所有者）；「依次自选」类技能用来依次问其他人 */
+  askPlayerId?: string;
   /** 超时自动拒绝（服务端计时） */
   timeoutMs?: number;
 }

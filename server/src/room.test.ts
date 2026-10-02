@@ -304,12 +304,27 @@ describe('完整对局', () => {
 });
 
 describe('技能询问（观股）', () => {
-  it('轮末最后出牌者收到询问，同意大涨每人 1 张', () => {
+  it('轮末最后出牌者收到询问，同意大涨后依次自选每人 1 张', () => {
     const s = mkFixedSetup();
     const { ask, handCount } = playToZechengAsk(s);
     expect(ask.kind).toBe('confirm');
     expect(handCount).toBe(4); // 出单3后剩 4 张
     s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'yes' });
+    // 大涨：先问房主自己（askPlayerId 定向），询问发到被询问者 socket
+    const mid = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid.pendingAsk?.playerId).toBe(s.ids[0]);
+    const ask1 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask1.kind).toBe('pickCards');
+    expect(ask1.cards).toHaveLength(5);
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask1.askId!, cardIds: [ask1.cards![0]!.id] });
+    // 再问下家
+    const mid2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid2.pendingAsk?.playerId).toBe(s.ids[1]);
+    const ask2 = lastEmit<SkillAsk>(s.sockets[1]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask2.kind).toBe('pickCards');
+    expect(ask2.cards).toHaveLength(4);
+    expect(ask2.cards!.some((c) => c.id === ask1.cards![0]!.id)).toBe(false); // 已选走的不再可选
+    s.manager.useSkill(s.sockets[1]!.id, { askId: ask2.askId!, cardIds: [ask2.cards![0]!.id] });
     const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
     expect(after.pendingAsk).toBeNull();
     const counts = Object.fromEntries(after.players.map((p) => [p.id, p.handCount]));
@@ -331,6 +346,29 @@ describe('技能询问（观股）', () => {
     expect(counts[s.ids[1]!]).toBe(5);
   });
 
+  it('大涨自选超时：自动拿剩余最小牌，队列继续走完', () => {
+    vi.useFakeTimers();
+    const s = mkFixedSetup();
+    const { ask } = playToZechengAsk(s);
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'yes' });
+    const mid = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid.pendingAsk?.playerId).toBe(s.ids[0]); // 先问房主自己
+    const ask1 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    const min0 = [...ask1.cards!].sort((x, y) => (x.rank !== y.rank ? x.rank - y.rank : x.suit - y.suit))[0]!; // ♦K
+    vi.advanceTimersByTime(15_001); // 房主超时 → 自动拿最小 → 接着问下家
+    const mid2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid2.pendingAsk?.playerId).toBe(s.ids[1]);
+    vi.advanceTimersByTime(15_001); // 下家也超时 → 自动拿最小 → 队列走完
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.pendingAsk).toBeNull();
+    const counts = Object.fromEntries(after.players.map((p) => [p.id, p.handCount]));
+    expect(counts[s.ids[0]!]).toBe(5); // 4 + 自动拿最小 1 张
+    expect(counts[s.ids[1]!]).toBe(6); // 5 + 自动拿最小 1 张
+    expect(after.deckCount).toBe(162 - 10 - 5);
+    const hostHand = after.players.find((p) => p.id === s.ids[0]!)!.hand!;
+    expect(hostHand.some((c) => c.id === min0.id)).toBe(true); // 拿到的是 5 张里最小的
+  });
+
   it('重连：未决询问重新发给本人，可继续回答', () => {
     const s = mkFixedSetup();
     playToZechengAsk(s);
@@ -340,6 +378,14 @@ describe('技能询问（观股）', () => {
     const ask = lastEmit<SkillAsk>(back, SERVER_EVENTS.skillAsk)!;
     expect(ask.kind).toBe('confirm');
     s.manager.useSkill(back.id, { askId: ask.askId!, choice: 'yes' });
+    // 大涨自选询问重新发给重连者（先问房主自己）
+    const ask1 = lastEmit<SkillAsk>(back, SERVER_EVENTS.skillAsk)!;
+    expect(ask1.kind).toBe('pickCards');
+    s.manager.useSkill(back.id, { askId: ask1.askId!, cardIds: [ask1.cards![0]!.id] });
+    // 下家自选
+    const ask2 = lastEmit<SkillAsk>(s.sockets[1]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask2.kind).toBe('pickCards');
+    s.manager.useSkill(s.sockets[1]!.id, { askId: ask2.askId!, cardIds: [ask2.cards![0]!.id] });
     const after = lastEmit<GameSnapshot>(back, SERVER_EVENTS.snapshot)!;
     expect(after.pendingAsk).toBeNull();
     const counts = Object.fromEntries(after.players.map((p) => [p.id, p.handCount]));

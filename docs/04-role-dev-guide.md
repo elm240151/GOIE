@@ -65,13 +65,15 @@ interface SkillAsk {
   targetCandidates?: string[];// pickTarget 的候选玩家
   hidden?: boolean;           // pickCards 盲抽：客户端只显示牌背（如骚骚摸对面牌），
                               // 服务端经 currentAsk 下发时自动把牌面掩码（id 保留回传），角色照常传真牌即可
+  askPlayerId?: string;       // 被询问的玩家 id，缺省 = 技能所有者；「依次自选」类技能用来依次问其他人
+                              //（服务端只发给被询问者；resolveAsk 校验回答者 = 被询问者，引擎零额外改动）
   timeoutMs?: number;         // 缺省 15s，超时服务端自动按弃权处理
 }
 ```
 
 **纯度契约（★ 最重要）**：返回 `ask` 之前**不得改动任何状态**（不摸牌、不翻牌、不记 state）——回答后引擎会带着 `ctx.answer` 重跑钩子，改过状态就会重复生效。状态只写在"拿到 answer 之后"的分支里。
 
-**多阶段询问**（骚骚 5 段 / 观股大跌 2 段）：钩子按 `ctx.answer` 分派：
+**多阶段询问**（骚骚 5 段 / 观股大跌 2 段 / 观股大涨依次自选）：钩子按 `ctx.answer` 分派。**依次问别人**用 `askPlayerId` 定向 + 私有状态队列（观股大涨范式）：state 存 `{ pool: Card[]; boom: { ids: string[]; next: number } }`，确认后 `revealTop` 存入 pool、返回指向队列首位的 pickCards；每次回答（含弃权/超时）处理当前位 → 指向下一位重新返回 ask（此时 `askPlayerId` 指向别人，重跑时 `ctx.self` 仍是技能所有者）；队列走完 discard 余牌收尾。注意弃权路径也必须能走完队列并清空展示池（守恒断言）。
 
 ```ts
 onSkillAction(ctx, req) {

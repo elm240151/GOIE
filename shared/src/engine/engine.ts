@@ -1043,7 +1043,8 @@ export class GameEngine {
   ): void {
     ask.askId = ask.askId ?? this.newAskId();
     ask.timeoutMs = ask.timeoutMs ?? this.cfg.timeout.skillAskMs;
-    this.pendingAsk = { ask, playerId, kind: entry ? 'hook' : 'cutIn', entry, hookName, args, resume };
+    // 被询问者缺省为技能所有者（playerId）；「依次自选」类技能经 ask.askPlayerId 依次问其他人
+    this.pendingAsk = { ask, playerId: ask.askPlayerId ?? playerId, kind: entry ? 'hook' : 'cutIn', entry, hookName, args, resume };
   }
 
   private newAskId(): string {

@@ -28,7 +28,7 @@
 | `game:snapshot` | `GameSnapshot`（按接收者过滤：只有自己的 `hand` 非 null；含 `pendingAsk: {askId, playerId, kind, prompt, timeoutMs} \| null`；`revealed` 翻牌展示区**所有人可见**——判定牌公开，动作内须清空） |
 | `game:event` | `GameEvent`（判别联合 + 自增 seq，见下） |
 | `game:error` | 中文原因字符串 |
-| `game:skill-ask` | 完整 `SkillAsk`（**只发给被询问者**；重连时重发未决询问；`hidden: true` 的 pickCards 为盲抽，经 currentAsk 下发时牌面已掩码只留 id） |
+| `game:skill-ask` | 完整 `SkillAsk`（**只发给被询问者**——被询问者可由 `askPlayerId` 指定，缺省 = 技能所有者；重连时重发未决询问；`hidden: true` 的 pickCards 为盲抽，经 currentAsk 下发时牌面已掩码只留 id） |
 | `score:list` | `{records}`（应答 score:list 请求） |
 
 ## GameEvent（shared/src/engine/events.ts）
