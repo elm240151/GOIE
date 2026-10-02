@@ -503,6 +503,40 @@ body {
   font-size: 12px;
   color: var(--text-dim);
 }
+.table-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+/* 明置桌旁的边牌（再问补打）：随当前一手牌一起弃置 */
+.table-side {
+  display: flex;
+  gap: 4px;
+}
+.table-side .card {
+  --card-w: 40px;
+  --card-h: 57px;
+  width: var(--card-w);
+  height: var(--card-h);
+}
+.table-side .card-corner {
+  font-size: 12px;
+}
+.table-side .card-center {
+  font-size: 19px;
+}
+.table-side .joker-star {
+  font-size: 20px;
+}
+.table-side .joker-tag {
+  width: 13px;
+  height: 13px;
+  font-size: 9px;
+  margin-top: 3px;
+  border-width: 1px;
+}
 .table-empty {
   color: rgba(255, 255, 255, 0.35);
   font-size: 14px;

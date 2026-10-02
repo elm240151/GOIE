@@ -23,6 +23,7 @@ export default function GameTable() {
   const rematch = useStore((s) => s.rematch);
   const leaveRoom = useStore((s) => s.leaveRoom);
   const tablePlayerId = useStore((s) => s.tablePlayerId);
+  const tableSideCards = useStore((s) => s.tableSideCards);
   const useSkillAction = useStore((s) => s.useSkillAction);
   const revealed = useStore((s) => s.revealed);
   const roundPlays = useStore((s) => s.roundPlays);
@@ -174,7 +175,16 @@ export default function GameTable() {
         {snap?.table ? (
           <>
             <div className="table-owner">{tableOwner ? `${tableOwner.name} 出了` : '上一手'}</div>
-            <ComboBadge combo={snap.table} />
+            <div className="table-row">
+              <ComboBadge combo={snap.table} />
+              {tableSideCards.length > 0 && (
+                <div className="table-side">
+                  {tableSideCards.map((c) => (
+                    <Card key={c.id} card={c} />
+                  ))}
+                </div>
+              )}
+            </div>
           </>
         ) : (
           <div className="table-empty">{finished ? '' : STR.game.tableEmpty}</div>

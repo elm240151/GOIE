@@ -7,6 +7,8 @@ export type GameEventData =
   | { type: 'deal:done' }
   | { type: 'turn:started'; playerId: string }
   | { type: 'cards:played'; playerId: string; combo: Combo }
+  | { type: 'table:attributed'; playerId: string; fromPlayerId: string; combo: Combo }
+  | { type: 'table:side'; playerId: string; card: Card }
   | { type: 'passed'; playerId: string }
   | { type: 'round:ended'; lastPlayerId: string; drew: number }
   | { type: 'cards:drawn'; playerId: string; count: number }

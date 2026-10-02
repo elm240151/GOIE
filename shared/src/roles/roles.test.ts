@@ -35,8 +35,8 @@ function mkEngine(hands: Record<string, Card[]>, roles: Record<string, RoleDef>,
   return engine;
 }
 
-/** 全部 8 个初始角色 id（loader 按文件名排序注册） */
-const ROLE_IDS = ['cs-champion', 'elm-yao', 'flashpoint', 'patrick', 'skywalker', 'unhumanity', 'yy-xue', 'zecheng'];
+/** 全部 9 个角色 id（loader 按文件名排序注册） */
+const ROLE_IDS = ['captain', 'cs-champion', 'elm-yao', 'flashpoint', 'patrick', 'skywalker', 'unhumanity', 'yy-xue', 'zecheng'];
 
 describe('角色注册表', () => {
   it('合法定义注册成功，非法定义被拒绝', () => {
@@ -69,7 +69,7 @@ describe('角色注册表', () => {
 });
 
 describe('席位排序（seatOrder）', () => {
-  const SEAT_ORDER_IDS = ['skywalker', 'elm-yao', 'unhumanity', 'flashpoint', 'yy-xue', 'cs-champion', 'patrick', 'zecheng'];
+  const SEAT_ORDER_IDS = ['skywalker', 'elm-yao', 'unhumanity', 'flashpoint', 'yy-xue', 'cs-champion', 'patrick', 'zecheng', 'captain'];
 
   it('listRoles 按席位顺序（首席 → 末席）排列', async () => {
     clearRoles();
@@ -152,10 +152,10 @@ describe('技能优先原则', () => {
 });
 
 describe('角色加载器', () => {
-  it('node loader：默认目录自动发现全部 8 个初始角色（幂等）', async () => {
+  it('node loader：默认目录自动发现全部 9 个初始角色（幂等）', async () => {
     clearRoles();
     expect(await loadAllRoles()).toEqual(ROLE_IDS);
-    expect(listRoles()).toHaveLength(8);
+    expect(listRoles()).toHaveLength(9);
     expect(await loadAllRoles()).toEqual([]); // 重复加载不重复注册
   });
 
@@ -183,6 +183,6 @@ export default def;
     loadAllRolesClient();
     expect(listRoles().map((r) => r.id).sort()).toEqual(ROLE_IDS);
     loadAllRolesClient(); // 幂等
-    expect(listRoles()).toHaveLength(8);
+    expect(listRoles()).toHaveLength(9);
   });
 });

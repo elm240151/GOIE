@@ -33,6 +33,8 @@ export interface GameSnapshot {
   /** 翻牌展示区（判定牌等公开牌，所有人可见；动作内须清空） */
   revealed: Card[];
   table: Combo | null;
+  /** 明置桌旁的边牌（再问补打等：随当前一手牌一起弃置，公开） */
+  tableSide: Card[];
   turnPlayerId: string | null;
   roundLeaderId: string;
   winnerId: string | null;

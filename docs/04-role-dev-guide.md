@@ -1,13 +1,13 @@
 # 角色开发规范（★ 未来工作核心文件）
 
-**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。8 个已实现角色就是最好的模板（见文末表）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
+**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。9 个已实现角色就是最好的模板（见文末表）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
 
 ## RoleDef 接口（shared/src/roles/types.ts）
 
 ```ts
 interface RoleDef {
   id: string;                 // kebab-case 唯一（注册表校验，重复报错）
-  seatOrder?: number;         // 席位顺序：选角列表展示排序（1=首席…8=末席）；可选，不填排在已编号角色之后
+  seatOrder?: number;         // 席位顺序：选角列表展示排序（1=首席…9=末席）；可选，不填排在已编号角色之后
   name: string;               // 中文角色名，如 '首席 杰杰一世'
   skills: SkillDef[];         // 技能列表（1-2 个）：{ id, name, description, locked? }
   maxPerRoom?: number;        // 同一房间最多几人选，默认 1
@@ -115,6 +115,9 @@ interface ActionMods {
   - **翻牌池**（判定类技能）：`revealTop(n, purpose?)`（翻牌堆顶 n 张到展示区；**每次调用都向全场广播一条 cards:revealed 事件**，purpose 供前端展示区标注，如「黑脸判定」「观股」）→ `takeRevealed(pid, ids)`（判定牌进手牌，**本回合豁免手牌上限**）/ `giveRevealed(pid, ids)`（普通拿取，计入手牌上限）/ `discardRevealed(ids?)`（弃置）。**动作结束前展示区必须清空**，否则引擎抛「翻牌池未清空」——多阶段询问中间可以暂存，最终收尾分支必须处理；挂起期间快照的 `revealed` 字段会把池中牌发给**所有玩家**（判定牌公开）
   - `revealCards(cards, purpose)`（公开亮牌，如茄汤展示手牌，广播 cards:revealed 事件）
   - `playForcedCombo(combo)`（打出特殊组合，引擎按正常出牌流程提交，如茄汤黑牌炸弹）
+  - `attributeTable(ownerId)`（**桌面一手牌归属改写**，阿色再问：这手牌视作 ownerId 打出——tableOwner/轮末牌权/当前回合全部改到 ownerId，随后轮转从 ownerId 的下家继续；**先于其他角色的判定钩子执行**（角色 priority 设高，如 900），这样「视作谁打出」的判定才会落到新归属者身上；归属后原出牌者手牌已空也不判胜（引擎只判新归属者））
+  - `setTableResponderRestrict(designatedId | null)`（**响应限制**，阿色抽你：当前桌面一手牌只有 designatedId 能响应——出牌/自动过候选/插队邀请/插队答案四处全部校验；被指定者淘汰/掉线时限制继续有效（无人能响应只能全过）；null 解除；桌面一手牌被压/轮末/新轮起牌自动清除，归属改写后需重新设置）
+  - `playSideCard(playerId, cardId)`（**明置桌旁**，阿色再问补打：从手牌移除一张明置到桌旁，公开进快照 `tableSide`，随当前一手牌一起弃置；压牌者作答时用它，`handOf` 校验 + 自己校验合规性）
 
 未来需要新的改牌能力 = 在 ActionMods / facade 加一个字段，不动引擎核心。
 
@@ -154,7 +157,7 @@ const zecheng: RoleDef = {
 export default zecheng;
 ```
 
-## 已有 8 个角色（模板）
+## 已有 9 个角色（模板）
 
 | 文件 | 角色 | 技能 | 用到的机制 |
 |---|---|---|---|
@@ -166,6 +169,7 @@ export default zecheng;
 | cs-champion.ts | 第六席 企鹅 | 骚骚 | onSkillAction 四段 ask + giveFrom/giveTo 换牌 + endTurn |
 | patrick.ts | 第七席 圣帕特里克 | 无名 | canCutIn 引擎级插队 |
 | zecheng.ts | 末席 肖亡 | 观股 | onRoundEnd ask + revealTop + giveRevealed + suppressDraw |
+| captain.ts | 第九席 阿色 | 抽你 + 再问 | beforePlay/afterPlay/onRoundEnd 多阶段 ask + 响应限制 + 归属改写 + 明置边牌 |
 
 ## 新增角色的流程（每个角色照此执行）
 

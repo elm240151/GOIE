@@ -84,8 +84,12 @@ export class GameEngine {
   private deck: Card[] = [];
   private discarded: Card[] = [];
   private tableCombo: Combo | null = null;
-  /** 当前桌面一手牌是谁出的（无名插队的受害者、巨石驱逐的对象） */
+  /** 当前桌面一手牌是谁出的（无名插队的受害者、巨石驱逐的对象；归属可被技能改写） */
   private tableOwnerId = '';
+  /** 明置桌旁的边牌（再问补打等：随当前一手牌一起进弃牌堆，公开） */
+  private tableSide: Card[] = [];
+  /** 响应限制（抽你）：当前桌面一手牌只能由该玩家响应；null = 无限制 */
+  private tableResponderRestrict: string | null = null;
   /** 上一手被压的玩家（无名普通响应加牌的对象；新一轮起牌时重置） */
   private prevTableOwnerId: string | null = null;
   /** 上一手被压的牌的花色集合（无名加牌：响应牌与被压牌同花色即触发，X = 同花色响应牌点数总和） */
@@ -181,6 +185,11 @@ export class GameEngine {
     if (this.phase !== 'playing') return fail('游戏已结束');
     if (this.pendingAsk) return fail('等待技能响应');
     if (playerId !== this.turnPlayerId) return fail('不是你的回合');
+    // 响应限制（抽你）：当前桌面一手牌只能由指定玩家响应
+    if (this.tableCombo && this.tableResponderRestrict && playerId !== this.tableResponderRestrict) {
+      const d = this.players.find((p) => p.id === this.tableResponderRestrict);
+      return fail(`【抽你】本回合只能由 ${d?.name ?? '指定玩家'} 响应`);
+    }
     const hand = this.hands.get(playerId)!;
     if (cardIds.length === 0) return fail('请选择要出的牌');
     const cards: Card[] = [];
@@ -291,6 +300,11 @@ export class GameEngine {
         this.advanceTurn();
         return fail('压不过上家的牌');
       }
+      // 响应限制（抽你）：插队答案也要校验
+      if (this.tableResponderRestrict && playerId !== this.tableResponderRestrict) {
+        this.advanceTurn();
+        return fail(`【抽你】本回合只能由指定玩家响应`);
+      }
       const playedSuits = new Set(
         this.tableCombo!.cards.filter((c) => !isJoker(c)).map((c) => c.suit)
       );
@@ -343,6 +357,7 @@ export class GameEngine {
       /** 翻牌展示区：判定牌公开，所有人都能看（角色须在动作内清空） */
       revealed: [...this.revealedPool],
       table: this.tableCombo,
+      tableSide: [...this.tableSide],
       turnPlayerId: this.turnPlayerId,
       roundLeaderId: this.roundLeaderId,
       winnerId: this.winnerId,
@@ -387,9 +402,11 @@ export class GameEngine {
       for (const p of this.players) this.checkHandLimit(p.id);
       if (this.phase !== 'playing') return;
       while (this.eliminated.has(leaderId)) leaderId = this.nextSeat(leaderId);
-      if (this.tableCombo) this.discarded.push(...this.tableCombo.cards);
+      if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
       this.tableCombo = null;
+      this.tableSide = [];
       this.tableOwnerId = '';
+      this.tableResponderRestrict = null;
       this.prevTableOwnerId = null;
       this.prevTableSuits = new Set();
       this.passCount = 0;
@@ -473,16 +490,22 @@ export class GameEngine {
       const r = this.runHook(entry, [{ combo, table: this.tableCombo }]);
       if (r.vetoed) return fail(r.reason);
       if (r.result?.ask) {
-        this.suspend(entry.playerId, entry, 'beforePlay', [{ combo, table: this.tableCombo }], (outcome) => {
+        const resume = (outcome: HookOutcome): void => {
           if (outcome.vetoed) {
             // 恢复后否决：出牌中止（原动作已 ack，改为 game:error 告知）
             this.emit({ type: 'game:error', playerId, reason: outcome.reason });
             return;
           }
+          if (outcome.result?.ask) {
+            // 多阶段询问：重挂起
+            this.suspend(entry.playerId, entry, 'beforePlay', [{ combo, table: this.tableCombo }], resume, outcome.result.ask);
+            return;
+          }
           this.applyOutcome(entry, outcome);
           const nextAllow = outcome.result?.allowAnyway ? true : allowAnyway;
           this.finishResumed(this.runBeforePlayHooks(playerId, combo, baseLegal, i + 1, nextAllow), playerId);
-        }, r.result.ask);
+        };
+        this.suspend(entry.playerId, entry, 'beforePlay', [{ combo, table: this.tableCombo }], resume, r.result.ask);
         return this.suspendedOk();
       }
       if (r.result?.allowAnyway) allowAnyway = true;
@@ -498,7 +521,9 @@ export class GameEngine {
   /** 出牌执行（上一手被压的牌进弃牌堆）→ afterPlay → 打断钩子 → 获胜判定 */
   private commitPlay(playerId: string, combo: Combo): ActionResult {
     this.removeCards(playerId, combo.cards);
-    if (this.tableCombo) this.discarded.push(...this.tableCombo.cards);
+    if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
+    this.tableSide = [];
+    this.tableResponderRestrict = null;
     const prevSuits: Set<number> = this.tableCombo
       ? new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit))
       : new Set();
@@ -519,10 +544,17 @@ export class GameEngine {
       const entry = hooks[i]!;
       const r = this.runHook(entry, [combo]);
       if (!r.vetoed && r.result?.ask) {
-        this.suspend(entry.playerId, entry, 'afterPlay', [combo], (outcome) => {
+        const resume = (outcome: HookOutcome): void => {
+          if (outcome.vetoed) return;
+          if (outcome.result?.ask) {
+            // 多阶段询问：重挂起（阿色再问：确认 → 问压牌者）
+            this.suspend(entry.playerId, entry, 'afterPlay', [combo], resume, outcome.result.ask);
+            return;
+          }
           this.applyOutcome(entry, outcome);
           this.finishResumed(this.runAfterPlayHooks(playerId, combo, i + 1), playerId);
-        }, r.result.ask);
+        };
+        this.suspend(entry.playerId, entry, 'afterPlay', [combo], resume, r.result.ask);
         return this.suspendedOk();
       }
       if (!r.vetoed && r.result?.modify) {
@@ -539,10 +571,17 @@ export class GameEngine {
       const entry = hooks[i]!;
       const r = this.runHook(entry, [combo]);
       if (!r.vetoed && r.result?.ask) {
-        this.suspend(entry.playerId, entry, 'onPlayInterrupt', [combo], (outcome) => {
+        const resume = (outcome: HookOutcome): void => {
+          if (outcome.vetoed) return;
+          if (outcome.result?.ask) {
+            // 多阶段询问：重挂起
+            this.suspend(entry.playerId, entry, 'onPlayInterrupt', [combo], resume, outcome.result.ask);
+            return;
+          }
           this.applyOutcome(entry, outcome);
           this.finishResumed(this.runInterruptHooks(playerId, combo, i + 1), playerId);
-        }, r.result.ask);
+        };
+        this.suspend(entry.playerId, entry, 'onPlayInterrupt', [combo], resume, r.result.ask);
         return this.suspendedOk();
       }
       if (!r.vetoed && r.result?.modify) {
@@ -635,7 +674,12 @@ export class GameEngine {
       return this.ok();
     }
     const cutter = this.players.find(
-      (p) => this.roles.get(p.roleId)?.canCutIn && !this.eliminated.has(p.id) && p.id !== this.roundLastPlayerId
+      (p) =>
+        this.roles.get(p.roleId)?.canCutIn &&
+        !this.eliminated.has(p.id) &&
+        p.id !== this.roundLastPlayerId &&
+        // 响应限制（抽你）：非指定玩家不得插队响应
+        !(this.tableResponderRestrict && p.id !== this.tableResponderRestrict)
     );
     if (!cutter) {
       this.advanceTurn();
@@ -831,6 +875,8 @@ export class GameEngine {
   private eliminate(playerId: string, reason: string): void {
     if (this.eliminated.has(playerId) || this.phase === 'finished') return;
     this.eliminated.add(playerId);
+    // 桌面一手牌的主人被淘汰：其响应限制随之解除（手牌仍留在桌上等别人压）
+    if (this.tableOwnerId === playerId) this.tableResponderRestrict = null;
     const hand = this.hands.get(playerId) ?? [];
     this.hands.set(playerId, []);
     if (hand.length > 0) this.discarded.push(...hand);
@@ -1028,6 +1074,11 @@ export class GameEngine {
       lastPlayWasCutIn: () => engine.lastPlayWasCutIn,
       respondedTo: () => engine.prevTableOwnerId,
       respondedToSuits: () => [...engine.prevTableSuits],
+      attributeTable: (ownerId) => engine.attributeTable(ownerId),
+      setTableResponderRestrict: (designatedId) => {
+        engine.tableResponderRestrict = designatedId;
+      },
+      playSideCard: (pid, cardId) => engine.playSideCard(pid, cardId),
     };
   }
 
@@ -1072,6 +1123,29 @@ export class GameEngine {
 
   // ---------- 工具 ----------
 
+  /** 桌面一手牌归属改写（阿色再问/惰戈亢奋：视作由新 owner 打出）。
+   *  轮转从新 owner 的下家继续（原打出者不跳过）；轮末无人再接则新 owner 获得牌权；
+   *  这手牌触发的后续技能判定一律对新 owner 生效。 */
+  private attributeTable(ownerId: string): void {
+    if (!this.tableCombo || this.tableOwnerId === ownerId) return;
+    const from = this.tableOwnerId;
+    this.tableOwnerId = ownerId;
+    this.roundLastPlayerId = ownerId;
+    this.turnPlayerId = ownerId; // 之后 advanceTurn 从其下家开始轮转
+    this.emit({ type: 'table:attributed', playerId: ownerId, fromPlayerId: from, combo: this.tableCombo });
+  }
+
+  /** 明置一张手牌到桌旁（再问补打：随当前一手牌一起进弃牌堆） */
+  private playSideCard(playerId: string, cardId: number): void {
+    const hand = this.hands.get(playerId);
+    if (!hand) return;
+    const idx = hand.findIndex((c) => c.id === cardId);
+    if (idx < 0) return;
+    const [card] = hand.splice(idx, 1);
+    this.tableSide.push(card!);
+    this.emit({ type: 'table:side', playerId, card: card! });
+  }
+
   private nextSeat(id: string, skip = 0): string {
     const idx = this.players.findIndex((p) => p.id === id);
     let cur = idx;
@@ -1090,6 +1164,8 @@ export class GameEngine {
 
   /** 可合法响应的组合：基础可管且未被 beforePlay 干跑否决（技能否决后允许过） */
   private legalResponses(playerId: string): Combo[] {
+    // 响应限制（抽你）：非指定玩家视为无牌可管（允许过）
+    if (this.tableResponderRestrict && playerId !== this.tableResponderRestrict) return [];
     return this.playableNotVetoed(playerId, listPlayable(this.hands.get(playerId)!, this.tableCombo, this.cfg));
   }
 

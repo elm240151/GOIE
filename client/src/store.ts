@@ -105,6 +105,8 @@ interface AppStore {
   passedAt: Record<string, number>;
   /** 本轮每人最近一次打出的牌（打出者面前保持可见，轮末清除进弃牌堆） */
   roundPlays: Record<string, Combo>;
+  /** 明置桌旁的边牌（再问补打等，随当前一手牌一起弃置） */
+  tableSideCards: Card[];
   /** 服务端发给我的技能询问（完整载荷，弹窗用） */
   skillAsk: SkillAsk | null;
   /** 场上公开亮出的判定牌（逐张动画展示区，来自 cards:revealed 事件流） */
@@ -200,6 +202,7 @@ export const useStore = create<AppStore>((set, get) => ({
   tablePlayerId: null,
   passedAt: {},
   roundPlays: {},
+  tableSideCards: [],
   skillAsk: null,
   revealed: null,
   handOrder: null,
@@ -408,7 +411,7 @@ export const useStore = create<AppStore>((set, get) => ({
     set({ room, screen: nextScreen });
     // 新一局开始（再来一局/重开）→ 清空桌面残留
     if (prev && prev.phase !== 'lobby' && room.phase === 'playing') {
-      set({ tablePlayerId: null, passedAt: {}, roundPlays: {} });
+      set({ tablePlayerId: null, passedAt: {}, roundPlays: {}, tableSideCards: [] });
     }
     // 对局结束回到房间（再来一局全员投票通过）→ 清空对局状态，回房间重新选角色/准备
     if (prev && prev.phase === 'finished' && room.phase === 'lobby') {
@@ -418,6 +421,7 @@ export const useStore = create<AppStore>((set, get) => ({
         skillAsk: null,
         revealed: null,
         roundPlays: {},
+        tableSideCards: [],
         selectedCardIds: [],
         organize: false,
         enteredCardIds: [],
@@ -466,6 +470,7 @@ export const useStore = create<AppStore>((set, get) => ({
     // 询问已了结（快照里不再挂起）→ 关闭弹窗
     set({
       snap,
+      tableSideCards: snap.tableSide,
       selectedCardIds: selectedCardIds.filter((id) => myHandIds.has(id)),
       skillAsk: snap.pendingAsk ? get().skillAsk : null,
       revealed: revealedNext,
@@ -482,9 +487,25 @@ export const useStore = create<AppStore>((set, get) => ({
         set((s) => ({
           tablePlayerId: e.playerId as string,
           passedAt: {},
+          tableSideCards: [],
           roundPlays: { ...s.roundPlays, [e.playerId as string]: e.combo as Combo },
         }));
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
+        break;
+      case 'table:attributed': {
+        // 桌面一手牌归属改写（再问/亢奋）：展示移到新归属者名下
+        const from = e.fromPlayerId as string;
+        const to = e.playerId as string;
+        set((s) => {
+          const plays = { ...s.roundPlays };
+          delete plays[from];
+          plays[to] = e.combo as Combo;
+          return { tablePlayerId: to, roundPlays: plays };
+        });
+        break;
+      }
+      case 'table:side':
+        set((s) => ({ tableSideCards: [...s.tableSideCards, e.card as Card] }));
         break;
       case 'passed': {
         const pid = e.playerId as string;
@@ -493,7 +514,7 @@ export const useStore = create<AppStore>((set, get) => ({
       }
       case 'round:ended': {
         // 本轮牌全部进弃牌堆：清空打出者面前的展示
-        set({ tablePlayerId: null, passedAt: {}, roundPlays: {} });
+        set({ tablePlayerId: null, passedAt: {}, roundPlays: {}, tableSideCards: [] });
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
         const last = room?.players.find((p) => p.id === e.lastPlayerId);
         if (last) toast('info', `无人能管，${last.name} 摸了 ${e.drew} 张牌继续出`);

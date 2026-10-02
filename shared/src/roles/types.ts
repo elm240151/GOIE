@@ -130,6 +130,12 @@ export interface EngineFacade {
   respondedTo(): string | null;
   /** 被压的那手牌的花色集合（无名：响应牌与被压牌同花色即触发） */
   respondedToSuits(): number[];
+  /** 桌面一手牌归属改写（阿色再问/惰戈亢奋）：视作由 ownerId 打出，轮转从其下家继续、判定对其生效 */
+  attributeTable(ownerId: string): void;
+  /** 响应限制（阿色抽你）：当前桌面一手牌只能由 designatedId 响应；null 解除 */
+  setTableResponderRestrict(designatedId: string | null): void;
+  /** 明置一张手牌到桌旁（阿色再问补打：随当前一手牌一起弃置） */
+  playSideCard(playerId: string, cardId: number): void;
 }
 
 export interface HookContext<S = unknown> {

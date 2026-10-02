@@ -394,6 +394,164 @@ describe('技能询问（观股）', () => {
   });
 });
 
+/** 固定手牌 3 人局（阿色专用）：
+ *  房主（阿色）五张单3 先手；下家 4♥ 可压（extraValid 时还带第二张 4♥ 作补打）；
+ *  第三家（hasFive 时带 5♥ 想压）。房主出单3 → 全过 → 轮末抽你询问（3 人局可发动 5 次）。 */
+function mkCaptainSetup(opts: { extraValid?: boolean; hasFive?: boolean } = {}): {
+  manager: RoomManager;
+  sockets: FakeSocket[];
+  ids: string[];
+  secrets: Record<string, string>;
+  code: string;
+} {
+  const registry: RoleRegistry = new Map(listRoles().map((r) => [r.id, r]));
+  const deck = buildDeck(3);
+  const pick = (ids: number[]) => ids.map((id) => deck[id]!);
+  const p0Hand = pick([0, 13, 26, 39, 54]); // 五张单3
+  const p1Hand = pick(opts.extraValid ? [14, 68, 6, 7, 8] : [14, 6, 7, 8, 9]); // 4♥（+第二张4♥）9♠10♠J♠(Q♠)
+  const p2Hand = pick(opts.hasFive ? [15, 19, 20, 21, 22] : [19, 20, 21, 22, 23]); // (5♥)9♥10♥J♥Q♥(K♥)
+  const factory: RoomOptions['engineFactory'] = ({ players }) =>
+    new GameEngine(defaultRules, players, {
+      rng: mulberry32(1),
+      startPlayerId: players[0]!.id,
+      roles: registry,
+      scores: {},
+      handsOverride: { [players[0]!.id]: p0Hand, [players[1]!.id]: p1Hand, [players[2]!.id]: p2Hand },
+    });
+  const mgr = new RoomManager({
+    roles: registry,
+    scoreStore: new MemoryScoreStore(),
+    autoPassMs: 30_000,
+    engineFactory: factory,
+  });
+  const sockets = [mkSocket('s0'), mkSocket('s1'), mkSocket('s2')];
+  const { code, playerId, secret } = mgr.create('房主', sockets[0]!);
+  const ids = [playerId];
+  const secrets: Record<string, string> = { [playerId]: secret };
+  for (let i = 1; i < 3; i++) {
+    const r = mgr.join(code, `玩家${i + 1}`, sockets[i]!);
+    ids.push(r.playerId);
+    secrets[r.playerId] = r.secret;
+  }
+  mgr.selectRole(sockets[0]!.id, 'captain');
+  mgr.selectRole(sockets[1]!.id, 'flashpoint');
+  mgr.selectRole(sockets[2]!.id, 'skywalker');
+  for (const s of sockets) mgr.setReady(s.id, true);
+  return { manager: mgr, sockets, ids, secrets, code };
+}
+
+/** 房主出单3 → 全员过 → 轮末抽你询问房主 */
+function playToChouNiAsk(s: ReturnType<typeof mkCaptainSetup>): SkillAsk {
+  s.manager.startGame(s.sockets[0]!.id);
+  const snap0 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+  expect(snap0.turnPlayerId).toBe(s.ids[0]);
+  const hostHand = snap0.players.find((p) => p.id === s.ids[0])!.hand!;
+  s.manager.play(s.sockets[0]!.id, [hostHand.find((c) => c.rank === 3)!.id]);
+  s.manager.pass(s.sockets[1]!.id);
+  s.manager.pass(s.sockets[2]!.id);
+  const mid = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+  expect(mid.pendingAsk?.playerId).toBe(s.ids[0]);
+  return lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+}
+
+describe('技能询问（阿色）', () => {
+  it('抽你：确认→选目标（不含自己）→新轮只有指定者能响应', () => {
+    const s = mkCaptainSetup({ hasFive: true });
+    const ask = playToChouNiAsk(s);
+    expect(ask.kind).toBe('confirm');
+    expect(ask.prompt).toContain('5');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'yes' });
+    const pickAsk = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(pickAsk.kind).toBe('pickTarget');
+    expect(pickAsk.targetCandidates).toEqual([s.ids[1], s.ids[2]]);
+    s.manager.useSkill(s.sockets[0]!.id, { askId: pickAsk.askId!, targetPlayerId: s.ids[1] });
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.pendingAsk).toBeNull();
+    expect(after.turnPlayerId).toBe(s.ids[0]);
+    expect(after.players.find((p) => p.id === s.ids[0])!.handCount).toBe(5); // 4 + 补摸 1
+    // 新轮：房主出单3 → p1 先过 → p2 想压5 被拦（只有 p1 能响应）→ p2 过 → 全过轮末
+    const hostHand = after.players.find((p) => p.id === s.ids[0])!.hand!;
+    s.manager.play(s.sockets[0]!.id, [hostHand.find((c) => c.rank === 3)!.id]);
+    s.manager.pass(s.sockets[1]!.id);
+    const p2Snap = lastEmit<GameSnapshot>(s.sockets[2]!, SERVER_EVENTS.snapshot)!;
+    const five = p2Snap.players.find((p) => p.id === s.ids[2])!.hand!.find((c) => c.rank === 5)!;
+    s.manager.play(s.sockets[2]!.id, [five.id]);
+    expect(lastEmit<string>(s.sockets[2]!, SERVER_EVENTS.error)).toContain('抽你');
+    s.manager.pass(s.sockets[2]!.id);
+    const r2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(r2.pendingAsk?.playerId).toBe(s.ids[0]); // 牌权仍在房主，再次询问（还剩 4 次）
+    expect(lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!.prompt).toContain('4');
+  });
+
+  it('再问：补打询问定向发给压牌者，补打的牌明置桌旁', () => {
+    const s = mkCaptainSetup({ extraValid: true });
+    s.manager.startGame(s.sockets[0]!.id);
+    const snap0 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    const hostHand = snap0.players.find((p) => p.id === s.ids[0])!.hand!;
+    s.manager.play(s.sockets[0]!.id, [hostHand.find((c) => c.rank === 3)!.id]);
+    // p1 压 4♥ → 再问询问房主
+    const p1Snap = lastEmit<GameSnapshot>(s.sockets[1]!, SERVER_EVENTS.snapshot)!;
+    const four = p1Snap.players.find((p) => p.id === s.ids[1])!.hand!.find((c) => c.rank === 4)!;
+    s.manager.play(s.sockets[1]!.id, [four.id]);
+    const mid = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid.pendingAsk?.playerId).toBe(s.ids[0]);
+    const zw = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(zw.kind).toBe('confirm');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: zw.askId!, choice: 'yes' });
+    // 补打询问发给压牌者 p1（askPlayerId 定向）
+    const mid2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid2.pendingAsk?.playerId).toBe(s.ids[1]);
+    const pickAsk = lastEmit<SkillAsk>(s.sockets[1]!, SERVER_EVENTS.skillAsk)!;
+    expect(pickAsk.kind).toBe('pickCards');
+    expect(pickAsk.askPlayerId).toBe(s.ids[1]);
+    expect(pickAsk.cards).toHaveLength(1); // 只剩第二张 4♥
+    s.manager.useSkill(s.sockets[1]!.id, { askId: pickAsk.askId!, cardIds: [pickAsk.cards![0]!.id] });
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.pendingAsk).toBeNull();
+    expect(after.tableSide).toHaveLength(1);
+    expect(after.tableSide[0]!.rank).toBe(4);
+    expect(after.players.find((p) => p.id === s.ids[1])!.handCount).toBe(3); // 5 - 压牌 - 补打
+    // 全过 → 轮末 p1 补摸，桌面与边牌一起弃置
+    s.manager.pass(s.sockets[2]!.id);
+    s.manager.pass(s.sockets[0]!.id);
+    const r2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(r2.players.find((p) => p.id === s.ids[1])!.handCount).toBe(4);
+    expect(r2.table).toBeNull();
+    expect(r2.tableSide).toHaveLength(0);
+  });
+
+  it('再问：打不出且超时 → 压牌归属改写为阿色，牌权归阿色', () => {
+    vi.useFakeTimers();
+    const s = mkCaptainSetup(); // 无第二张 4♥、无 5♥
+    s.manager.startGame(s.sockets[0]!.id);
+    const snap0 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    const hostHand = snap0.players.find((p) => p.id === s.ids[0])!.hand!;
+    s.manager.play(s.sockets[0]!.id, [hostHand.find((c) => c.rank === 3)!.id]);
+    const p1Snap = lastEmit<GameSnapshot>(s.sockets[1]!, SERVER_EVENTS.snapshot)!;
+    const four = p1Snap.players.find((p) => p.id === s.ids[1])!.hand!.find((c) => c.rank === 4)!;
+    s.manager.play(s.sockets[1]!.id, [four.id]);
+    const zw = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    s.manager.useSkill(s.sockets[0]!.id, { askId: zw.askId!, choice: 'yes' });
+    const pickAsk = lastEmit<SkillAsk>(s.sockets[1]!, SERVER_EVENTS.skillAsk)!;
+    expect(pickAsk.cards).toHaveLength(0);
+    vi.advanceTimersByTime(15_001); // 超时弃权 → 归属改写
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.pendingAsk).toBeNull();
+    expect(after.turnPlayerId).toBe(s.ids[1]); // 轮转从阿色下家继续
+    expect(
+      emittedEvents(s.sockets[0]!).some(
+        (e) => e.type === 'table:attributed' && e.playerId === s.ids[0] && e.fromPlayerId === s.ids[1]
+      )
+    ).toBe(true);
+    // 全过 → 牌权归阿色（轮末抽你询问）
+    s.manager.pass(s.sockets[1]!.id);
+    s.manager.pass(s.sockets[2]!.id);
+    const r2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(r2.pendingAsk?.playerId).toBe(s.ids[0]);
+    expect(lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!.prompt).toContain('5');
+  });
+});
+
 describe('重连与掉线兜底', () => {
   it('重连：secret 校验并恢复；掉线超时自动过', () => {
     vi.useFakeTimers();

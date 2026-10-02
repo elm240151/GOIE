@@ -33,7 +33,7 @@
 
 ## GameEvent（shared/src/engine/events.ts）
 
-`game:started {leaderId}` · `deal:done` · `turn:started {playerId}` · `cards:played {playerId, combo}` · `passed {playerId}` · `round:ended {lastPlayerId, drew}` · `cards:drawn {playerId, count}` · `cards:revealed {playerId, cards, purpose}`（**判定牌公开**：`revealTop` 每翻一次发一条，逐张可见；`revealCards` 整批亮牌） · `player:eliminated {playerId, reason}` · `skill:triggered {playerId, roleId, skillId, text}` · `game:ended {winnerId(null=流局), scoreDeltas, totals}`
+`game:started {leaderId}` · `deal:done` · `turn:started {playerId}` · `cards:played {playerId, combo}` · `passed {playerId}` · `round:ended {lastPlayerId, drew}` · `cards:drawn {playerId, count}` · `cards:revealed {playerId, cards, purpose}`（**判定牌公开**：`revealTop` 每翻一次发一条，逐张可见；`revealCards` 整批亮牌） · `table:attributed {playerId, fromPlayerId, combo}`（**桌面一手牌归属改写**：这手牌视作 playerId 打出，轮转从其下家继续、判定对其生效） · `table:side {playerId, card}`（明置一张牌到桌旁，随当前一手牌一起弃置，公开） · `player:eliminated {playerId, reason}` · `skill:triggered {playerId, roleId, skillId, text}` · `game:ended {winnerId(null=流局), scoreDeltas, totals}`
 
 ## 技能询问时序
 

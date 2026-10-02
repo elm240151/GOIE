@@ -133,7 +133,8 @@ export default function SkillAskModal() {
       break;
   }
 
-  const showDecline = ask.kind === 'confirm' || ask.kind === 'cutIn';
+  // pickCards 也可弃权（再问补打「打不出」、观股大跌放弃等）
+  const showDecline = ask.kind === 'confirm' || ask.kind === 'cutIn' || ask.kind === 'pickCards';
 
   return (
     <div className="modal-overlay">
