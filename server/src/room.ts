@@ -172,6 +172,7 @@ export class Room {
     this.engine.start();
     this.dispatchEvents(this.engine.drainEvents());
     this.syncSnapshots();
+    this.handlePendingAsk(); // 开局整备询问（如阿色首回合抽你）：直达被询问者 + 超时定时器
     this.broadcastState();
   }
 

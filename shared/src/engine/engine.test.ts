@@ -459,6 +459,52 @@ describe('框架：淘汰 / 手牌上限 / 询问挂起 / 插队 / 翻牌池', (
     expect(r.ok).toBe(true); // 池已清空，不抛错
   });
 
+  it('回合开始钩子询问挂起（开局整备）：两段询问恢复后照常出牌', () => {
+    const starter = mkRole('starter', {
+      setup() {
+        return { stage: null as null | 'pick', done: false };
+      },
+      hooks: {
+        onTurnStart(ctx) {
+          const st = ctx.state as { stage: null | 'pick'; done: boolean };
+          if (ctx.game.eliminated(ctx.self.id)) return;
+          if (ctx.game.turnPlayerId() !== ctx.self.id || ctx.game.roundLeaderId() !== ctx.self.id) return;
+          if (st.stage === 'pick') {
+            // 选目标阶段（多阶段重跑）
+            st.stage = null;
+            ctx.game.announce('starter', 'starter-skill', `指定 ${ctx.answer?.targetPlayerId}`);
+            return;
+          }
+          if (st.done && !ctx.answer) return;
+          st.done = true;
+          if (!ctx.answer) return { ok: true, ask: { kind: 'confirm', prompt: '整备确认？' } };
+          if (ctx.answer.choice === 'decline') return;
+          st.stage = 'pick';
+          return { ok: true, ask: { kind: 'pickTarget', prompt: '指定一人', targetCandidates: ['p1'] } };
+        },
+      },
+    });
+    const hands = { p0: [byRank(3, 1)[0]!, byRank(4, 1)[0]!], p1: byRank(13, 5) };
+    const { engine } = mkEngine(2, { hands, startPlayerId: 'p0', roles: new Map([['starter', starter]]), roleIds: { p0: 'starter' } });
+    // 开局即挂起（首回合无摸牌但有整备阶段）
+    const ask = engine.snapshotFor('p0').pendingAsk;
+    expect(ask?.kind).toBe('confirm');
+    // 挂起期间动作被拒
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(false);
+    // 确认 → 选目标 → 恢复
+    const yes = engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'yes' });
+    expect(yes.ok).toBe(true);
+    const pick = yes.ok ? (yes.pendingAsk as SkillAsk) : null;
+    expect(pick?.kind).toBe('pickTarget');
+    const done = engine.resolveAsk('p0', { askId: pick!.askId!, targetPlayerId: 'p1' });
+    expect(done.ok).toBe(true);
+    expect(done.ok && done.events.some((e) => e.type === 'skill:triggered')).toBe(true);
+    // 恢复正常出牌
+    expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
+    expect(engine.snapshotFor('p1').turnPlayerId).toBe('p1');
+  });
+
   it('翻牌公开：revealTop 广播 cards:revealed（含 purpose），挂起期间快照 revealed 池所有人可见', () => {
     const openFlip = mkRole('open-flip', {
       setup() {

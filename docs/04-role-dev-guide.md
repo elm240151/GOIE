@@ -24,7 +24,7 @@ interface RoleDef {
 | 钩子 | 时机 | 说明 |
 |---|---|---|
 | `onDeal(ctx)` | 发牌时 | 可 `extraDealCards`（仅此钩子可用） |
-| `onTurnStart(ctx)` | 轮到出牌 | 任意 modify |
+| `onTurnStart(ctx)` | 轮到出牌（含开局整备：首回合无摸牌但仍有整备阶段，先手开局即触发） | 任意 modify；可返回 ask 挂起（阿色开局抽你） |
 | `beforePlay(ctx, proposed)` | **引擎基础规则校验之后** | `allowAnyway` 放行 / `ok:false` 否决（技能优先） |
 | `afterPlay(ctx, played)` | 出牌后 | 任意 modify |
 | `onPlayInterrupt(ctx, played)` | 出牌提交后、**获胜判定前**（驱逐类优先于获胜，如巨石） | 可返回 ask 挂起 |
@@ -73,7 +73,9 @@ interface SkillAsk {
 
 **纯度契约（★ 最重要）**：返回 `ask` 之前**不得改动任何状态**（不摸牌、不翻牌、不记 state）——回答后引擎会带着 `ctx.answer` 重跑钩子，改过状态就会重复生效。状态只写在"拿到 answer 之后"的分支里。
 
-**多阶段询问**（骚骚 5 段 / 观股大跌 2 段 / 观股大涨依次自选）：钩子按 `ctx.answer` 分派。**依次问别人**用 `askPlayerId` 定向 + 私有状态队列（观股大涨范式）：state 存 `{ pool: Card[]; boom: { ids: string[]; next: number } }`，确认后 `revealTop` 存入 pool、返回指向队列首位的 pickCards；每次回答（含弃权/超时）处理当前位 → 指向下一位重新返回 ask（此时 `askPlayerId` 指向别人，重跑时 `ctx.self` 仍是技能所有者）；队列走完 discard 余牌收尾。注意弃权路径也必须能走完队列并清空展示池（守恒断言）。
+**多阶段询问**（骚骚 5 段 / 观股大跌 2 段 / 观股大涨依次自选 / 阿色开局抽你 2 段）：钩子按 `ctx.answer` 分派。**依次问别人**用 `askPlayerId` 定向 + 私有状态队列（观股大涨范式）：state 存 `{ pool: Card[]; boom: { ids: string[]; next: number } }`，确认后 `revealTop` 存入 pool、返回指向队列首位的 pickCards；每次回答（含弃权/超时）处理当前位 → 指向下一位重新返回 ask（此时 `askPlayerId` 指向别人，重跑时 `ctx.self` 仍是技能所有者）；队列走完 discard 余牌收尾。注意弃权路径也必须能走完队列并清空展示池（守恒断言）。
+
+**一次性时机钩子**（只在特定时刻发动一次，如阿色开局整备）的多阶段询问：置位守卫（如 `startPhaseDone`）必须排在 `ctx.answer` 分派**之后**——首次运行置位并发问，回答重跑时先走 answer 分派，否则守卫会把重跑提前拦下、第二段询问发不出来（captain.ts onTurnStart 范式：`stage==='pick'` → `ctx.answer` → 守卫 → 首次询问）。
 
 ```ts
 onSkillAction(ctx, req) {

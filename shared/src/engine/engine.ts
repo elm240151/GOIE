@@ -443,8 +443,32 @@ export class GameEngine {
     }
     const id = this.turnPlayerId!;
     this.emit({ type: 'turn:started', playerId: id });
-    for (const entry of this.orderedHooks('onTurnStart')) {
+    this.runTurnStartHooks(id, 0);
+  }
+
+  /** 回合开始钩子：支持询问挂起（开局整备：首回合无摸牌仍有整备阶段，先手技能可发动） */
+  private runTurnStartHooks(id: string, index: number): void {
+    const hooks = this.orderedHooks('onTurnStart');
+    for (let i = index; i < hooks.length; i++) {
+      const entry = hooks[i]!;
       const r = this.runHook(entry, []);
+      if (!r.vetoed && r.result?.ask) {
+        const resume = (outcome: HookOutcome): void => {
+          if (!outcome.vetoed && outcome.result?.ask) {
+            // 多阶段询问：重挂起
+            this.suspend(entry.playerId, entry, 'onTurnStart', [], resume, outcome.result.ask);
+            return;
+          }
+          if (outcome.vetoed) {
+            this.emit({ type: 'game:error', playerId: entry.playerId, reason: outcome.reason });
+          }
+          this.applyOutcome(entry, outcome);
+          if (this.phase !== 'playing') return;
+          this.runTurnStartHooks(id, i + 1);
+        };
+        this.suspend(entry.playerId, entry, 'onTurnStart', [], resume, r.result.ask);
+        return;
+      }
       if (!r.vetoed && r.result?.modify) {
         this.applyMods(entry.playerId, r.result.modify);
         if (this.phase !== 'playing') return;

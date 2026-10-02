@@ -31,6 +31,20 @@ function mkEngine(hands: Record<string, Card[]>, roles: Record<string, RoleDef>,
   return engine;
 }
 
+/** 开局整备询问（首回合抽你：先手阿色开局即问）：弃权（或指定 target 走完整两段） */
+function startAsk(engine: GameEngine, target?: string): void {
+  const ask = engine.snapshotFor('p0').pendingAsk;
+  expect(ask).not.toBeNull();
+  if (target) {
+    const yes = engine.resolveAsk('p0', { askId: ask!.askId, choice: 'yes' });
+    const pick = yes.ok ? (yes.pendingAsk as SkillAsk) : null;
+    expect(pick?.kind).toBe('pickTarget');
+    expect(engine.resolveAsk('p0', { askId: pick!.askId!, targetPlayerId: target }).ok).toBe(true);
+  } else {
+    expect(engine.resolveAsk('p0', { askId: ask!.askId, choice: 'decline' }).ok).toBe(true);
+  }
+}
+
 /** 牌守恒：所有手牌 + 牌堆 + 弃牌 + 桌面 + 边牌 + 翻牌区 = 162 */
 function total(engine: GameEngine): number {
   const snap = engine.snapshotFor('p0');
@@ -44,6 +58,7 @@ describe('阿色（抽你/再问）', () => {
   it('抽你：指定后只有指定者能响应（其他人出牌被拦、过牌后轮末阿色再问）', () => {
     const hands = { p0: byRank(3, 5), p1: byRank(10, 5), p2: byRank(5, 5), p3: byRank(6, 5) };
     const engine = mkEngine(hands, { p0: captain });
+    startAsk(engine); // 开局整备：弃权
     // 第一轮：阿色出单3，其余全过 → 轮末整备询问
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     expect(engine.pass('p1').ok).toBe(true);
@@ -84,6 +99,7 @@ describe('阿色（抽你/再问）', () => {
   it('抽你：指定者压过后限制解除，其他人可正常接牌', () => {
     const hands = { p0: byRank(3, 5), p1: byRank(4, 5), p2: byRank(5, 5) };
     const engine = mkEngine(hands, { p0: captain });
+    startAsk(engine); // 开局整备：弃权
     // 第一轮拿牌权并指定 p1
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     expect(engine.pass('p1').ok).toBe(true);
@@ -109,6 +125,7 @@ describe('阿色（抽你/再问）', () => {
     // p0 8 张三：8 轮每轮出一张（补摸的是牌堆顶的王，留在手牌尾部不参与）
     const hands = { p0: byRank(3, 8), p1: byRank(10, 5), p2: byRank(11, 5) };
     const engine = mkEngine(hands, { p0: captain });
+    startAsk(engine); // 开局整备：弃权（不消耗次数）
     // 每轮：阿色出当前手牌第一张（轮末补摸 1 张，手牌在轮换），其余过
     const roundEnd = () => {
       const card = engine.snapshotFor('p0').players[0]!.hand![0]!;
@@ -155,9 +172,57 @@ describe('阿色（抽你/再问）', () => {
     expect(engine.snapshotFor('p0').turnPlayerId).toBe('p0');
   });
 
+  it('抽你：开局首回合整备即可发动（先手无摸牌仍有整备阶段）', () => {
+    const hands = { p0: byRank(3, 5), p1: byRank(10, 5), p2: byRank(5, 5) };
+    const engine = mkEngine(hands, { p0: captain });
+    // 开局即挂起抽你询问（先手阿色，首回合无摸牌但有整备阶段）
+    const ask = engine.snapshotFor('p0').pendingAsk;
+    expect(ask?.kind).toBe('confirm');
+    expect(ask?.prompt).toContain('5');
+    // 确认 → 选目标 → 指定 p1：首轮阿色起牌即受限
+    const yes = engine.resolveAsk('p0', { askId: ask!.askId, choice: 'yes' });
+    const pick = yes.ok ? (yes.pendingAsk as SkillAsk) : null;
+    expect(pick?.kind).toBe('pickTarget');
+    expect(pick?.targetCandidates).toEqual(['p1', 'p2']);
+    const done = engine.resolveAsk('p0', { askId: pick!.askId!, targetPlayerId: 'p1' });
+    expect(done.ok).toBe(true);
+    expect(done.ok && done.events.some((e) => e.type === 'skill:triggered' && /指定/.test(e.text))).toBe(true);
+    // 首轮：阿色出3 → p1 过 → p2 想压5 被拦
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true);
+    const block = engine.playCards('p2', [hands.p2[0]!.id]);
+    expect(block.ok).toBe(false);
+    expect((block as { reason: string }).reason).toContain('抽你');
+  });
+
+  it('抽你：非先手开局无整备询问；轮2 起牌不再重复问（startPhaseDone 守卫）', () => {
+    const hands = { p0: [pick(4, 0), pick(7, 0)], p1: [pick(3, 0), pick(6, 0)], p2: byRank(10, 5) };
+    const engine = mkEngine(hands, { p0: captain }, 'p1');
+    // p1 先手：开局无整备询问（阿色没有牌权）
+    const snap0 = engine.snapshotFor('p0');
+    expect(snap0.turnPlayerId).toBe('p1');
+    expect(snap0.pendingAsk).toBeNull();
+    // 轮1：p1 出3 → p2 过 → 阿色压4 → p1 过 → p2 过 → 轮末整备询问（阿色拿到牌权）
+    expect(engine.playCards('p1', [hands.p1[0]!.id]).ok).toBe(true);
+    expect(engine.pass('p2').ok).toBe(true);
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true);
+    const r = engine.pass('p2');
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect(ask?.kind).toBe('confirm');
+    expect(ask?.prompt).toContain('5');
+    expect(engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'decline' }).ok).toBe(true);
+    // 轮2：阿色起牌 → 不再重复问（轮末整备已问过），可直接出牌
+    const snap2 = engine.snapshotFor('p0');
+    expect(snap2.turnPlayerId).toBe('p0');
+    expect(snap2.pendingAsk).toBeNull();
+    expect(engine.playCards('p0', [hands.p0[1]!.id]).ok).toBe(true);
+  });
+
   it('再问：压牌者打出最后一张牌直接获胜（谁打完谁赢，不再问）', () => {
     const hands = { p0: byRank(3, 3), p1: [pick(4, 0)], p2: byRank(10, 5) };
     const engine = mkEngine(hands, { p0: captain });
+    startAsk(engine); // 开局整备：弃权
     // 阿色出3 → p1 用最后一张 4♠ 压 → 不再问，直接判 p1 获胜
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     const r = engine.playCards('p1', [hands.p1[0]!.id]);
@@ -177,6 +242,7 @@ describe('阿色（抽你/再问）', () => {
       p3: byRank(10, 5),
     };
     const engine = mkEngine(hands, { p0: captain });
+    startAsk(engine); // 开局整备：弃权
     // 阿色出3 → p1 压4 → 再问询问
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     const r1 = engine.playCards('p1', [hands.p1[0]!.id]);
@@ -204,6 +270,7 @@ describe('阿色（抽你/再问）', () => {
       p2: byRank(10, 5),
     };
     const engine = mkEngine(hands, { p0: captain });
+    startAsk(engine); // 开局整备：弃权
     // 阿色出3 → p1 压4♠ → 再问 → 是
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     const r1 = engine.playCards('p1', [hands.p1[0]!.id]);
@@ -243,6 +310,7 @@ describe('阿色（抽你/再问）', () => {
       p2: byRank(10, 5),
     };
     const engine = mkEngine(hands, { p0: captain });
+    startAsk(engine); // 开局整备：弃权
     // 阿色出3 → p1 压4♥（余牌无 4 也无 ♥）→ 再问 → 是 → 候选为空
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     const r1 = engine.playCards('p1', [hands.p1[0]!.id]);
@@ -276,6 +344,7 @@ describe('阿色（抽你/再问）', () => {
       p2: byRank(5, 6).filter((c) => c.id !== fiveS.id).slice(0, 5),
     };
     const engine = mkEngine(hands, { p0: captain });
+    startAsk(engine); // 开局整备：弃权
     // 第一轮拿牌权并指定 p1
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     expect(engine.pass('p1').ok).toBe(true);
@@ -310,6 +379,7 @@ describe('阿色（抽你/再问）', () => {
       p2: byRank(5, 6).filter((c) => c.id !== fiveS.id).slice(0, 5),
     };
     const engine = mkEngine(hands, { p0: captain });
+    startAsk(engine); // 开局整备：弃权
     // 第一轮指定 p1
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     expect(engine.pass('p1').ok).toBe(true);
@@ -345,6 +415,7 @@ describe('阿色（抽你/再问）', () => {
       p2: [byRank(4, 1)[0]!, ...byRank(9, 4)],
     };
     const engine = mkEngine(hands, { p0: captain, p2: patrick });
+    startAsk(engine); // 开局整备：弃权
     // 第一轮：无限制时无名（p2）会被问插队 → 弃权；随后全过拿牌权，指定 p1
     const lead = engine.playCards('p0', [hands.p0[0]!.id]);
     expect(lead.ok).toBe(true);

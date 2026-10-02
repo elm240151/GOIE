@@ -1,13 +1,14 @@
 // 角色：阿色 —— 技能【抽你】【再问】。
 // 【抽你】整备阶段（拥有牌权、摸牌前）发动，每局限 X+2 次（X = 人数）：指定一人，
 //   新起的一轮里只有其能响应你的牌（被指定者淘汰/掉线限制继续有效）。
+//   首回合没有摸牌阶段但仍有整备阶段：开局先手的阿色在起牌前同样可以发动。
 // 【再问】每轮限一次（确认弃权即消耗）：有人压你的牌（插队也算）时，压牌者须再打出一张
 //   与其那手牌中任意一张同点数或同花色的牌（王按实际代表点数与包含花色），明置桌旁；
 //   打不出/弃权/超时 → 那手牌视作你打出（归属改写：轮转从你下家继续，判定对你生效）。
 //   压牌者已打出最后一张牌时不再问（谁打完谁赢，引擎收尾直接判其获胜）。
 import { isJoker, JOKER_BIG, type Card } from '../cards';
 import type { Combo } from '../engine/combos';
-import type { RoleDef } from './types';
+import type { HookContext, HookResult, RoleDef } from './types';
 
 interface CaptainState {
   /** 抽你剩余次数（每局 X+2 次） */
@@ -20,6 +21,47 @@ interface CaptainState {
   zwUsed: boolean;
   /** 再问：阶段二询问对象（压牌者） */
   zwBeater: string | null;
+  /** 开局整备是否已处理（首回合无摸牌但仍有整备阶段；轮末 onRoundEnd 也会置位） */
+  startPhaseDone: boolean;
+}
+
+/** 抽你询问流（开局整备与轮末整备共用）：确认 → 选目标；阶段由 st.stage 分派 */
+function chouNiFlow(ctx: HookContext, st: CaptainState): HookResult | void {
+  const a = ctx.answer;
+  if (st.stage === 'pick') {
+    // 选目标阶段（pickTarget 超时自动弃权，答案可能没有目标）
+    st.stage = null;
+    const t = a?.targetPlayerId;
+    if (t && t !== ctx.self.id && !ctx.game.eliminated(t)) {
+      st.uses--;
+      st.designated = t;
+      const name = ctx.game.players().find((p) => p.id === t)?.name ?? t;
+      ctx.game.announce('captain', 'chou-ni', `指定 ${name}：本回合只有 TA 能响应`);
+    } else {
+      st.designated = null;
+    }
+    return;
+  }
+  if (st.uses <= 0) {
+    st.designated = null;
+    return;
+  }
+  if (!a) {
+    return { ok: true, ask: { kind: 'confirm', prompt: `是否发动【抽你】？（本局还可发动 ${st.uses} 次）` } };
+  }
+  if (a.choice === 'decline') {
+    st.designated = null;
+    return;
+  }
+  st.stage = 'pick';
+  const others = ctx.game
+    .players()
+    .filter((p) => p.id !== ctx.self.id && !ctx.game.eliminated(p.id))
+    .map((p) => p.id);
+  return {
+    ok: true,
+    ask: { kind: 'pickTarget', prompt: '【抽你】指定一人：本回合只能由其响应你的牌', targetCandidates: others },
+  };
 }
 
 /** 王的包含花色：小王双黑 ♠♣，大王双红 ♥♦ */
@@ -50,7 +92,14 @@ const captain: RoleDef = {
     { id: 'zai-wen', name: '再问', description: '每轮限一次：有人压你的牌时，压牌者须再打出一张同点数或同花色的牌，否则那手牌归你。' },
   ],
   setup(ctx): CaptainState {
-    return { uses: ctx.game.players().length + 2, designated: null, stage: null, zwUsed: false, zwBeater: null };
+    return {
+      uses: ctx.game.players().length + 2,
+      designated: null,
+      stage: null,
+      zwUsed: false,
+      zwBeater: null,
+      startPhaseDone: false,
+    };
   },
   hooks: {
     afterPlay(ctx) {
@@ -108,26 +157,35 @@ const captain: RoleDef = {
         },
       };
     },
+    onTurnStart(ctx) {
+      const st = ctx.state as CaptainState;
+      if (ctx.game.eliminated(ctx.self.id)) return;
+      if (st.stage === 'pick') {
+        // 开局抽你的选目标阶段（多阶段重跑）
+        return chouNiFlow(ctx, st);
+      }
+      if (ctx.answer) {
+        // 确认阶段回答（多阶段重跑；startPhaseDone 已在首次运行时置位）
+        return chouNiFlow(ctx, st);
+      }
+      if (st.startPhaseDone) return;
+      // 首回合整备：开局起牌没有轮末摸牌，但摸牌前仍有整备阶段 → 先手阿色可发动抽你
+      if (ctx.game.turnPlayerId() !== ctx.self.id || ctx.game.roundLeaderId() !== ctx.self.id) return;
+      st.startPhaseDone = true;
+      return chouNiFlow(ctx, st);
+    },
     onRoundEnd(ctx, lastPlayerId) {
       const st = ctx.state as CaptainState;
-      const a = ctx.answer;
       if (ctx.game.eliminated(ctx.self.id)) {
         st.designated = null;
         st.zwUsed = false;
         return;
       }
+      // 首回合已结束：开局整备不再适用（此后抽你只在轮末整备发动）
+      st.startPhaseDone = true;
       if (st.stage === 'pick') {
-        // 选目标阶段（pickTarget 超时自动弃权，答案可能没有目标）
-        st.stage = null;
-        const t = a?.targetPlayerId;
-        if (t && t !== ctx.self.id && !ctx.game.eliminated(t)) {
-          st.uses--;
-          st.designated = t;
-          const name = ctx.game.players().find((p) => p.id === t)?.name ?? t;
-          ctx.game.announce('captain', 'chou-ni', `指定 ${name}：本回合只有 TA 能响应`);
-        } else {
-          st.designated = null;
-        }
+        // 轮末抽你的选目标阶段（多阶段重跑）
+        chouNiFlow(ctx, st);
         return; // 正常摸牌
       }
       // 新一轮：再问重置
@@ -138,26 +196,7 @@ const captain: RoleDef = {
         return;
       }
       // 整备阶段（拥有牌权、摸牌前）：发动抽你
-      if (st.uses <= 0) {
-        st.designated = null;
-        return;
-      }
-      if (!a) {
-        return { ok: true, ask: { kind: 'confirm', prompt: `是否发动【抽你】？（本局还可发动 ${st.uses} 次）` } };
-      }
-      if (a.choice === 'decline') {
-        st.designated = null;
-        return;
-      }
-      st.stage = 'pick';
-      const others = ctx.game
-        .players()
-        .filter((p) => p.id !== ctx.self.id && !ctx.game.eliminated(p.id))
-        .map((p) => p.id);
-      return {
-        ok: true,
-        ask: { kind: 'pickTarget', prompt: '【抽你】指定一人：本回合只能由其响应你的牌', targetCandidates: others },
-      };
+      return chouNiFlow(ctx, st);
     },
   },
 };

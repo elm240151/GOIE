@@ -440,11 +440,21 @@ function mkCaptainSetup(opts: { extraValid?: boolean; hasFive?: boolean } = {}):
   return { manager: mgr, sockets, ids, secrets, code };
 }
 
+/** 开局整备询问（先手阿色首回合抽你）：弃权，恢复出牌 */
+function declineStartAsk(s: ReturnType<typeof mkCaptainSetup>): void {
+  const ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+  expect(ask.kind).toBe('confirm');
+  expect(ask.prompt).toContain('5');
+  s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'decline' });
+  expect(lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!.pendingAsk).toBeNull();
+}
+
 /** 房主出单3 → 全员过 → 轮末抽你询问房主 */
 function playToChouNiAsk(s: ReturnType<typeof mkCaptainSetup>): SkillAsk {
   s.manager.startGame(s.sockets[0]!.id);
   const snap0 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
   expect(snap0.turnPlayerId).toBe(s.ids[0]);
+  declineStartAsk(s); // 开局整备弃权（首回合无摸牌但有整备阶段）
   const hostHand = snap0.players.find((p) => p.id === s.ids[0])!.hand!;
   s.manager.play(s.sockets[0]!.id, [hostHand.find((c) => c.rank === 3)!.id]);
   s.manager.pass(s.sockets[1]!.id);
@@ -455,6 +465,38 @@ function playToChouNiAsk(s: ReturnType<typeof mkCaptainSetup>): SkillAsk {
 }
 
 describe('技能询问（阿色）', () => {
+  it('抽你：开局首回合整备询问直达先手，指定后首轮即生效', () => {
+    const s = mkCaptainSetup({ hasFive: true });
+    s.manager.startGame(s.sockets[0]!.id);
+    // 开局即问先手阿色（首回合无摸牌但有整备阶段）
+    const ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.kind).toBe('confirm');
+    expect(ask.prompt).toContain('5');
+    // 确认 → 选目标 p1
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'yes' });
+    const pickAsk = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(pickAsk.kind).toBe('pickTarget');
+    expect(pickAsk.targetCandidates).toEqual([s.ids[1], s.ids[2]]);
+    s.manager.useSkill(s.sockets[0]!.id, { askId: pickAsk.askId!, targetPlayerId: s.ids[1] });
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.pendingAsk).toBeNull();
+    expect(after.turnPlayerId).toBe(s.ids[0]);
+    expect(after.players.find((p) => p.id === s.ids[0])!.handCount).toBe(5); // 首回合无摸牌
+    // 首轮：房主出单3 → p1 先过 → p2 想压5 被拦（抽你即时生效）
+    const hostHand = after.players.find((p) => p.id === s.ids[0])!.hand!;
+    s.manager.play(s.sockets[0]!.id, [hostHand.find((c) => c.rank === 3)!.id]);
+    s.manager.pass(s.sockets[1]!.id);
+    const p2Snap = lastEmit<GameSnapshot>(s.sockets[2]!, SERVER_EVENTS.snapshot)!;
+    const five = p2Snap.players.find((p) => p.id === s.ids[2])!.hand!.find((c) => c.rank === 5)!;
+    s.manager.play(s.sockets[2]!.id, [five.id]);
+    expect(lastEmit<string>(s.sockets[2]!, SERVER_EVENTS.error)).toContain('抽你');
+    // p2 过 → 全过轮末：牌权仍在房主 → 轮末抽你询问（还剩 4 次）
+    s.manager.pass(s.sockets[2]!.id);
+    const r2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(r2.pendingAsk?.playerId).toBe(s.ids[0]);
+    expect(lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!.prompt).toContain('4');
+  });
+
   it('抽你：确认→选目标（不含自己）→新轮只有指定者能响应', () => {
     const s = mkCaptainSetup({ hasFive: true });
     const ask = playToChouNiAsk(s);
@@ -486,6 +528,7 @@ describe('技能询问（阿色）', () => {
   it('再问：补打询问定向发给压牌者，补打的牌明置桌旁', () => {
     const s = mkCaptainSetup({ extraValid: true });
     s.manager.startGame(s.sockets[0]!.id);
+    declineStartAsk(s);
     const snap0 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
     const hostHand = snap0.players.find((p) => p.id === s.ids[0])!.hand!;
     s.manager.play(s.sockets[0]!.id, [hostHand.find((c) => c.rank === 3)!.id]);
@@ -524,6 +567,7 @@ describe('技能询问（阿色）', () => {
     vi.useFakeTimers();
     const s = mkCaptainSetup(); // 无第二张 4♥、无 5♥
     s.manager.startGame(s.sockets[0]!.id);
+    declineStartAsk(s);
     const snap0 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
     const hostHand = snap0.players.find((p) => p.id === s.ids[0])!.hand!;
     s.manager.play(s.sockets[0]!.id, [hostHand.find((c) => c.rank === 3)!.id]);
