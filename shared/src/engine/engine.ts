@@ -129,6 +129,8 @@ export class GameEngine {
   private pendingAsk: PendingAsk | null = null;
   /** 牌序切换计数（海棠洄游）：本轮内每打一手 +1，奇数 = 倒序；每轮开始清零（轮末恢复正序） */
   private orderFlipCount = 0;
+  /** 刚打出的这一手在哪个牌序下判定（洄游先判后切：提交前记录，巨石触发等按此镜像） */
+  private lastPlayOrderReversed = false;
   /** 出牌即切换牌序的角色（RoleDef.flipsOrderOnPlay，按物理出牌者计，含插队） */
   private orderFlippers = new Set<string>();
 
@@ -601,6 +603,7 @@ export class GameEngine {
   /** 出牌执行（上一手被压的牌进弃牌堆）→ afterPlay → 打断钩子 → 获胜判定 */
   private commitPlay(playerId: string, combo: Combo): ActionResult {
     const flips = this.orderFlippers.has(playerId);
+    this.lastPlayOrderReversed = this.orderReversed(); // 洄游先判后切：本手按切换前顺序判定（巨石触发镜像用）
     if (flips) this.orderFlipCount++; // 洄游：物理出牌即切换（先判后切，本手按切换前顺序判定）
     this.removeCards(playerId, combo.cards);
     if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
@@ -806,6 +809,7 @@ export class GameEngine {
   /** 狂吠提交：压自己的牌（无插队后续），走完整流水线——获胜判定/打断钩子/狂吠连压照常 */
   private commitSelfFollow(playerId: string, combo: Combo): ActionResult {
     const flips = this.orderFlippers.has(playerId);
+    this.lastPlayOrderReversed = this.orderReversed(); // 同上：狂吠连压也按切换前顺序判定
     if (flips) this.orderFlipCount++;
     this.removeCards(playerId, combo.cards);
     if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
@@ -1266,6 +1270,7 @@ export class GameEngine {
       },
       playSideCard: (pid, cardId) => engine.playSideCard(pid, cardId),
       orderReversed: () => engine.orderReversed(),
+      lastPlayOrderReversed: () => engine.lastPlayOrderReversed,
       flipCountThisRound: () => engine.orderFlipCount,
       discardFromHand: (id, cardIds) => engine.discardFromHand(id, cardIds),
       retagTable: (rank) => engine.retagTable(rank),
@@ -1453,6 +1458,7 @@ export class GameEngine {
     const rev = this.orderReversed();
     const t = this.tableCombo!;
     if (t.type === 'singleJoker') return '只有炸弹能压住王（橐驼诅咒：单王点数无穷）';
+    if (t.type === 'jokerPair') return '只有炸弹能压住对王（橐驼诅咒：对王压一切对子）';
     if (t.type === 'bomb') {
       if (combo.type !== 'bomb') return '只有炸弹能压住炸弹';
       return rev ? '炸弹张数或点数不够大（倒序同张数比点相反）' : '炸弹张数或点数不够大';

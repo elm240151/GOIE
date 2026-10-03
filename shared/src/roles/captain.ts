@@ -6,9 +6,11 @@
 //   与其那手牌中任意一张同点数或同花色的牌（王按实际代表点数与包含花色），明置桌旁；
 //   打不出/弃权/超时 → 那手牌视作你打出（归属改写：轮转从你下家继续，判定对你生效）。
 //   压牌者已打出最后一张牌时不再问（谁打完谁赢，引擎收尾直接判其获胜）。
-import { isJoker, JOKER_BIG, type Card } from '../cards';
+import { isJoker, jokerSuits, type Card } from '../cards';
 import type { Combo } from '../engine/combos';
 import type { HookContext, HookResult, RoleDef } from './types';
+
+export { jokerSuits }; // 兼容旧导入（王的包含花色已上收至 cards.ts，2026-10-03）
 
 interface CaptainState {
   /** 抽你剩余次数（每局 X+2 次） */
@@ -62,11 +64,6 @@ function chouNiFlow(ctx: HookContext, st: CaptainState): HookResult | void {
     ok: true,
     ask: { kind: 'pickTarget', prompt: '【抽你】指定一人：本回合只能由其响应你的牌', targetCandidates: others },
   };
-}
-
-/** 王的包含花色：小王双黑 ♠♣，大王双红 ♥♦ */
-export function jokerSuits(c: Card): number[] {
-  return c.rank === JOKER_BIG ? [1, 3] : [0, 2];
 }
 
 /** 一张牌是否与某手牌（Combo）中任意一张「同点数或同花色」：

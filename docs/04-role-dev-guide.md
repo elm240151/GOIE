@@ -18,7 +18,7 @@ interface RoleDef {
   canCutIn?: boolean;         // 可插队响应（无名）——引擎提供插队机制，角色只挂标志
   canSelfFollow?: boolean;    // 出牌后立刻压自己打出的牌，可连压到放弃/压不了（修勾狂吠）——引擎在出牌后询问（selfFollow ask），角色只挂标志；留 X 禁止收尾与插队同一套过滤
   flipsOrderOnPlay?: boolean; // 每次出牌（含插队，按物理出牌者计）切换一次牌序正↔倒（海棠洄游）；每轮开始恢复正序。挂上后引擎自动：本手按切换前顺序判定（先判后切）、切换后把桌面牌型按新牌序重新解析（倒序 rank = 最高点数，保证跨序比较用同一约定）、快照携带 orderReversed
-  soloJoker?: boolean;        // 单王（橐驼诅咒）：该角色的王可直接作为单张打出——引擎解锁单王牌型（type 'singleJoker'，rank 编码 16、label「王」）：正序/倒序都压过一切单张（含 2/3），只有炸弹能压；预览/枚举（listPlayable 第 5 参）与解析（parseCombo 第 4 参）都要传此标志
+  soloJoker?: boolean;        // 王直接打出（橐驼诅咒）：该角色的王可直接作为单张/一对打出——引擎解锁单王牌型（type 'singleJoker'，rank 编码 16、label「王」）：正序/倒序都压过一切单张（含 2/3），只有炸弹能压；以及对王牌型（type 'jokerPair'，rank 编码 16、label「对王」，2026-10-03 用户确认）：压一切对子（正序含对 2、倒序含对 3），只有炸弹能压、王压不了王，正倒序一致；预览/枚举（listPlayable 第 5 参）与解析（parseCombo 第 4 参）都要传此标志
 }
 ```
 
@@ -112,7 +112,7 @@ interface ActionMods {
 
 角色**永远不能**直接碰引擎结构，只能通过：
 
-- 只读：`cfg` `players()` `handOf(id)` `deckCount()` `table()` `turnPlayerId()` `roundLeaderId()` `phase()` `passCount()` `roundLastPlayerId()` `nextSeatOf(id, skip?)` `eliminated(id)` `activeCount()` `lastPlayWasCutIn()` `orderReversed()`（当前是否倒序）`flipCountThisRound()`（本轮内切换牌序角色的实际出牌次数，含插队；隐匿以此判断"一次也没出过"）
+- 只读：`cfg` `players()` `handOf(id)` `deckCount()` `table()` `turnPlayerId()` `roundLeaderId()` `phase()` `passCount()` `roundLastPlayerId()` `nextSeatOf(id, skip?)` `eliminated(id)` `activeCount()` `lastPlayWasCutIn()` `orderReversed()`（当前是否倒序）`lastPlayOrderReversed()`（**刚打出的这一手在切换前处于什么牌序**——洄游先判后切，巨石等按"打出这一手时"的牌序镜像触发用，2026-10-03）`flipCountThisRound()`（本轮内切换牌序角色的实际出牌次数，含插队；隐匿以此判断"一次也没出过"）
 - 受控操作：
   - `draw(playerId, n)`（原始摸牌，不吃钩子不吃 drawBonus）
   - `giveFrom(playerId, cardIds)`（移除指定牌）+ `giveTo(playerId, cards)`（塞牌，**必须配合 giveFrom**，角色作者自己保证来源合法）
@@ -175,14 +175,14 @@ export default zecheng;
 | elm-yao.ts | 第二席 圣母 | 斜视 | beforePlay allowAnyway（同长度差 0/1，任意牌型） |
 | unhumanity.ts | 第三席 儒艮 | 黑脸 | onRoundEnd ask + takeRevealed 判定循环 + suppressDraw |
 | flashpoint.ts | 第四席 阿毛 | 茄汤 | onSkillAction + revealCards + playForcedCombo |
-| yy-xue.ts | 第五席 雪灾天使 | 巨石 | onPlayInterrupt ask(花色) + eliminate/seizeLead |
+| yy-xue.ts | 第五席 雪灾天使 | 巨石 | onPlayInterrupt ask(花色) + eliminate/seizeLead；触发按实体牌 + `lastPlayOrderReversed()` 镜像（正序 2/对 2、倒序 3/对 3、炸弹、首席 Q、橐驼单王/对王）；判定翻到王按 `jokerSuits` 双花色 |
 | cs-champion.ts | 第六席 企鹅 | 骚骚 | onSkillAction 四段 ask + giveFrom/giveTo 换牌 + endTurn |
 | patrick.ts | 第七席 圣帕特里克 | 无名 | canCutIn 引擎级插队 |
 | zecheng.ts | 末席 肖亡 | 观股 | onRoundEnd ask + revealTop + giveRevealed + suppressDraw |
 | captain.ts | 阿色 | 抽你 + 再问 | beforePlay/afterPlay/onRoundEnd 多阶段 ask + 响应限制 + 归属改写 + 明置边牌 |
 | fishy.ts | 海棠 | 洄游 + 隐匿 | flipsOrderOnPlay 引擎级牌序切换（含插队）+ onRoundEnd ask(priority 1000 先于整备类) + discardFromHand 重铸 |
 | doggie.ts | 修勾 | 答疑 + 狂吠 | onPlayInterrupt ask(choice 点数，顺子/连对选项限合法起点窗口) + retagTable 改判定点（label 经 relabelCombo 重写主显） + canSelfFollow 引擎级狂吠 |
-| guo-tt.ts | 橐驼 | 地坛 + 诅咒 | onPlayInterrupt ask(confirm 判定，≥3 张、仅他人、每回合限一次：弃权不消耗/失败消耗/判定牌是王算失败) + revealTop/discardRevealed + curseNextRound 下回合禁出（轮末取而代之）+ soloJoker 引擎级单王 |
+| guo-tt.ts | 橐驼 | 地坛 + 诅咒 | onPlayInterrupt ask(confirm 判定，≥3 张、仅他人、每回合限一次：弃权不消耗/失败消耗) + revealTop/discardRevealed + curseNextRound 下回合禁出（轮末取而代之）+ soloJoker 引擎级单王/对王；判定中的王按颜色双花色（打出的牌里与翻出的判定牌都算，见 cards.ts `jokerSuits`） |
 
 ## 新增角色的流程（每个角色照此执行）
 

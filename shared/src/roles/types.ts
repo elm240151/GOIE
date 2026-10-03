@@ -138,6 +138,8 @@ export interface EngineFacade {
   playSideCard(playerId: string, cardId: number): void;
   /** 当前是否倒序（海棠洄游切换后；角色压牌判定需据此镜像） */
   orderReversed(): boolean;
+  /** 刚打出的这一手在哪个牌序下判定（洄游先判后切：本手按切换前顺序判定，巨石触发等按此镜像） */
+  lastPlayOrderReversed(): boolean;
   /** 本轮内切换牌序角色（海棠）的实际出牌次数（隐匿：0 = 本回合尚未出牌） */
   flipCountThisRound(): number;
   /** 手牌指定牌 → 弃牌堆（隐匿重铸等） */

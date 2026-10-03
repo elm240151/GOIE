@@ -909,6 +909,24 @@ describe('技能询问（橐驼）', () => {
     const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
     expect(after.turnPlayerId).toBe(s.ids[0]);
   });
+
+  it('诅咒对王（2026-10-03）：桌面 jokerPair/对王 广播 → 对方对 2 压不了（报错）→ 全过轮末橐驼起牌', () => {
+    const s = mkGuoSetup([[52, 53], [146, 159], []], [18, 20, 10], 113, 0); // 橐驼对王起手；玩家2 持 ♣2♦2
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[0]!.id, [52, 53]); // 橐驼起对王
+    const snap = lastEmit<GameSnapshot>(s.sockets[1]!, SERVER_EVENTS.snapshot)!; // 对手视角
+    expect(snap.table?.type).toBe('jokerPair');
+    expect(snap.table?.label).toBe('对王');
+    expect(emittedEvents(s.sockets[1]!).some((e) => e.type === 'cards:played' && e.playerId === s.ids[0] && e.combo.type === 'jokerPair')).toBe(true);
+    // 玩家2 用对 2 压 → 只有炸弹能压对王 → 报错
+    s.manager.play(s.sockets[1]!.id, [146, 159]);
+    expect(lastEmit<string>(s.sockets[1]!, SERVER_EVENTS.error)).toContain('对王');
+    // 全过 → 轮末橐驼摸牌起牌
+    s.manager.pass(s.sockets[1]!.id);
+    s.manager.pass(s.sockets[2]!.id);
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.turnPlayerId).toBe(s.ids[0]);
+  });
 });
 
 describe('重连与掉线兜底', () => {

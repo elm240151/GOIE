@@ -33,6 +33,12 @@ export type CardColor = 'red' | 'black';
 export const cardColor = (c: Card): CardColor =>
   isJoker(c) ? (c.rank === JOKER_BIG ? 'red' : 'black') : c.suit === 1 || c.suit === 3 ? 'red' : 'black';
 
+/**
+ * 王的包含花色：小王双黑 ♠♣，大王双红 ♥♦。
+ * 判定中出现王（打出的牌里、或翻出的判定牌）一律按对应颜色的两种花色计算（2026-10-03 用户确认）。
+ */
+export const jokerSuits = (c: Card): number[] => (c.rank === JOKER_BIG ? [1, 3] : [0, 2]);
+
 export function rankLabel(r: CardRank): string {
   switch (r) {
     case 11:

@@ -530,9 +530,78 @@ describe('单王（橐驼诅咒）：singleJoker 牌型', () => {
     expect(canBeat(c, null, cfg)).toBe(true);
   });
 
-  it('双王仍是纯王非法（诅咒只解锁单王）', () => {
-    expect(parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg, false, true)).toBeNull();
-    expect(parseCombo([mk(JOKER_SMALL), mk(JOKER_SMALL)], cfg, false, true)).toBeNull();
+  it('不开启时双王仍是纯王非法（正倒序一致）', () => {
+    expect(parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg)).toBeNull();
+    expect(parseCombo([mk(JOKER_SMALL), mk(JOKER_SMALL)], cfg, true)).toBeNull();
+  });
+
+  it('开启后双王解析为 jokerPair：点数 16、标签 对王、可起牌（对王，2026-10-03 用户确认）', () => {
+    const c = parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg, false, true)!;
+    expectCombo(c, 'jokerPair', 16, 2);
+    expect(c.label).toBe('对王');
+    expect(canBeat(c, null, cfg)).toBe(true);
+    const cR = parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg, true, true)!;
+    expectCombo(cR, 'jokerPair', 16, 2);
+  });
+
+  it('三王非法（对王只限两张王）', () => {
+    expect(parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG), mk(JOKER_SMALL)], cfg, false, true)).toBeNull();
+  });
+
+  it('对王压一切对子：正序含对 2、倒序含对 3（镜像单王）', () => {
+    const jp = () => parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg, false, true)!;
+    expect(canBeat(jp(), parse([15, 15])!, cfg)).toBe(true); // 正序压对 2
+    expect(canBeat(jp(), parse([3, 3])!, cfg)).toBe(true);
+    expect(canBeat(jp(), parse([9, 9])!, cfg)).toBe(true);
+    const jpR = () => parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg, true, true)!;
+    expect(canBeat(jpR(), parseR([3, 3])!, cfg, true)).toBe(true); // 倒序压对 3
+    expect(canBeat(jpR(), parseR([15, 15])!, cfg, true)).toBe(true);
+  });
+
+  it('只有炸弹能压对王，对王压不了对王', () => {
+    const jp = () => parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg, false, true)!;
+    expect(canBeat(parse([3, 3, 3])!, jp(), cfg)).toBe(true);
+    expect(canBeat(parse([15, 15])!, jp(), cfg)).toBe(false); // 对 2 也压不了对王
+    expect(canBeat(jp(), jp(), cfg)).toBe(false);
+  });
+
+  it('对王跨牌型压不了（单张/顺子/炸弹/单王都不吃对王）', () => {
+    const jp = () => parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg, false, true)!;
+    expect(canBeat(jp(), parse([5])!, cfg)).toBe(false);
+    expect(canBeat(jp(), parse([4, 5, 6])!, cfg)).toBe(false);
+    expect(canBeat(jp(), parse([3, 3, 3])!, cfg)).toBe(false);
+    expect(canBeat(jp(), pj(), cfg)).toBe(false);
+    expect(canBeat(pj(), jp(), cfg)).toBe(false);
+  });
+
+  it('枚举：双王手牌含对王候选；跟对子也有对王；跟对王只有炸弹候选', () => {
+    const jp = () => parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg, false, true)!;
+    // 双王起牌：每张王可单独出 + 对王
+    expect(listPlayable([W(), W()], null, cfg, false, true).map(comboKey)).toEqual([
+      'singleJoker:16:1',
+      'singleJoker:16:1',
+      'jokerPair:16:2',
+    ]);
+    const hand = [W(), W(), mk(5)];
+    // 跟对子：对王压一切对子
+    expect(listPlayable(hand, parse([5, 5])!, cfg, false, true).map(comboKey)).toEqual(['jokerPair:16:2']);
+    // 跟对王：只有炸弹能压
+    expect(listPlayable(hand, jp(), cfg, false, true).map(comboKey)).toEqual(['bomb:5:3']);
+    // 单张桌面不吃对王（跨牌型）
+    expect(listPlayable(hand, parse([5])!, cfg, false, true).map(comboKey)).not.toContain('jokerPair:16:2');
+  });
+
+  it('留2/留3 禁止收尾不过滤对王（对王不是对 2/对 3，可收尾）', () => {
+    expect(listPlayable([W(), W()], null, cfg, false, true).map(comboKey)).toContain('jokerPair:16:2');
+    expect(listPlayable([W(), W()], null, cfg, true, true).map(comboKey)).toContain('jokerPair:16:2');
+  });
+
+  it('relabelCombo 不改对王（答疑无点数可改，防御不变）', () => {
+    const jp = parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg, false, true)!;
+    const r = relabelCombo(jp, 9 as Rank, false);
+    expect(r.type).toBe('jokerPair');
+    expect(r.rank).toBe(16);
+    expect(r.label).toBe('对王');
   });
 
   it('王压一切单张：正序含 2、倒序含 3（无穷大/无穷小镜像同规则）', () => {

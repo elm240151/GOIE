@@ -154,8 +154,8 @@ describe('橐驼：地坛（红楼梦）+ 诅咒（单王）', () => {
     expect(snap.cursedPlayerIds).toEqual([]); // 失败不诅咒
   });
 
-  it('判定牌是王 → 失败且消耗（同轮不再询问）；自己出 ≥3 张不触发', () => {
-    // 手牌只用低 id → 牌堆顶 = 大王（161）
+  it('判定牌是王 → 按颜色双花色判定（♣ 顺子对大王 ♥♦ 不匹配 → 失败且消耗）；自己出 ≥3 张不触发', () => {
+    // 手牌只用低 id → 牌堆顶 = 大王（161）。大王按颜色 = ♥♦，p1 打全 ♣ 顺子 → 不匹配 → 失败
     const hands = {
       p0: byId(0, 18), // 橐驼：♠3..♠2 + ♥3..♥8（19 张，轮末摸 1 后 20 不超上限）
       p1: byId(19, 38), // ♥9..♥2 + ♣3..♣2（20 张）
@@ -164,8 +164,8 @@ describe('橐驼：地坛（红楼梦）+ 诅咒（单王）', () => {
     expect(deckTopOf(hands).id).toBe(161); // 大王
     const engine = mkEngine(hands, { p0: guoTT }, 'p1');
 
-    // p1 起牌 10JQ → 判定翻到大王 → 失败
-    let r = engine.playCards('p1', [20, 21, 22]);
+    // p1 起牌 ♣10JQ → 判定翻到大王（♥♦，与全 ♣ 不匹配）→ 失败
+    let r = engine.playCards('p1', [33, 34, 35]);
     expect(r.ok && r.suspended).toBe(true);
     const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
     const a = engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'yes' });
@@ -266,5 +266,83 @@ describe('橐驼：地坛（红楼梦）+ 诅咒（单王）', () => {
     // 非橐驼：单王非法
     const engine2 = mkEngine({ p0: [deck[52]!, byId(0, 0)[0]!], p1: byId(13, 13) }, {}, 'p0');
     expect(engine2.playCards('p0', [deck[52]!.id]).ok).toBe(false);
+  });
+
+  it('打出的顺子含小王（百搭）→ 王按颜色双花色参与判定：翻 ♣2 判中', () => {
+    // 手牌覆盖 147..161 → 牌堆顶 = ♣2（146）；p1 出 ♥4♥5+小王（=456 顺子）
+    // 小王按颜色算 ♠♣：翻 ♣2 → ♣ 在 {♥,♠,♣} 中 → 判中
+    const hands = {
+      p0: [deck[0]!, deck[1]!, deck[2]!, ...byId(16, 29)], // 橐驼：♠345 + ♥6..♥2 + ♣3..♣6（17 张）
+      p1: [deck[14]!, deck[15]!, deck[52]!, deck[6]!], // ♥4、♥5、小王、♠9
+      p2: byId(147, 161), // ♦3..♦2 + 小王 + 大王（15 张）
+    };
+    expect(deckTopOf(hands).id).toBe(146); // ♣2
+    const engine = mkEngine(hands, { p0: guoTT }, 'p0');
+    expect(engine.playCards('p0', [0, 1, 2]).ok).toBe(true); // 自己出 ♠345 不触发
+    const r = engine.playCards('p1', [14, 15, 52]); // 456 顺子（含小王百搭）→ 地坛询问
+    expect(r.ok && r.suspended).toBe(true);
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    const a = engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'yes' }); // 翻 ♣2
+    expect(a.ok).toBe(true);
+    expect(a.ok && a.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'di-tan' && /成功/.test(e.text))).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.cursedPlayerIds).toContain('p1');
+    expect(snap.revealed).toHaveLength(0); // 判定牌已弃置
+  });
+
+  it('翻出的判定牌是小王 → 按颜色双花色判中（打 ♠ 顺子，小王 = ♠♣）', () => {
+    // 手牌只留大王（161）在 p2 → 牌堆顶 = 小王（160，♠♣）
+    const hands = {
+      p0: [deck[13]!, deck[14]!, deck[15]!, ...byId(16, 32)], // 橐驼：♥345 + ♥6..♥2 + ♣3..♣9（20 张）
+      p1: [deck[1]!, deck[2]!, deck[3]!], // ♠456
+      p2: [deck[161]!], // 大王（顶到 160 小王）
+    };
+    expect(deckTopOf(hands).id).toBe(160); // 小王
+    const engine = mkEngine(hands, { p0: guoTT }, 'p0');
+    expect(engine.playCards('p0', [13, 14, 15]).ok).toBe(true); // 自己出 ♥345 不触发
+    const r = engine.playCards('p1', [1, 2, 3]); // ♠456 → 地坛询问
+    expect(r.ok && r.suspended).toBe(true);
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    const a = engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'yes' }); // 翻小王：♠♣ 含 ♠ → 判中
+    expect(a.ok).toBe(true);
+    expect(a.ok && a.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'di-tan' && /成功/.test(e.text))).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.cursedPlayerIds).toContain('p1');
+    expect(snap.revealed).toHaveLength(0);
+  });
+
+  it('诅咒对王（2026-10-03 用户确认）：一对王可收尾获胜', () => {
+    const hands = {
+      p0: [deck[52]!, deck[53]!], // 橐驼：只剩一对王
+      p1: [deck[12]!, deck[25]!], // 对 2
+    };
+    const engine = mkEngine(hands, { p0: guoTT }, 'p0');
+    const r = engine.playCards('p0', [deck[52]!.id, deck[53]!.id]);
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.events.some((e) => e.type === 'cards:played' && e.combo.type === 'jokerPair')).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p0');
+  });
+
+  it('诅咒对王：对方只能用炸弹压', () => {
+    const hands = {
+      p0: [deck[52]!, deck[53]!, deck[0]!], // 橐驼：对王 + ♠3
+      p1: [deck[13]!, deck[26]!, deck[39]!], // 三张 3（炸弹）
+      p2: byRank(11, 5), // 五张 J
+    };
+    const engine = mkEngine(hands, { p0: guoTT }, 'p0');
+    const r = engine.playCards('p0', [deck[52]!.id, deck[53]!.id]); // 起对王
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.events.some((e) => e.type === 'cards:played' && e.combo.type === 'jokerPair')).toBe(true);
+    expect(engine.snapshotFor('p0').table?.type).toBe('jokerPair');
+    // p1 炸弹压对王 → 触发地坛询问（他人 ≥3 张）→ 弃权
+    const b = engine.playCards('p1', [13, 26, 39]);
+    expect(b.ok && b.suspended).toBe(true);
+    const ask = b.ok ? (b.pendingAsk as SkillAsk) : null;
+    expect(engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'decline' }).ok).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.table?.type).toBe('bomb'); // 对王被炸弹压下
+    expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(1); // 剩 ♠3
   });
 });
