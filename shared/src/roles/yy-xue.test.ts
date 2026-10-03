@@ -93,18 +93,18 @@ describe('第五席 雪灾天使（巨石）', () => {
     expect(snap.revealed).toHaveLength(0); // 判定牌已收走，不留在展示区
   });
 
-  it('普通出牌不触发；判定次数用尽（玩家人数+1）后不再询问', () => {
-    // 2 人局：上限 = 2+1 = 3 次。p0 依次出 2 触发 3 次判定（牌堆顶是王必失败），第 4 张不再询问
+  it('普通出牌不触发；判定次数用尽（玩家人数+2）后不再询问', () => {
+    // 2 人局：上限 = 2+2 = 4 次。p0 依次出 2 触发 4 次判定（牌堆尾依次大王/小王/2♦/2♣，选 ♠ 全失败），第 5 张不再询问
     const hands = {
-      p0: [...byRank(15, 4), ...byRank(9, 2)], // 4 张 2 + 2 张 9
+      p0: [...byRank(15, 5), ...byRank(9, 1)], // 5 张 2 + 1 张 9
       p1: byRank(13, 5), // 巨石
     };
     const engine = mkEngine(hands, { p1: yyXue });
     // 普通出牌不触发
-    expect(engine.playCards('p0', [hands.p0[4]!.id]).ok).toBe(true); // 出单9，无询问
+    expect(engine.playCards('p0', [hands.p0[5]!.id]).ok).toBe(true); // 出单9，无询问
     expect(engine.pass('p1').ok).toBe(true);
-    // 3 次判定（全部失败：牌堆顶依次为王/♦2/♦A）
-    for (let i = 0; i < 3; i++) {
+    // 4 次判定（全部失败）
+    for (let i = 0; i < 4; i++) {
       const r = engine.playCards('p0', [hands.p0[i]!.id]); // 出单2
       expect(r.ok && r.suspended).toBe(true);
       const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
@@ -112,9 +112,9 @@ describe('第五席 雪灾天使（巨石）', () => {
       expect(a.ok).toBe(true);
       expect(engine.pass('p1').ok).toBe(true); // 让 p1 过，回到 p0 起牌
     }
-    // 第 4 张 2：次数用尽，不再询问（直接正常流程）
-    const r4 = engine.playCards('p0', [hands.p0[3]!.id]);
-    expect(r4.ok).toBe(true);
-    expect(r4.ok && r4.suspended).toBe(false);
+    // 第 5 张 2：次数用尽，不再询问（直接正常流程）
+    const r5 = engine.playCards('p0', [hands.p0[4]!.id]);
+    expect(r5.ok).toBe(true);
+    expect(r5.ok && r5.suspended).toBe(false);
   });
 });
