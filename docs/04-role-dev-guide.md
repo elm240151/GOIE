@@ -1,6 +1,6 @@
 # 角色开发规范（★ 未来工作核心文件）
 
-**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。12 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
+**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。13 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
 
 ## RoleDef 接口（shared/src/roles/types.ts）
 
@@ -30,7 +30,7 @@ interface RoleDef {
 | `onTurnStart(ctx)` | 轮到出牌（含开局整备：首回合无摸牌但仍有整备阶段，先手开局即触发） | 任意 modify；可返回 ask 挂起（阿色开局抽你） |
 | `beforePlay(ctx, proposed)` | **引擎基础规则校验之后** | `allowAnyway` 放行 / `ok:false` 否决（技能优先） |
 | `afterPlay(ctx, played)` | 出牌后 | 任意 modify |
-| `onPlayInterrupt(ctx, played)` | 出牌提交后、**获胜判定前**（驱逐类优先于获胜，如巨石） | 可返回 ask 挂起 |
+| `onPlayInterrupt(ctx, played)` | 出牌提交后、**获胜判定前**（驱逐类优先于获胜，如巨石；**亡语**——有人打完手牌仍可在此拦截阻止立即获胜，如楠王旺旺：判定成功给压牌者摸牌 → 手牌非空 → 获胜自然取消） | 可返回 ask 挂起 |
 | `onPass(ctx)` | 过牌 | 任意 modify |
 | `onDraw(ctx, n)` | 摸牌（n=本次摸牌数） | `drawBonus` |
 | `onRoundEnd(ctx, lastPlayerId)` | 一轮结束（lastPlayerId=最后出牌者，牌权所在） | 可返回 ask 挂起（黑脸/观股）；`suppressDraw` 替代摸牌 |
@@ -112,7 +112,7 @@ interface ActionMods {
 
 角色**永远不能**直接碰引擎结构，只能通过：
 
-- 只读：`cfg` `players()` `handOf(id)` `deckCount()` `table()` `turnPlayerId()` `roundLeaderId()` `phase()` `passCount()` `roundLastPlayerId()` `nextSeatOf(id, skip?)` `eliminated(id)` `activeCount()` `lastPlayWasCutIn()` `orderReversed()`（当前是否倒序）`lastPlayOrderReversed()`（**刚打出的这一手在切换前处于什么牌序**——洄游先判后切，巨石等按"打出这一手时"的牌序镜像触发用，2026-10-03）`flipCountThisRound()`（本轮内切换牌序角色的实际出牌次数，含插队；隐匿以此判断"一次也没出过"）
+- 只读：`cfg` `players()` `handOf(id)` `deckCount()` `table()` `prevTable()`（**上一手被打掉的牌**——本手出牌前桌面上的 combo，起牌为 null）`prevTableOwnerId()`（上一手牌的归属者，起牌为 null；楠王回味压牌判定用）`turnPlayerId()` `roundLeaderId()` `phase()` `passCount()` `roundLastPlayerId()` `nextSeatOf(id, skip?)` `eliminated(id)` `activeCount()` `lastPlayWasCutIn()` `orderReversed()`（当前是否倒序）`lastPlayOrderReversed()`（**刚打出的这一手在切换前处于什么牌序**——洄游先判后切，巨石等按"打出这一手时"的牌序镜像触发用，2026-10-03）`flipCountThisRound()`（本轮内切换牌序角色的实际出牌次数，含插队；隐匿以此判断"一次也没出过"）
 - 受控操作：
   - `draw(playerId, n)`（原始摸牌，不吃钩子不吃 drawBonus）
   - `giveFrom(playerId, cardIds)`（移除指定牌）+ `giveTo(playerId, cards)`（塞牌，**必须配合 giveFrom**，角色作者自己保证来源合法）
@@ -183,6 +183,7 @@ export default zecheng;
 | fishy.ts | 海棠 | 洄游 + 隐匿 | flipsOrderOnPlay 引擎级牌序切换（含插队）+ onRoundEnd ask(priority 1000 先于整备类) + discardFromHand 重铸 |
 | doggie.ts | 修勾 | 答疑 + 狂吠 | onPlayInterrupt ask(choice 点数，顺子/连对选项限合法起点窗口) + retagTable 改判定点（label 经 relabelCombo 重写主显） + canSelfFollow 引擎级狂吠 |
 | guo-tt.ts | 橐驼 | 地坛 + 诅咒 | onPlayInterrupt ask(confirm 判定，≥3 张、仅他人、每回合限一次：弃权不消耗/失败消耗) + revealTop/discardRevealed + curseNextRound 下回合禁出（轮末取而代之）+ soloJoker 引擎级单王/对王；判定中的王按颜色双花色（打出的牌里与翻出的判定牌都算，见 cards.ts `jokerSuits`） |
+| king-nan.ts | 楠王 | 旺旺 + 回味 | onPlayInterrupt ask(confirm 亡语判定：翻牌非红桃 → 压牌者摸 3，打光手牌也无法获胜——打断钩子跑在获胜判定前即亡语；`prevTableOwnerId()` === 自己时触发；每回合限一次：弃权不消耗/发动即消耗；判定牌一律弃置；王按 `jokerSuits` 双花色；priority 100 先于巨石——2026-10-03 用户确认) + afterPlay 锁定回味（`prevTableOwnerId()` 被压者摸牌：点数总和差绝对值封顶 3，`pointValue` 2 记 2/A 记 1、单王/对王视为无穷）+ onRoundEnd 重置 |
 
 ## 新增角色的流程（每个角色照此执行）
 

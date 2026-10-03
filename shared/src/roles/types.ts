@@ -95,6 +95,10 @@ export interface EngineFacade {
   handOf(id: string): readonly Card[];
   deckCount(): number;
   table(): Combo | null;
+  /** 本手出牌前的桌面牌型（上一手被压的牌；起牌时 = null）。楠王【回味】计算点数差用 */
+  prevTable(): Combo | null;
+  /** 本手出牌前的桌面牌型所有者（上一手被压的人；起牌时 = null）。楠王【旺旺】判断压牌者用 */
+  prevTableOwnerId(): string | null;
   turnPlayerId(): string;
   roundLeaderId(): string;
   phase(): 'dealing' | 'playing' | 'finished';

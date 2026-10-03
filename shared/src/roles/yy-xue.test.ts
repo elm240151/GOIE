@@ -12,6 +12,25 @@ import yyXue from './yy-xue';
 const deck = buildDeck(3);
 const byRank = (r: number, n: number) => deck.filter((c) => c.rank === r).slice(0, n);
 
+/** 用 range 内未被使用的牌把各手牌补到 targets 张（把牌堆顶推到指定牌：顶 = range 之下最大的未用牌） */
+function pad(hands: Record<string, Card[]>, targets: Record<string, number>, range: [number, number]): void {
+  const used = new Set<number>();
+  for (const h of Object.values(hands)) for (const c of h) used.add(c.id);
+  const order = Object.keys(targets);
+  let i = 0;
+  for (let id = range[0]; id <= range[1]; id++) {
+    if (used.has(id)) continue;
+    // 找下一个还有空位的手牌（跳过已满的）
+    for (let k = 0; k < order.length; k++) {
+      const pid = order[(i + k) % order.length]!;
+      if (hands[pid]!.length >= targets[pid]!) continue;
+      hands[pid]!.push(deck[id]!);
+      i = (i + k + 1) % order.length;
+      break;
+    }
+  }
+}
+
 function mkEngine(hands: Record<string, Card[]>, roles: Record<string, RoleDef>, startPlayerId = 'p0') {
   const players: EnginePlayer[] = Object.keys(hands).map((id, i) => ({
     id,
@@ -267,5 +286,38 @@ describe('第五席 雪灾天使（巨石）', () => {
     const r5 = engine.playCards('p0', [hands.p0[4]!.id]);
     expect(r5.ok).toBe(true);
     expect(r5.ok && r5.suspended).toBe(false);
+  });
+
+  it('亡语（2026-10-03）：打光手牌的人仍可被巨石判定——命中驱逐阻止获胜；放弃则照常获胜', () => {
+    const mk = () => ({
+      p0: byRank(5, 3), // 炸弹 3×5：打光手牌（炸弹触发巨石）
+      p1: [...byRank(13, 4), deck[161]!], // 巨石：四张 K + 大王（把牌堆顶压到 160 小王）
+      p2: byRank(12, 4),
+    });
+    // A：判定命中（160 小王按 ♠♣ 双花色）→ 驱逐，无人获胜
+    const handsA = mk();
+    pad(handsA, { p0: 3, p1: 8, p2: 8 }, [110, 158]); // 牌堆顶 = 160 小王
+    const engineA = mkEngine(handsA, { p1: yyXue });
+    const r = engineA.playCards('p0', [handsA.p0[0]!.id, handsA.p0[1]!.id, handsA.p0[2]!.id]);
+    expect(r.ok && r.suspended).toBe(true); // 亡语：获胜判定之前仍询问
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect(ask?.kind).toBe('suit');
+    const a = engineA.resolveAsk('p1', { askId: ask!.askId!, choice: '♠' });
+    expect(a.ok && a.events.some((e) => e.type === 'player:eliminated' && e.playerId === 'p0')).toBe(true);
+    const snap = engineA.snapshotFor('p1');
+    expect(snap.phase).toBe('playing'); // 无人获胜
+    expect(snap.winnerId).toBeNull();
+    expect(snap.players.find((p) => p.id === 'p0')!.eliminated).toBe(true);
+    expect(snap.turnPlayerId).toBe('p1'); // 巨石夺权
+    // B：放弃 → 打光手牌者照常获胜
+    const handsB = mk();
+    pad(handsB, { p0: 3, p1: 8, p2: 8 }, [110, 158]);
+    const engineB = mkEngine(handsB, { p1: yyXue });
+    const rb = engineB.playCards('p0', [handsB.p0[0]!.id, handsB.p0[1]!.id, handsB.p0[2]!.id]);
+    const askB = rb.ok ? (rb.pendingAsk as SkillAsk) : null;
+    engineB.resolveAsk('p1', { askId: askB!.askId!, choice: 'decline' });
+    const snapB = engineB.snapshotFor('p1');
+    expect(snapB.phase).toBe('finished');
+    expect(snapB.winnerId).toBe('p0'); // 放弃则照常获胜
   });
 });

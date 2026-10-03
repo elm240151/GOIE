@@ -799,7 +799,8 @@ function mkGuoSetup(
   hands: number[][],
   fills: number[],
   fillFrom: number,
-  startIdx = 0
+  startIdx = 0,
+  hostRole = 'guo-tt'
 ): { manager: RoomManager; sockets: FakeSocket[]; ids: string[]; secrets: Record<string, string>; code: string } {
   const registry: RoleRegistry = new Map(listRoles().map((r) => [r.id, r]));
   const deck = buildDeck(3);
@@ -837,7 +838,7 @@ function mkGuoSetup(
     ids.push(r.playerId);
     secrets[r.playerId] = r.secret;
   }
-  mgr.selectRole(sockets[0]!.id, 'guo-tt');
+  mgr.selectRole(sockets[0]!.id, hostRole);
   for (let i = 1; i < sockets.length; i++) mgr.selectRole(sockets[i]!.id, i % 2 === 1 ? 'flashpoint' : 'cs-champion');
   for (const s of sockets) mgr.setReady(s.id, true);
   return { manager: mgr, sockets, ids, secrets, code };
@@ -926,6 +927,37 @@ describe('技能询问（橐驼）', () => {
     s.manager.pass(s.sockets[2]!.id);
     const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
     expect(after.turnPlayerId).toBe(s.ids[0]);
+  });
+});
+
+describe('技能询问（楠王）', () => {
+  it('旺旺亡语阻止获胜（打光手牌者判定摸 3 张）+ 回味压牌自动加牌广播', () => {
+    // 3 人局：楠王 [♠9,♠J,大王]；玩家2 [♠10] 打光；牌堆顶 = 160 小王（非红桃）
+    const s = mkGuoSetup([[6, 8, 161], [7], []], [5, 1, 5], 118, 0, 'king-nan');
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[0]!.id, [6]); // 楠王起单 ♠9
+    s.manager.play(s.sockets[1]!.id, [7]); // 玩家2 ♠10 压（打光手牌）
+    const mid = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid.pendingAsk?.playerId).toBe(s.ids[0]); // 亡语：询问直达楠王，而非判玩家2获胜
+    const ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.kind).toBe('confirm');
+    expect(ask.prompt).toContain('旺旺');
+    expect(ask.prompt).toContain('玩家2');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'yes' });
+    expect(emittedEvents(s.sockets[1]!).some((e) => e.type === 'cards:revealed')).toBe(true); // 判定牌公开
+    expect(emittedEvents(s.sockets[1]!).some((e) => e.type === 'skill:triggered' && e.skillId === 'wang-wang' && /成功/.test(e.text))).toBe(true);
+    let snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.phase).toBe('playing'); // 无人获胜
+    expect(snap.winnerId).toBeNull();
+    expect(snap.players.find((p) => p.id === s.ids[1])!.handCount).toBe(3); // 成功班 +3
+    expect(snap.revealed).toHaveLength(0); // 判定牌弃置
+    // 玩家3 过 → 楠王 ♠J 压 ♠10 → 回味自动 +1（|J−10| = 1），不询问
+    s.manager.pass(s.sockets[2]!.id);
+    s.manager.play(s.sockets[0]!.id, [8]);
+    expect(emittedEvents(s.sockets[1]!).some((e) => e.type === 'skill:triggered' && e.skillId === 'hui-wei' && /摸 1 张/.test(e.text))).toBe(true);
+    snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.players.find((p) => p.id === s.ids[1])!.handCount).toBe(4); // 3 + 1
+    expect(snap.pendingAsk).toBeNull(); // 回味锁定技不询问
   });
 });
 

@@ -39,6 +39,13 @@ export const cardColor = (c: Card): CardColor =>
  */
 export const jokerSuits = (c: Card): number[] => (c.rank === JOKER_BIG ? [1, 3] : [0, 2]);
 
+/**
+ * 点数计算（楠王回味等技能用）：2 记作 2、A 记作 1、其余按牌面点数（J=11 Q=12 K=13）。
+ * 注意与牌序 rank 不同：这里 2 不是最大。王不在点数体系内——当百搭按所当点数、单出由技能按无穷处理。
+ * （2026-10-03 用户确认）
+ */
+export const pointValue = (rank: number): number => (rank === RANK_2 ? 2 : rank === RANK_A ? 1 : rank);
+
 export function rankLabel(r: CardRank): string {
   switch (r) {
     case 11:

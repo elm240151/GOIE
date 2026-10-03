@@ -94,6 +94,8 @@ export class GameEngine {
   private prevTableOwnerId: string | null = null;
   /** 上一手被压的牌的花色集合（无名加牌：响应牌与被压牌同花色即触发，X = 同花色响应牌点数总和） */
   private prevTableSuits: Set<number> = new Set();
+  /** 上一手被压的牌型（楠王回味：与当前手牌型计算点数总和差；起牌时 null） */
+  private prevTableCombo: Combo | null = null;
   private turnPlayerId: string | null = null;
   private roundLeaderId = '';
   private passCount = 0;
@@ -456,6 +458,7 @@ export class GameEngine {
       this.tableResponderRestrict = null;
       this.prevTableOwnerId = null;
       this.prevTableSuits = new Set();
+      this.prevTableCombo = null;
       this.passCount = 0;
       this.roundLastPlayerId = null;
       this.roundLeaderId = leaderId;
@@ -613,10 +616,12 @@ export class GameEngine {
     const prevSuits: Set<number> = this.tableCombo
       ? new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit))
       : new Set();
+    const prevCombo = this.tableCombo;
     this.tableCombo = combo;
     if (flips) this.resyncTableOrder(); // 洄游：切换后桌面按新牌序重新解析（rank 约定反转）
     this.prevTableOwnerId = this.tableOwnerId === '' ? null : this.tableOwnerId;
     this.prevTableSuits = this.prevTableOwnerId == null ? new Set<number>() : prevSuits;
+    this.prevTableCombo = this.prevTableOwnerId == null ? null : prevCombo;
     this.tableOwnerId = playerId;
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
@@ -819,10 +824,12 @@ export class GameEngine {
     const prevSuits: Set<number> = this.tableCombo
       ? new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit))
       : new Set();
+    const prevCombo = this.tableCombo;
     this.tableCombo = combo;
     if (flips) this.resyncTableOrder();
     this.prevTableOwnerId = this.tableOwnerId === '' ? null : this.tableOwnerId;
     this.prevTableSuits = this.prevTableOwnerId == null ? new Set<number>() : prevSuits;
+    this.prevTableCombo = this.prevTableOwnerId == null ? null : prevCombo;
     this.tableOwnerId = playerId;
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
@@ -882,11 +889,13 @@ export class GameEngine {
       ? new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit))
       : new Set();
     if (this.tableCombo) this.discarded.push(...this.tableCombo.cards);
+    const prevCombo = this.tableCombo;
     this.tableCombo = combo;
     this.tableRankNote = null;
     if (flips) this.resyncTableOrder(); // 洄游：切换后桌面按新牌序重新解析（rank 约定反转）
     this.prevTableOwnerId = this.tableOwnerId === '' ? null : this.tableOwnerId;
     this.prevTableSuits = this.prevTableOwnerId == null ? new Set<number>() : prevSuits;
+    this.prevTableCombo = this.prevTableOwnerId == null ? null : prevCombo;
     this.tableOwnerId = playerId;
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
@@ -1213,6 +1222,8 @@ export class GameEngine {
       handOf: (id) => engine.hands.get(id) ?? [],
       deckCount: () => engine.deck.length,
       table: () => engine.tableCombo,
+      prevTable: () => engine.prevTableCombo,
+      prevTableOwnerId: () => engine.prevTableOwnerId,
       turnPlayerId: () => engine.turnPlayerId ?? '',
       roundLeaderId: () => engine.roundLeaderId,
       phase: () => engine.phase,
