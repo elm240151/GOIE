@@ -369,7 +369,7 @@ export const useStore = create<AppStore>((set, get) => ({
     const res = await emitAck(CLIENT_EVENTS.gameUseSkill, answer);
     // 注意：不要在这里清 skillAsk——服务端先发新快照/下一步询问事件、后回 ack，
     // ack 到达时清空会误关多阶段询问的下一步弹窗（企鹅骚骚曾因此"发动不了"）。
-    // 弹窗只在快照 pendingAsk 为空时关闭（applySnapshot）。
+    // 弹窗在快照 pendingAsk 为空或不再定向我时关闭（applySnapshot）。
     if (!res.ok) get().toast('error', (res as { error: string }).error);
   },
 
@@ -467,12 +467,14 @@ export const useStore = create<AppStore>((set, get) => ({
       }
     }
 
-    // 询问已了结（快照里不再挂起）→ 关闭弹窗
+    // 询问已了结，或挂起的询问不再定向我（如隐匿答完→阿色抽你、观股依次自选轮到别人）
+    // → 关闭我的弹窗；仍定向我时保留——服务端先发快照、后发定向 game:skill-ask，
+    // 多阶段询问的下一步弹窗靠随后的事件更新（过早清空会闪关闪开）
     set({
       snap,
       tableSideCards: snap.tableSide,
       selectedCardIds: selectedCardIds.filter((id) => myHandIds.has(id)),
-      skillAsk: snap.pendingAsk ? get().skillAsk : null,
+      skillAsk: snap.pendingAsk?.playerId === myId ? get().skillAsk : null,
       revealed: revealedNext,
       handOrder: order,
       handOrderFor: myId,
