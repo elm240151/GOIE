@@ -131,10 +131,16 @@ export default function SkillAskModal() {
       body = <PickGrid cards={myHand} picked={picked} onToggle={toggle} />;
       canSubmit = picked.length > 0;
       break;
+    case 'selfFollow':
+      // 狂吠：从自己手牌选组合压自己打出的牌
+      body = <PickGrid cards={myHand} picked={picked} onToggle={toggle} />;
+      canSubmit = picked.length > 0;
+      break;
   }
 
   // pickCards 也可弃权（再问补打「打不出」、观股大跌放弃等）
-  const showDecline = ask.kind === 'confirm' || ask.kind === 'cutIn' || ask.kind === 'pickCards';
+  const showDecline =
+    ask.kind === 'confirm' || ask.kind === 'cutIn' || ask.kind === 'selfFollow' || ask.kind === 'pickCards';
 
   return (
     <div className="modal-overlay">
@@ -145,6 +151,7 @@ export default function SkillAskModal() {
         </div>
         <p className="ask-prompt">{ask.prompt}</p>
         {ask.kind === 'cutIn' && <p className="ask-hint">{STR.game.cutInHint}</p>}
+        {ask.kind === 'selfFollow' && <p className="ask-hint">{STR.game.selfFollowHint}</p>}
         {ask.kind === 'pickCards' && (
           <p className="ask-hint">
             {(ask.hidden ? STR.game.pickHiddenHint : STR.game.pickHint)
@@ -166,6 +173,11 @@ export default function SkillAskModal() {
             </button>
           )}
           {ask.kind === 'cutIn' && (
+            <button className="btn btn-primary" disabled={!canSubmit} onClick={() => answer({ choice: 'yes', cardIds: picked })}>
+              {STR.game.confirm}
+            </button>
+          )}
+          {ask.kind === 'selfFollow' && (
             <button className="btn btn-primary" disabled={!canSubmit} onClick={() => answer({ choice: 'yes', cardIds: picked })}>
               {STR.game.confirm}
             </button>

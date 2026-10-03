@@ -552,6 +552,17 @@ body {
   font-size: 15px;
 }
 
+/* 答疑改点徽标（修勾：桌面按新点数判定） */
+.retag-badge {
+  background: rgba(233, 196, 106, 0.18);
+  color: var(--gold);
+  border: 1px solid rgba(233, 196, 106, 0.5);
+  border-radius: 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
 /* 倒序徽标（海棠洄游：牌序反转中） */
 .order-badge {
   position: absolute;

@@ -1,6 +1,6 @@
 // 游戏桌：对手座位 + 中央牌区 + 手牌扇形点选 + 实时牌型预览 + 终局弹窗。
 import { useEffect, useMemo, useState } from 'react';
-import { defaultRules, getRole, parseCombo, type Card as CardT } from '@gdys/shared';
+import { defaultRules, getRole, parseCombo, rankLabel, type Card as CardT, type CardRank } from '@gdys/shared';
 import { useStore } from '../store';
 import { STR, TURN_SECONDS } from '../strings';
 import { beatReason, finishHint, invalidReason } from '../beatHint';
@@ -179,6 +179,11 @@ export default function GameTable() {
             <div className="table-owner">{tableOwner ? `${tableOwner.name} 出了` : '上一手'}</div>
             <div className="table-row">
               <ComboBadge combo={snap.table} />
+              {snap.tableRankNote && (
+                <span className="retag-badge" title={STR.game.retagTitle}>
+                  {STR.game.retagNote.replace('{rank}', rankLabel(snap.tableRankNote.rank as CardRank))}
+                </span>
+              )}
               {tableSideCards.length > 0 && (
                 <div className="table-side">
                   {tableSideCards.map((c) => (

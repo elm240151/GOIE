@@ -2,6 +2,7 @@
 // 有人打出单 2 / 对 2 / 炸弹（或首席的 Q）时，你可以声明一个花色进行判定：
 // 翻一张牌，花色一致则驱逐该出牌者（淘汰），你获得牌权；失败则判定牌摸回（本回合不计手牌上限）。
 // 每场游戏至多判定（玩家人数 + 2）次。可选发动；判定优先于该出牌者获胜。
+// 触发按实体牌判定（答疑改点不影响触发）。
 import { isJoker, SUITS } from '../cards';
 import type { RoleDef } from './types';
 
@@ -25,11 +26,13 @@ const yyXue: RoleDef = {
       const owner = ctx.game.roundLastPlayerId()!;
       if (owner === ctx.self.id) return;
       const ownerRole = ctx.game.players().find((p) => p.id === owner)?.roleId;
+      // 按实体牌判定：答疑（修勾）改点只改判定点数，不改变"打出的是 2"这一事实——
+      // 对 2 即使被答疑改点，巨石仍可判定（避免触发与否取决于钩子执行顺序）
       const trigger =
-        (played.type === 'single' && played.rank === 15) ||
-        (played.type === 'pair' && played.rank === 15) ||
+        (played.type === 'single' && played.cards[0]!.rank === 15) ||
+        (played.type === 'pair' && played.cards.every((c) => isJoker(c) || c.rank === 15)) ||
         played.type === 'bomb' ||
-        (played.type === 'single' && played.rank === 12 && ownerRole === 'skywalker'); // 首席的 Q
+        (played.type === 'single' && played.cards[0]!.rank === 12 && ownerRole === 'skywalker'); // 首席的 Q
       if (!trigger) return;
       const state = ctx.state as YyXueState;
       if (state.used >= ctx.game.players().length + 2) return; // 判定次数用尽

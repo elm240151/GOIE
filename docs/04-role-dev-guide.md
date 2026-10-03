@@ -1,6 +1,6 @@
 # 角色开发规范（★ 未来工作核心文件）
 
-**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。10 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
+**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。11 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
 
 ## RoleDef 接口（shared/src/roles/types.ts）
 
@@ -16,6 +16,7 @@ interface RoleDef {
   setup?(ctx: RoleSetupContext): unknown; // 角色私有状态：JSON 安全，随快照同步
   skillActions?: SkillActionDef[]; // 客户端技能按钮：{ skillId, when:'myTurn'|'following', label }，通用渲染
   canCutIn?: boolean;         // 可插队响应（无名）——引擎提供插队机制，角色只挂标志
+  canSelfFollow?: boolean;    // 出牌后立刻压自己打出的牌，可连压到放弃/压不了（修勾狂吠）——引擎在出牌后询问（selfFollow ask），角色只挂标志；留 X 禁止收尾与插队同一套过滤
   flipsOrderOnPlay?: boolean; // 每次出牌（含插队，按物理出牌者计）切换一次牌序正↔倒（海棠洄游）；每轮开始恢复正序。挂上后引擎自动：本手按切换前顺序判定（先判后切）、切换后把桌面牌型按新牌序重新解析（倒序 rank = 最高点数，保证跨序比较用同一约定）、快照携带 orderReversed
 }
 ```
@@ -119,6 +120,7 @@ interface ActionMods {
   - `revealCards(cards, purpose)`（公开亮牌，如茄汤展示手牌，广播 cards:revealed 事件）
   - `playForcedCombo(combo)`（打出特殊组合，引擎按正常出牌流程提交，如茄汤黑牌炸弹）
   - `attributeTable(ownerId)`（**桌面一手牌归属改写**，阿色再问：这手牌视作 ownerId 打出——tableOwner/轮末牌权/当前回合全部改到 ownerId，随后轮转从 ownerId 的下家继续；**先于其他角色的判定钩子执行**（角色 priority 设高，如 900），这样「视作谁打出」的判定才会落到新归属者身上；**出完即胜不受归属影响**——谁打完谁赢，引擎按物理出牌者判定（压牌者空手时角色直接不再问））
+  - `retagTable(rank)`（**桌面一手牌判定点数改写**，修勾答疑：牌型不变，把判定点数改为 3~A（3-14），顺子/连对改的是起点（按当前牌序约定：正序 = 最低点、倒序 = 最高点）；快照带 `tableRankNote` 供界面展示新点数标注；实体牌不变——其他角色（巨石等）仍按实体牌判定；只影响当前桌面一手牌，被压/轮末/新轮起牌自动清除）
   - `setTableResponderRestrict(designatedId | null)`（**响应限制**，阿色抽你：当前桌面一手牌只有 designatedId 能响应——出牌/自动过候选/插队邀请/插队答案四处全部校验；被指定者淘汰/掉线时限制继续有效（无人能响应只能全过）；null 解除；桌面一手牌被压/轮末/新轮起牌自动清除，归属改写后需重新设置）
   - `playSideCard(playerId, cardId)`（**明置桌旁**，阿色再问补打：从手牌移除一张明置到桌旁，公开进快照 `tableSide`，随当前一手牌一起弃置；压牌者作答时用它，`handOf` 校验 + 自己校验合规性）
   - `discardFromHand(playerId, cardIds)`（**静默弃置手牌**，海棠隐匿重铸：从手牌移除进弃牌堆，不发事件——快照 discardCount 与 announce 播报覆盖 UI；角色自行保证合法）
@@ -163,7 +165,7 @@ const zecheng: RoleDef = {
 export default zecheng;
 ```
 
-## 已有 10 个角色（模板）
+## 已有 11 个角色（模板）
 
 | 文件 | 角色 | 技能 | 用到的机制 |
 |---|---|---|---|
@@ -177,6 +179,7 @@ export default zecheng;
 | zecheng.ts | 末席 肖亡 | 观股 | onRoundEnd ask + revealTop + giveRevealed + suppressDraw |
 | captain.ts | 阿色 | 抽你 + 再问 | beforePlay/afterPlay/onRoundEnd 多阶段 ask + 响应限制 + 归属改写 + 明置边牌 |
 | fishy.ts | 海棠 | 洄游 + 隐匿 | flipsOrderOnPlay 引擎级牌序切换（含插队）+ onRoundEnd ask(priority 1000 先于整备类) + discardFromHand 重铸 |
+| doggie.ts | 修勾 | 答疑 + 狂吠 | onPlayInterrupt ask(choice 点数) + retagTable 改判定点 + canSelfFollow 引擎级狂吠 |
 
 ## 新增角色的流程（每个角色照此执行）
 

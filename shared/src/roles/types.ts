@@ -32,7 +32,7 @@ export type HookResult =
 
 // ---------- 技能询问（可选技能的服务端↔客户端问答） ----------
 
-export type AskKind = 'confirm' | 'suit' | 'choice' | 'pickCards' | 'pickTarget' | 'cutIn';
+export type AskKind = 'confirm' | 'suit' | 'choice' | 'pickCards' | 'pickTarget' | 'cutIn' | 'selfFollow';
 
 export interface SkillAsk {
   /** 引擎自动生成（角色可不填） */
@@ -58,7 +58,7 @@ export interface SkillAsk {
 /** 客户端对询问的回答（game:useSkill 载荷） */
 export interface AskAnswer {
   askId: string;
-  /** confirm: 'yes'|'decline'；suit: 花色符号；choice: 选项文本；cutIn: 'yes'|'decline' */
+  /** confirm: 'yes'|'decline'；suit: 花色符号；choice: 选项文本；cutIn/selfFollow: 'yes'|'decline'（带 cardIds 为出牌） */
   choice?: string;
   cardIds?: number[];
   targetPlayerId?: string;
@@ -142,6 +142,8 @@ export interface EngineFacade {
   flipCountThisRound(): number;
   /** 手牌指定牌 → 弃牌堆（隐匿重铸等） */
   discardFromHand(playerId: string, cardIds: number[]): void;
+  /** 桌面一手牌的判定点数改为指定值（修勾答疑：牌型不变，顺子/连对 = 起点，按当前牌序约定） */
+  retagTable(rank: number): void;
 }
 
 export interface HookContext<S = unknown> {
@@ -226,6 +228,8 @@ export interface RoleDef {
   skillActions?: SkillActionDef[];
   /** 可插队响应（无名）——引擎提供插队机制，角色只挂标志 */
   canCutIn?: boolean;
+  /** 出牌后可立刻压自己打出的牌，可连压到放弃/压不了（修勾狂吠）——引擎提供机制，角色只挂标志 */
+  canSelfFollow?: boolean;
   /** 每次出牌（含插队，按物理出牌者）切换一次牌序正↔倒（海棠洄游）；每轮开始恢复正序 */
   flipsOrderOnPlay?: boolean;
 }

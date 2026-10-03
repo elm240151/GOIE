@@ -25,7 +25,7 @@
 | 事件 | payload |
 |---|---|
 | `room:updated` | `RoomState {code, phase:'lobby'|'playing'|'finished', hostId, players[], winnerId, scoreDeltas, totals, rematchVotes}` |
-| `game:snapshot` | `GameSnapshot`（按接收者过滤：只有自己的 `hand` 非 null；含 `pendingAsk: {askId, playerId, kind, prompt, timeoutMs} \| null`；`revealed` 翻牌展示区**所有人可见**——判定牌公开，动作内须清空；`orderReversed` 当前牌序是否倒序（海棠洄游），`table` 牌型的 rank 已按当前牌序约定解析——倒序时 rank = 最高点数） |
+| `game:snapshot` | `GameSnapshot`（按接收者过滤：只有自己的 `hand` 非 null；含 `pendingAsk: {askId, playerId, kind, prompt, timeoutMs} \| null`；`revealed` 翻牌展示区**所有人可见**——判定牌公开，动作内须清空；`orderReversed` 当前牌序是否倒序（海棠洄游），`table` 牌型的 rank 已按当前牌序约定解析——倒序时 rank = 最高点数；`tableRankNote: {rank} \| null` 桌面一手牌被答疑改点后的新判定点数（修勾，牌面实体不变，界面据此展示标注徽章）） |
 | `game:event` | `GameEvent`（判别联合 + 自增 seq，见下） |
 | `game:error` | 中文原因字符串 |
 | `game:skill-ask` | 完整 `SkillAsk`（**只发给被询问者**——被询问者可由 `askPlayerId` 指定，缺省 = 技能所有者；重连时重发未决询问；`hidden: true` 的 pickCards 为盲抽，经 currentAsk 下发时牌面已掩码只留 id） |
@@ -44,7 +44,7 @@
 → 超时/掉线 → 服务端自动 {askId, choice:'decline'} 了结
 ```
 
-客户端弹窗按 `kind` 渲染：confirm（是/否）、suit/choice（选项按钮，答案 = 所选选项文本）、pickCards（选牌 + 数量校验；`hidden` 时显示牌背盲抽）、pickTarget（目标按钮）、cutIn（自己的手牌选接牌组合）。
+客户端弹窗按 `kind` 渲染：confirm（是/否）、suit/choice（选项按钮，答案 = 所选选项文本）、pickCards（选牌 + 数量校验；`hidden` 时显示牌背盲抽）、pickTarget（目标按钮）、cutIn（自己的手牌选接牌组合）、selfFollow（修勾狂吠：自己的手牌选牌压自己打出的牌，提交 = `choice:'yes'`+cardIds，放弃 = decline）。
 
 ## 约定
 

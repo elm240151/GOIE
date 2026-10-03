@@ -5,7 +5,7 @@
 // - 技能优先：每个判定点 = 基础规则校验 → 角色钩子覆写（allowAnyway 放行 / ok:false 否决）
 // - 角色只能通过 EngineFacade + ActionMods 有界改牌，无法破坏引擎不变量
 // - 技能询问：钩子可返回 ask 挂起动作，服务端询问玩家后 resolveAsk 重跑提问钩子（钩子须纯：返回 ask 前不得改状态）
-import { RANK_2, RANK_3, isJoker, isRank, type Card } from '../cards';
+import { RANK_2, RANK_3, RANK_A, isJoker, isRank, type Card, type Rank } from '../cards';
 import { type RuleConfig } from '../config';
 import { canBeat, listPlayable, parseCombo, type Combo } from './combos';
 import { buildDeck, shuffle } from './deck';
@@ -117,6 +117,8 @@ export class GameEngine {
   private handLimitExemptPrev = new Map<string, number>();
   /** 桌面是否插队打出（无名） */
   private lastPlayWasCutIn = false;
+  /** 答疑改点（修勾）：当前桌面一手牌的判定点数被改写（牌型不变；换桌/新一轮时清除） */
+  private tableRankNote: { rank: number } | null = null;
   /** 插队后续处理模式与受害者 */
   private aftermathMode: 'normal' | 'cutIn' = 'normal';
   private cutInVictimId: string | null = null;
@@ -289,6 +291,10 @@ export class GameEngine {
     if (p.playerId !== playerId) return fail('不是你的技能询问');
     if (p.ask.askId !== answer.askId) return fail('询问已失效');
     this.pendingAsk = null;
+    // suspend() 会把 PendingAsk.kind 设为 'hook'/'cutIn'（内部调度标签），此处须看 ask.kind
+    if (p.ask.kind === 'selfFollow') {
+      return this.resolveSelfFollow(playerId, answer);
+    }
     if (p.kind === 'cutIn') {
       if (answer.choice !== 'yes' || !answer.cardIds?.length) {
         this.advanceTurn();
@@ -382,6 +388,7 @@ export class GameEngine {
       table: this.tableCombo,
       tableSide: [...this.tableSide],
       orderReversed: this.orderReversed(),
+      tableRankNote: this.tableRankNote,
       turnPlayerId: this.turnPlayerId,
       roundLeaderId: this.roundLeaderId,
       winnerId: this.winnerId,
@@ -429,6 +436,7 @@ export class GameEngine {
       if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
       this.tableCombo = null;
       this.tableSide = [];
+      this.tableRankNote = null;
       this.tableOwnerId = '';
       this.tableResponderRestrict = null;
       this.prevTableOwnerId = null;
@@ -585,6 +593,7 @@ export class GameEngine {
     if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
     this.tableSide = [];
     this.tableResponderRestrict = null;
+    this.tableRankNote = null;
     const prevSuits: Set<number> = this.tableCombo
       ? new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit))
       : new Set();
@@ -673,6 +682,7 @@ export class GameEngine {
         if (this.phase === 'playing') {
           if (this.tableCombo) this.discarded.push(...this.tableCombo.cards);
           this.tableCombo = null;
+          this.tableRankNote = null;
           this.aftermathMode = 'normal';
           this.cutInVictimId = null;
           this.startRound(p.id);
@@ -712,7 +722,89 @@ export class GameEngine {
         if (this.phase !== 'playing') return this.ok();
       }
     }
+    // 狂吠（修勾）：出牌者可以立刻压自己打出的牌，可连压到放弃/压不了（压完走完整流水线，狂吠可再次触发）
+    const selfId = this.roundLastPlayerId!;
+    if (
+      this.tableCombo &&
+      !this.eliminated.has(selfId) &&
+      this.roles.get(this.players.find((p) => p.id === selfId)!.roleId)?.canSelfFollow &&
+      listPlayable(this.hands.get(selfId)!, this.tableCombo, this.cfg, this.orderReversed()).length > 0
+    ) {
+      this.suspend(selfId, null, null, [], () => {}, {
+        kind: 'selfFollow',
+        prompt: '【狂吠】要压自己打出的牌吗？（按正常管牌规则，可连压；选牌提交，放弃则轮到下家）',
+      });
+      return this.suspendedOk();
+    }
     return this.offerCutIn();
+  }
+
+  // ---------- 狂吠（修勾）：压自己打出的牌 ----------
+
+  /** 狂吠答案：放弃 → 轮到下家；选牌 → 校验后压自己的牌（非法选牌重新询问，不消耗机会） */
+  private resolveSelfFollow(playerId: string, answer: AskAnswer): ActionResult {
+    if (answer.choice !== 'yes' || !answer.cardIds?.length) {
+      this.advanceTurn();
+      return this.ok();
+    }
+    const hand = this.hands.get(playerId)!;
+    const cards: Card[] = [];
+    for (const id of answer.cardIds) {
+      const c = hand.find((x) => x.id === id);
+      if (!c) return this.reaskSelfFollow(playerId, '手牌中没有这张牌');
+      cards.push(c);
+    }
+    const rev = this.orderReversed();
+    const combo = parseCombo(cards, this.cfg, rev);
+    if (!combo) return this.reaskSelfFollow(playerId, '这不是合法牌型');
+    if (!canBeat(combo, this.tableCombo, this.cfg, rev)) return this.reaskSelfFollow(playerId, '压不过自己的牌');
+    // 留 X 禁止收尾：狂吠同样不能以单 2/对 2（倒序单 3/对 3）打完手牌
+    if (
+      cards.length === hand.length &&
+      (combo.type === 'single' || combo.type === 'pair') &&
+      combo.rank === (rev ? RANK_3 : RANK_2)
+    ) {
+      return this.reaskSelfFollow(
+        playerId,
+        rev ? '不能以单 3/对 3 打完手牌（倒序禁止收尾）' : '不能以单 2/对 2 打完手牌'
+      );
+    }
+    this.requeue(this.commitSelfFollow(playerId, combo));
+    return this.ok();
+  }
+
+  /** 非法选牌：播报原因并重新询问（服务端经 afterAction 把新询问发给玩家） */
+  private reaskSelfFollow(playerId: string, reason: string): ActionResult {
+    this.emit({ type: 'game:error', playerId, reason });
+    this.suspend(playerId, null, null, [], () => {}, {
+      kind: 'selfFollow',
+      prompt: '【狂吠】要压自己打出的牌吗？（按正常管牌规则，可连压；选牌提交，放弃则轮到下家）',
+    });
+    return this.ok();
+  }
+
+  /** 狂吠提交：压自己的牌（无插队后续），走完整流水线——获胜判定/打断钩子/狂吠连压照常 */
+  private commitSelfFollow(playerId: string, combo: Combo): ActionResult {
+    const flips = this.orderFlippers.has(playerId);
+    if (flips) this.orderFlipCount++;
+    this.removeCards(playerId, combo.cards);
+    if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
+    this.tableSide = [];
+    this.tableResponderRestrict = null;
+    this.tableRankNote = null;
+    const prevSuits: Set<number> = this.tableCombo
+      ? new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit))
+      : new Set();
+    this.tableCombo = combo;
+    if (flips) this.resyncTableOrder();
+    this.prevTableOwnerId = this.tableOwnerId === '' ? null : this.tableOwnerId;
+    this.prevTableSuits = this.prevTableOwnerId == null ? new Set<number>() : prevSuits;
+    this.tableOwnerId = playerId;
+    this.roundLastPlayerId = playerId;
+    this.passCount = 0;
+    this.lastPlayWasCutIn = false;
+    this.emit({ type: 'cards:played', playerId, combo });
+    return this.runAfterPlayHooks(playerId, combo, 0);
   }
 
   // ---------- 插队（无名） ----------
@@ -762,6 +854,7 @@ export class GameEngine {
       : new Set();
     if (this.tableCombo) this.discarded.push(...this.tableCombo.cards);
     this.tableCombo = combo;
+    this.tableRankNote = null;
     if (flips) this.resyncTableOrder(); // 洄游：切换后桌面按新牌序重新解析（rank 约定反转）
     this.prevTableOwnerId = this.tableOwnerId === '' ? null : this.tableOwnerId;
     this.prevTableSuits = this.prevTableOwnerId == null ? new Set<number>() : prevSuits;
@@ -1134,6 +1227,7 @@ export class GameEngine {
       orderReversed: () => engine.orderReversed(),
       flipCountThisRound: () => engine.orderFlipCount,
       discardFromHand: (id, cardIds) => engine.discardFromHand(id, cardIds),
+      retagTable: (rank) => engine.retagTable(rank),
     };
   }
 
@@ -1151,6 +1245,18 @@ export class GameEngine {
     if (!this.tableCombo) return;
     const reparsed = parseCombo(this.tableCombo.cards, this.cfg, this.orderReversed());
     if (reparsed) this.tableCombo = reparsed;
+  }
+
+  /**
+   * 答疑（修勾）：把当前桌面一手牌的判定点数改为指定值——牌型不变（顺子/连对 = 起点，
+   * 按当前牌序约定：正序 = 最低点、倒序 = 最高点），后续管牌判定一律按新点数。
+   * 改点只影响判定，不改实体牌（巨石/无名加牌等按实体牌判定）。
+   */
+  private retagTable(rank: number): void {
+    if (!this.tableCombo) return;
+    if (!Number.isInteger(rank) || rank < RANK_3 || rank > RANK_A) return;
+    this.tableCombo.rank = rank as Rank;
+    this.tableRankNote = { rank };
   }
 
   /** 手牌指定牌 → 弃牌堆（隐匿重铸等） */

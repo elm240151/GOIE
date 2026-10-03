@@ -37,6 +37,8 @@ export interface GameSnapshot {
   tableSide: Card[];
   /** 是否倒序（海棠洄游：出牌即切换，每轮恢复正序） */
   orderReversed: boolean;
+  /** 答疑改点（修勾）：当前桌面一手牌的判定点数被改写（牌型不变）；null = 无改写 */
+  tableRankNote: { rank: number } | null;
   turnPlayerId: string | null;
   roundLeaderId: string;
   winnerId: string | null;

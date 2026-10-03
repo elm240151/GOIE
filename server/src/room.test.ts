@@ -699,6 +699,96 @@ describe('技能询问（海棠）', () => {
   });
 });
 
+/** 固定手牌 2 人局（修勾专用）：修勾（房主），下家闪点。
+ *  deck 下标（花色主序）：3♠=0 4♠=1 5♠=2 9♠=6 10♠=7 11♠=8 12♠=9 3♥=13 */
+function mkDoggieSetup(handA: number[], handB: number[], startIdx = 0): ReturnType<typeof mkFixedSetup> {
+  const registry: RoleRegistry = new Map(listRoles().map((r) => [r.id, r]));
+  const deck = buildDeck(3);
+  const pick = (ids: number[]) => ids.map((id) => deck[id]!);
+  const p0Hand = pick(handA);
+  const p1Hand = pick(handB);
+  const factory: RoomOptions['engineFactory'] = ({ players }) =>
+    new GameEngine(defaultRules, players, {
+      rng: mulberry32(1),
+      startPlayerId: players[startIdx]!.id,
+      roles: registry,
+      scores: {},
+      handsOverride: { [players[0]!.id]: p0Hand, [players[1]!.id]: p1Hand },
+    });
+  const mgr = new RoomManager({
+    roles: registry,
+    scoreStore: new MemoryScoreStore(),
+    autoPassMs: 30_000,
+    engineFactory: factory,
+  });
+  const sockets = [mkSocket('s0'), mkSocket('s1')];
+  const { code, playerId, secret } = mgr.create('房主', sockets[0]!);
+  const ids = [playerId];
+  const secrets: Record<string, string> = { [playerId]: secret };
+  const r = mgr.join(code, '玩家2', sockets[1]!);
+  ids.push(r.playerId);
+  secrets[r.playerId] = r.secret;
+  mgr.selectRole(sockets[0]!.id, 'doggie');
+  mgr.selectRole(sockets[1]!.id, 'flashpoint');
+  for (const s of sockets) mgr.setReady(s.id, true);
+  return { manager: mgr, sockets, ids, secrets, code };
+}
+
+describe('技能询问（修勾）', () => {
+  it('答疑：下家出对3 → 询问直达修勾 → 改点 Q 随快照下发（牌面实体不变）', () => {
+    const s = mkDoggieSetup([6, 7, 8, 9], [0, 13, 1], 1); // 修勾 [9♠10♠J♠Q♠]；下家 [3♠,3♥,4♠] 先手
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[1]!.id, [0, 13]); // 下家出对3（≥2 张）→ 答疑询问直达修勾
+    const mid = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid.pendingAsk?.playerId).toBe(s.ids[0]); // 询问的是修勾，不是出牌者
+    const ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.kind).toBe('choice');
+    expect(ask.prompt).toContain('答疑');
+    // 改点 Q → 判定点数 12，牌面仍是 3♠3♥
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'Q' });
+    const after = lastEmit<GameSnapshot>(s.sockets[1]!, SERVER_EVENTS.snapshot)!;
+    expect(after.pendingAsk).toBeNull();
+    expect(after.table?.rank).toBe(12);
+    expect(after.tableRankNote).toEqual({ rank: 12 }); // 改点标注随快照广播给所有人
+    expect(after.table?.cards.map((c) => c.id).sort()).toEqual([0, 13]);
+  });
+
+  it('狂吠：出牌后询问直达本人，连压 10→J→Q 打完获胜', () => {
+    const s = mkDoggieSetup([6, 7, 8, 9], [0, 1, 2]); // 修勾 [9♠10♠J♠Q♠]；下家 [3♠4♠5♠]
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[0]!.id, [6]); // 修勾起单9 → 狂吠询问
+    const mid = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid.pendingAsk?.playerId).toBe(s.ids[0]);
+    const ask1 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask1.kind).toBe('selfFollow');
+    expect(ask1.prompt).toContain('狂吠');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask1.askId!, choice: 'yes', cardIds: [7] }); // 压 10♠
+    const ask2 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask2.kind).toBe('selfFollow'); // 可连压：再问
+    expect(ask2.askId).not.toBe(ask1.askId);
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask2.askId!, choice: 'yes', cardIds: [8] }); // 压 J♠
+    const ask3 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask3.kind).toBe('selfFollow');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask3.askId!, choice: 'yes', cardIds: [9] }); // 压 Q♠ 打完
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.phase).toBe('finished');
+    expect(after.winnerId).toBe(s.ids[0]);
+  });
+
+  it('狂吠：放弃 → 询问结束，轮到下家接牌', () => {
+    const s = mkDoggieSetup([6, 7], [0, 1, 2]); // 修勾 [9♠10♠]；下家 [3♠4♠5♠]
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[0]!.id, [6]); // 起单9 → 狂吠询问
+    const ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.kind).toBe('selfFollow');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'decline' });
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.pendingAsk).toBeNull();
+    expect(after.turnPlayerId).toBe(s.ids[1]); // 轮到下家
+    expect(after.table?.rank).toBe(9); // 桌面保持修勾的单9
+  });
+});
+
 describe('重连与掉线兜底', () => {
   it('重连：secret 校验并恢复；掉线超时自动过', () => {
     vi.useFakeTimers();
