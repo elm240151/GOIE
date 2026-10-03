@@ -5,6 +5,7 @@ import { buildDeck } from '../engine/deck';
 import { GameEngine, type EnginePlayer } from '../engine/engine';
 import { mulberry32 } from '../engine/rng';
 import type { RoleDef, RoleRegistry, SkillAsk } from './types';
+import guoTT from './guo-tt';
 import yyXue from './yy-xue';
 
 const deck = buildDeck(3);
@@ -91,6 +92,49 @@ describe('第五席 雪灾天使（巨石）', () => {
     expect(snap.turnPlayerId).toBe('p1');
     expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(6); // 判定牌 ♦10 摸回
     expect(snap.revealed).toHaveLength(0); // 判定牌已收走，不留在展示区
+  });
+
+  it('橐驼单王（带"2 性质"）也触发：判定成功驱逐橐驼 + 巨石夺牌权', () => {
+    // 把牌堆最末 15 张（♦3..♦2小王大王，id 147-161）塞进 p2 → 牌堆顶变为 ♣2（id 145，♣）
+    const hands = {
+      p0: [deck[52]!, ...byRank(9, 4)], // 橐驼：小王 + 四张 9
+      p1: byRank(13, 5), // 巨石
+      p2: [...deck.slice(147, 162)],
+    };
+    const engine = mkEngine(hands, { p0: guoTT, p1: yyXue });
+    const r = engine.playCards('p0', [hands.p0[0]!.id]); // 橐驼起单王
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.suspended).toBe(true);
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect(ask?.kind).toBe('suit'); // 巨石判定
+    const a = engine.resolveAsk('p1', { askId: ask!.askId!, choice: '♣' }); // 判定 ♣2 命中
+    expect(a.ok).toBe(true);
+    expect(a.ok && a.events.some((e) => e.type === 'player:eliminated' && e.playerId === 'p0')).toBe(true);
+    const snap = engine.snapshotFor('p1');
+    expect(snap.players.find((p) => p.id === 'p0')!.eliminated).toBe(true);
+    expect(snap.table).toBeNull();
+    expect(snap.turnPlayerId).toBe('p1'); // 巨石起牌
+  });
+
+  it('橐驼单王也触发：判定失败不驱逐，判定牌摸回，桌面保留单王', () => {
+    const hands = {
+      p0: [deck[52]!, ...byRank(9, 4)], // 橐驼：小王 + 四张 9
+      p1: byRank(13, 5), // 巨石
+      p2: [...deck.slice(157, 162)], // 牌堆顶 = ♦Q（156）
+    };
+    const engine = mkEngine(hands, { p0: guoTT, p1: yyXue });
+    const r = engine.playCards('p0', [hands.p0[0]!.id]); // 起单王
+    expect(r.ok && r.suspended).toBe(true);
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    const a = engine.resolveAsk('p1', { askId: ask!.askId!, choice: '♥' }); // ♦Q ≠ ♥
+    expect(a.ok).toBe(true);
+    expect(a.ok && a.events.some((e) => e.type === 'skill:triggered' && /失败/.test(e.text))).toBe(true);
+    const snap = engine.snapshotFor('p1');
+    expect(snap.players.find((p) => p.id === 'p0')!.eliminated).toBe(false);
+    expect(snap.turnPlayerId).toBe('p1');
+    expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(6); // 判定牌 ♦Q 摸回
+    expect(snap.revealed).toHaveLength(0); // 判定牌已收走
+    expect(snap.table?.type).toBe('singleJoker'); // 桌面保留橐驼的单王
   });
 
   it('普通出牌不触发；判定次数用尽（玩家人数+2）后不再询问', () => {
