@@ -1,6 +1,6 @@
 // 游戏桌：对手座位 + 中央牌区 + 手牌扇形点选 + 实时牌型预览 + 终局弹窗。
 import { useEffect, useMemo, useState } from 'react';
-import { defaultRules, getRole, parseCombo, rankLabel, type Card as CardT, type CardRank } from '@gdys/shared';
+import { defaultRules, getRole, parseCombo, type Card as CardT } from '@gdys/shared';
 import { useStore } from '../store';
 import { STR, TURN_SECONDS } from '../strings';
 import { beatReason, finishHint, invalidReason } from '../beatHint';
@@ -69,6 +69,10 @@ export default function GameTable() {
     const warn = finish ?? beatReason(combo, snap?.table ?? null, rev);
     return { selected, combo, hint: warn ? STR.game.beatWarn.replace('{hint}', warn) : null };
   }, [myHand, selectedCardIds, snap?.table, rev]);
+
+  // 答疑改点：桌面牌型标签已按新点数重写（金色主显），小标展示原牌型（按实体牌重解析）
+  const originalTableLabel =
+    snap?.tableRankNote && snap?.table ? (parseCombo(snap.table.cards, defaultRules, rev)?.label ?? '') : '';
 
   const isLeader = snap?.table === null;
   const finished = room?.phase === 'finished';
@@ -178,10 +182,10 @@ export default function GameTable() {
           <>
             <div className="table-owner">{tableOwner ? `${tableOwner.name} 出了` : '上一手'}</div>
             <div className="table-row">
-              <ComboBadge combo={snap.table} />
+              <ComboBadge combo={snap.table} retagged={!!snap.tableRankNote} />
               {snap.tableRankNote && (
                 <span className="retag-badge" title={STR.game.retagTitle}>
-                  {STR.game.retagNote.replace('{rank}', rankLabel(snap.tableRankNote.rank as CardRank))}
+                  {STR.game.retagFrom.replace('{label}', originalTableLabel)}
                 </span>
               )}
               {tableSideCards.length > 0 && (

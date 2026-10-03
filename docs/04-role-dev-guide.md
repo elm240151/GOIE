@@ -120,7 +120,7 @@ interface ActionMods {
   - `revealCards(cards, purpose)`（公开亮牌，如茄汤展示手牌，广播 cards:revealed 事件）
   - `playForcedCombo(combo)`（打出特殊组合，引擎按正常出牌流程提交，如茄汤黑牌炸弹）
   - `attributeTable(ownerId)`（**桌面一手牌归属改写**，阿色再问：这手牌视作 ownerId 打出——tableOwner/轮末牌权/当前回合全部改到 ownerId，随后轮转从 ownerId 的下家继续；**先于其他角色的判定钩子执行**（角色 priority 设高，如 900），这样「视作谁打出」的判定才会落到新归属者身上；**出完即胜不受归属影响**——谁打完谁赢，引擎按物理出牌者判定（压牌者空手时角色直接不再问））
-  - `retagTable(rank)`（**桌面一手牌判定点数改写**，修勾答疑：牌型不变，把判定点数改为 3~A（3-14），顺子/连对改的是起点（按当前牌序约定：正序 = 最低点、倒序 = 最高点）；快照带 `tableRankNote` 供界面展示新点数标注；实体牌不变——其他角色（巨石等）仍按实体牌判定；只影响当前桌面一手牌，被压/轮末/新轮起牌自动清除）
+  - `retagTable(rank)`（**桌面一手牌判定点数改写**，修勾答疑：牌型不变，把判定点数改为 3~A（3-14），顺子/连对改的是起点（按当前牌序约定：正序 = 最低点、倒序 = 最高点）；`table.label` 随之按新点数重写（`relabelCombo`，对/炸/单/顺/连对全支持）主显，快照带 `tableRankNote` 供界面重建原 label 小标；实体牌不变——其他角色（巨石等）仍按实体牌判定；只影响当前桌面一手牌，被压/轮末/新轮起牌自动清除）
   - `setTableResponderRestrict(designatedId | null)`（**响应限制**，阿色抽你：当前桌面一手牌只有 designatedId 能响应——出牌/自动过候选/插队邀请/插队答案四处全部校验；被指定者淘汰/掉线时限制继续有效（无人能响应只能全过）；null 解除；桌面一手牌被压/轮末/新轮起牌自动清除，归属改写后需重新设置）
   - `playSideCard(playerId, cardId)`（**明置桌旁**，阿色再问补打：从手牌移除一张明置到桌旁，公开进快照 `tableSide`，随当前一手牌一起弃置；压牌者作答时用它，`handOf` 校验 + 自己校验合规性）
   - `discardFromHand(playerId, cardIds)`（**静默弃置手牌**，海棠隐匿重铸：从手牌移除进弃牌堆，不发事件——快照 discardCount 与 announce 播报覆盖 UI；角色自行保证合法）
@@ -179,7 +179,7 @@ export default zecheng;
 | zecheng.ts | 末席 肖亡 | 观股 | onRoundEnd ask + revealTop + giveRevealed + suppressDraw |
 | captain.ts | 阿色 | 抽你 + 再问 | beforePlay/afterPlay/onRoundEnd 多阶段 ask + 响应限制 + 归属改写 + 明置边牌 |
 | fishy.ts | 海棠 | 洄游 + 隐匿 | flipsOrderOnPlay 引擎级牌序切换（含插队）+ onRoundEnd ask(priority 1000 先于整备类) + discardFromHand 重铸 |
-| doggie.ts | 修勾 | 答疑 + 狂吠 | onPlayInterrupt ask(choice 点数) + retagTable 改判定点 + canSelfFollow 引擎级狂吠 |
+| doggie.ts | 修勾 | 答疑 + 狂吠 | onPlayInterrupt ask(choice 点数，顺子/连对选项限合法起点窗口) + retagTable 改判定点（label 经 relabelCombo 重写主显） + canSelfFollow 引擎级狂吠 |
 
 ## 新增角色的流程（每个角色照此执行）
 

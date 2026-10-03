@@ -7,7 +7,7 @@
 // - 技能询问：钩子可返回 ask 挂起动作，服务端询问玩家后 resolveAsk 重跑提问钩子（钩子须纯：返回 ask 前不得改状态）
 import { RANK_2, RANK_3, RANK_A, isJoker, isRank, type Card, type Rank } from '../cards';
 import { type RuleConfig } from '../config';
-import { canBeat, listPlayable, parseCombo, type Combo } from './combos';
+import { canBeat, listPlayable, parseCombo, relabelCombo, type Combo } from './combos';
 import { buildDeck, shuffle } from './deck';
 import { type GameEvent, type GameEventData } from './events';
 import { type Rng } from './rng';
@@ -1255,7 +1255,8 @@ export class GameEngine {
   private retagTable(rank: number): void {
     if (!this.tableCombo) return;
     if (!Number.isInteger(rank) || rank < RANK_3 || rank > RANK_A) return;
-    this.tableCombo.rank = rank as Rank;
+    // label 同步重写为改点后的牌型（快照里桌面主显新点数；实体牌不变）
+    this.tableCombo = relabelCombo(this.tableCombo, rank as Rank, this.orderReversed());
     this.tableRankNote = { rank };
   }
 

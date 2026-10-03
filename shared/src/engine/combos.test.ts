@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { JOKER_BIG, JOKER_SMALL, RANK_2, type Card, type CardRank, type Rank } from '../cards';
 import { defaultRules } from '../config';
-import { canBeat, comboKey, listPlayable, parseCombo, type Combo } from './combos';
+import { canBeat, comboKey, listPlayable, parseCombo, relabelCombo, type Combo } from './combos';
 
 const cfg = defaultRules;
 
@@ -510,5 +510,44 @@ describe('倒序（海棠洄游）：整条牌序反转', () => {
         expect(comboKey(reparsed!)).toBe(comboKey(c));
       }
     }
+  });
+});
+
+describe('relabelCombo 答疑改点（修勾）', () => {
+  it('对/炸/单：label 改点数，牌型与实体牌不变', () => {
+    const pair = parseCombo([mk(3), mk(3)], cfg)!;
+    const p = relabelCombo(pair, 9 as Rank, false);
+    expect(p.label).toBe('对9');
+    expect(p.rank).toBe(9);
+    expect(p.type).toBe('pair');
+    expect(p.cards).toBe(pair.cards); // 实体牌不变
+    expect(relabelCombo(parseCombo([mk(3), mk(3), mk(3)], cfg)!, 14 as Rank, false).label).toBe('炸弹 3×A');
+    expect(relabelCombo(parseCombo([mk(5)], cfg)!, 7 as Rank, false).label).toBe('7');
+  });
+
+  it('顺子：起点改写，窗口升序展示（正序 rank = 最低点）', () => {
+    const s = parseCombo([mk(3), mk(4), mk(5)], cfg)!;
+    const r = relabelCombo(s, 9 as Rank, false);
+    expect(r.label).toBe('顺子 9-10-J');
+    expect(r.rank).toBe(9);
+    expect(relabelCombo(parseCombo([mk(3), mk(4), mk(5), mk(6), mk(7)], cfg)!, 10 as Rank, false).label).toBe(
+      '顺子 10-J-Q-K-A'
+    );
+  });
+
+  it('顺子倒序：rank = 最高点，展示窗口升序', () => {
+    const s = parseCombo([mk(10), mk(9), mk(8)], cfg, true)!; // T98 倒序起点 10
+    expect(s.rank).toBe(10);
+    const r = relabelCombo(s, 12 as Rank, true);
+    expect(r.label).toBe('顺子 10-J-Q');
+    expect(r.rank).toBe(12);
+  });
+
+  it('连对：起点改写（正序/倒序）', () => {
+    const cp = parseCombo([mk(3), mk(3), mk(4), mk(4)], cfg)!;
+    expect(relabelCombo(cp, 9 as Rank, false).label).toBe('连对 991010');
+    const cpRev = parseCombo([mk(4), mk(4), mk(3), mk(3)], cfg, true)!;
+    expect(cpRev.rank).toBe(4);
+    expect(relabelCombo(cpRev, 6 as Rank, true).label).toBe('连对 5566');
   });
 });

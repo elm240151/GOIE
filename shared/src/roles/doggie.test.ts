@@ -48,6 +48,7 @@ describe('修勾（答疑）', () => {
     const snap = engine.snapshotFor('p1');
     expect(snap.table?.type).toBe('pair');
     expect(snap.table?.rank).toBe(9); // 判定点数改为 9
+    expect(snap.table?.label).toBe('对9'); // 牌型标签同步改点（界面主显新点数）
     expect(snap.tableRankNote).toEqual({ rank: 9 });
     expect(snap.table?.cards.map((c) => c.id).sort()).toEqual([hands.p0[0]!.id, hands.p0[1]!.id]); // 牌面不变
     // 旧点压不过（对4），新点压得过（对10 = 9+1）
@@ -72,6 +73,51 @@ describe('修勾（答疑）', () => {
     expect(engine.snapshotFor('p1').table?.rank).toBe(9);
     expect(engine.playCards('p1', [hands.p1[3]!.id, hands.p1[4]!.id, hands.p1[5]!.id]).ok).toBe(false); // 456 压不过
     expect(engine.playCards('p1', [hands.p1[0]!.id, hands.p1[1]!.id, hands.p1[2]!.id]).ok).toBe(true); // 10JQ 压得过
+  });
+
+  it('顺子改点选项收缩到合法起点（改完仍是真实牌型）', () => {
+    // 3 张顺 345：正序起点范围 3~Q（K/A 起的三连顺不存在）
+    const h1 = { p0: [...byRank(3, 1), ...byRank(4, 1), ...byRank(5, 1)], p1: [...byRank(10, 5)] };
+    const e1 = mkEngine(h1, { p0: doggie });
+    const r = e1.playCards('p0', [h1.p0[0]!.id, h1.p0[1]!.id, h1.p0[2]!.id]);
+    expect(r.ok && r.suspended).toBe(true);
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect((ask?.options ?? []).filter((o) => o !== '放弃')).toEqual(['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q']);
+    // 5 张顺 34567：上限进一步收缩到 10（10JQKA）
+    const h2 = { p0: [...byRank(3, 1), ...byRank(4, 1), ...byRank(5, 1), ...byRank(6, 1), ...byRank(7, 1)], p1: [...byRank(10, 5)] };
+    const e2 = mkEngine(h2, { p0: doggie });
+    const r2 = e2.playCards('p0', h2.p0.map((c) => c.id));
+    const ask2 = r2.ok ? (r2.pendingAsk as SkillAsk) : null;
+    expect((ask2?.options ?? []).filter((o) => o !== '放弃')).toEqual(['3', '4', '5', '6', '7', '8', '9', '10']);
+  });
+
+  it('连对改点选项：3~K（K 起 KKAA 合法）', () => {
+    const hands = {
+      p0: [...byRank(3, 2), ...byRank(4, 2)], // 修勾：3344
+      p1: [...byRank(10, 5)],
+    };
+    const engine = mkEngine(hands, { p0: doggie });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id, hands.p0[2]!.id, hands.p0[3]!.id]);
+    expect(r.ok && r.suspended).toBe(true);
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect((ask?.options ?? []).filter((o) => o !== '放弃')).toEqual(['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']);
+  });
+
+  it('倒序顺子改点选项：3+长度−1 起（起点 = 最高点）', () => {
+    const hands = {
+      p0: [...byRank(4, 1), ...byRank(5, 1), ...byRank(6, 1), ...byRank(10, 1), ...byRank(9, 1), ...byRank(8, 1), ...byRank(13, 2)], // 修勾
+      p1: [...byRank(6, 1), ...byRank(7, 1), ...byRank(8, 1), ...byRank(13, 1), ...byRank(12, 1), ...byRank(11, 1)], // 海棠
+    };
+    const engine = mkEngine(hands, { p0: doggie, p1: fishy });
+    const r0 = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id, hands.p0[2]!.id]); // 456
+    engine.resolveAsk('p0', { askId: (r0.ok ? (r0.pendingAsk as SkillAsk) : null)!.askId!, choice: '放弃' });
+    const r1 = engine.playCards('p1', [hands.p1[0]!.id, hands.p1[1]!.id, hands.p1[2]!.id]); // 678 → 切倒序
+    engine.resolveAsk('p0', { askId: (r1.ok ? (r1.pendingAsk as SkillAsk) : null)!.askId!, choice: '放弃' });
+    const r2 = engine.playCards('p0', [hands.p0[3]!.id, hands.p0[4]!.id, hands.p0[5]!.id]); // T98 倒序起点 10
+    expect(r2.ok && r2.suspended).toBe(true);
+    const ask = r2.ok ? (r2.pendingAsk as SkillAsk) : null;
+    // 倒序起点 = 最高点：3 张顺需 max≥5（543 是下限），选项 5~A
+    expect((ask?.options ?? []).filter((o) => o !== '放弃')).toEqual(['5', '6', '7', '8', '9', '10', 'J', 'Q', 'K', 'A']);
   });
 
   it('单张不触发；弃权不消耗（同回合再问）；轮末重置后新回合可再问', () => {

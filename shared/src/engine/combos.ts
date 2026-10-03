@@ -282,6 +282,25 @@ export function canBeat(combo: Combo, table: Combo | null, cfg: RuleConfig, rev 
   return true;
 }
 
+/**
+ * 重建 combo 的 label 与 rank 为指定点数（修勾答疑改点：牌型不变、判定点数改写，
+ * 实体牌不变）。顺子/连对改的是起点（按当前牌序约定：正序 = 最低点、倒序 = 最高点），
+ * 展示窗口恒为升序（与 parseCombo 的 label 格式一致）。
+ */
+export function relabelCombo(combo: Combo, rank: Rank, rev: boolean): Combo {
+  if (combo.type === 'single') return { ...combo, rank, label: rankLabel(rank) };
+  if (combo.type === 'pair') return { ...combo, rank, label: `对${rankLabel(rank)}` };
+  if (combo.type === 'bomb') return { ...combo, rank, label: `炸弹 ${combo.length}×${rankLabel(rank)}` };
+  const span = combo.type === 'straight' ? combo.length : combo.length / 2;
+  const start = rev ? rank - span + 1 : rank; // 倒序 rank = 最高点，窗口起点 = 最高点 − 长度 + 1
+  const windowRanks = Array.from({ length: span }, (_, i) => (start + i) as Rank);
+  const label =
+    combo.type === 'straight'
+      ? `顺子 ${windowRanks.map(rankLabel).join('-')}`
+      : `连对 ${windowRanks.map((r) => `${rankLabel(r)}${rankLabel(r)}`).join('')}`;
+  return { ...combo, rank, label };
+}
+
 // ---------- listPlayable ----------
 
 /**

@@ -552,15 +552,15 @@ body {
   font-size: 15px;
 }
 
-/* 答疑改点徽标（修勾：桌面按新点数判定） */
+/* 答疑改点原牌型小标（修勾：桌面主显新点数，小标展示原牌型） */
 .retag-badge {
-  background: rgba(233, 196, 106, 0.18);
-  color: var(--gold);
-  border: 1px solid rgba(233, 196, 106, 0.5);
+  background: rgba(233, 196, 106, 0.12);
+  color: rgba(233, 196, 106, 0.85);
+  border: 1px solid rgba(233, 196, 106, 0.35);
   border-radius: 8px;
   padding: 2px 8px;
-  font-size: 12px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
 }
 
 /* 倒序徽标（海棠洄游：牌序反转中） */
@@ -675,6 +675,15 @@ body {
 .combo-label {
   font-weight: 700;
   font-size: 16px;
+}
+/* 答疑改点：牌型标签按新点数主显（金色发光） */
+.combo-retagged {
+  border-color: var(--gold);
+  box-shadow: 0 0 12px rgba(233, 196, 106, 0.4);
+}
+.combo-retagged .combo-label {
+  color: var(--gold);
+  font-size: 19px;
 }
 .combo-small .combo-label {
   font-size: 13px;

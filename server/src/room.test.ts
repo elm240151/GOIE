@@ -749,6 +749,7 @@ describe('技能询问（修勾）', () => {
     const after = lastEmit<GameSnapshot>(s.sockets[1]!, SERVER_EVENTS.snapshot)!;
     expect(after.pendingAsk).toBeNull();
     expect(after.table?.rank).toBe(12);
+    expect(after.table?.label).toBe('对Q'); // 牌型标签同步改点（客户端主显新点数）
     expect(after.tableRankNote).toEqual({ rank: 12 }); // 改点标注随快照广播给所有人
     expect(after.table?.cards.map((c) => c.id).sort()).toEqual([0, 13]);
   });

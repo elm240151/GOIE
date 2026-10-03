@@ -13,16 +13,18 @@ const TYPE_CLASS: Record<Combo['type'], string> = {
 interface Props {
   combo: Combo;
   small?: boolean;
+  /** 答疑改点：牌型标签已按新点数重写，金色高亮显示 */
+  retagged?: boolean;
 }
 
-export default function ComboBadge({ combo, small }: Props) {
+export default function ComboBadge({ combo, small, retagged }: Props) {
   // 按解析结果重建牌面顺序（王放到它补的位置），复用 resolved 顺序
   const cards = combo.resolved.map((r) => {
     const c = combo.cards.find((x) => x.id === r.cardId)!;
     return isJoker(c) ? { ...c, asRank: r.rank } : { ...c, asRank: undefined };
   });
   return (
-    <span className={`combo-badge ${TYPE_CLASS[combo.type]} ${small ? 'combo-small' : ''}`}>
+    <span className={`combo-badge ${TYPE_CLASS[combo.type]} ${small ? 'combo-small' : ''} ${retagged ? 'combo-retagged' : ''}`}>
       <span className="combo-label">{combo.label}</span>
       <span className="combo-cards">
         {cards.map((c, i) => (
