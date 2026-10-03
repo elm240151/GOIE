@@ -144,6 +144,8 @@ export interface EngineFacade {
   discardFromHand(playerId: string, cardIds: number[]): void;
   /** 桌面一手牌的判定点数改为指定值（修勾答疑：牌型不变，顺子/连对 = 起点，按当前牌序约定） */
   retagTable(rank: number): void;
+  /** 地坛（橐驼）：诅咒目标玩家下一轮不得出牌；若其本回合轮末获得牌权，由技能所有者取而代之 */
+  curseNextRound(targetPlayerId: string): void;
 }
 
 export interface HookContext<S = unknown> {
@@ -232,6 +234,8 @@ export interface RoleDef {
   canSelfFollow?: boolean;
   /** 每次出牌（含插队，按物理出牌者）切换一次牌序正↔倒（海棠洄游）；每轮开始恢复正序 */
   flipsOrderOnPlay?: boolean;
+  /** 单王可单独打出（橐驼诅咒）：点数视作无穷（正序压一切单张含 2、倒序同样压一切单张含 3），只有炸弹能压 */
+  soloJoker?: boolean;
 }
 
 export type RoleRegistry = Map<string, RoleDef>;

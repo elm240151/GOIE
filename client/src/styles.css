@@ -439,6 +439,18 @@ body {
   color: var(--danger);
   font-size: 10px;
 }
+.seat-curse {
+  color: #c29a3b;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+  padding: 0 3px;
+  font-size: 10px;
+  animation: curse-blink 1.6s ease-in-out infinite;
+}
+@keyframes curse-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
 .seat-eliminated {
   filter: grayscale(0.9) opacity(0.45);
   border-style: dashed;

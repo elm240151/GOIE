@@ -8,6 +8,7 @@ const TYPE_CLASS: Record<Combo['type'], string> = {
   straight: 'combo-straight',
   consecutivePairs: 'combo-cp',
   bomb: 'combo-bomb',
+  singleJoker: 'combo-single',
 };
 
 interface Props {

@@ -57,18 +57,19 @@ export default function GameTable() {
   const myTurn = snap?.phase === 'playing' && snap?.turnPlayerId === myId;
   const myHand: readonly CardT[] = me?.hand ?? [];
   const myPlay = myId ? roundPlays[myId] : undefined;
+  const myRole = getRole(me?.roleId ?? '');
 
-  // 实时预览：所选牌 → parseCombo（与服务端同一套解析器；倒序随快照）
+  // 实时预览：所选牌 → parseCombo（与服务端同一套解析器；倒序随快照；单王按角色解锁）
   const rev = snap?.orderReversed ?? false;
   const preview = useMemo(() => {
     const selected = myHand.filter((c) => selectedCardIds.includes(c.id));
     if (selected.length === 0) return { selected, combo: null, hint: null };
-    const combo = parseCombo(selected, defaultRules, rev);
+    const combo = parseCombo(selected, defaultRules, rev, myRole?.soloJoker);
     if (!combo) return { selected, combo: null, hint: invalidReason(selected) };
     const finish = finishHint(combo, myHand.length, rev);
     const warn = finish ?? beatReason(combo, snap?.table ?? null, rev);
     return { selected, combo, hint: warn ? STR.game.beatWarn.replace('{hint}', warn) : null };
-  }, [myHand, selectedCardIds, snap?.table, rev]);
+  }, [myHand, selectedCardIds, snap?.table, rev, myRole]);
 
   // 答疑改点：桌面牌型标签已按新点数重写（金色主显），小标展示原牌型（按实体牌重解析）
   const originalTableLabel =
@@ -88,7 +89,6 @@ export default function GameTable() {
   }, [me, finished, myTurn, snap?.table]);
 
   // 我的技能说明（点开可读；当前可发动的高亮）
-  const myRole = getRole(me?.roleId ?? '');
   const activeSkillIds = useMemo(() => new Set(skillActions.map((a) => a.skillId)), [skillActions]);
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
 

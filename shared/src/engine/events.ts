@@ -10,7 +10,7 @@ export type GameEventData =
   | { type: 'table:attributed'; playerId: string; fromPlayerId: string; combo: Combo }
   | { type: 'table:side'; playerId: string; card: Card }
   | { type: 'passed'; playerId: string }
-  | { type: 'round:ended'; lastPlayerId: string; drew: number }
+  | { type: 'round:ended'; lastPlayerId: string; drew: number; ledBy?: string }
   | { type: 'cards:drawn'; playerId: string; count: number }
   | { type: 'cards:revealed'; playerId: string; cards: Card[]; purpose: string }
   | { type: 'player:eliminated'; playerId: string; reason: string }

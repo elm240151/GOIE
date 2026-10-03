@@ -14,7 +14,8 @@ export function autoPlayFallback(engine: GameEngine, playerId: string, cfg: Rule
   const snap = engine.snapshotFor(playerId);
   const hand = snap.players.find((p) => p.id === playerId)?.hand ?? null;
   if (!hand) return null;
-  const combos = listPlayable(hand, snap.table, cfg, snap.orderReversed);
+  // 单王（橐驼诅咒）候选：掉线的橐驼起牌只剩王时也要能自动打出
+  const combos = listPlayable(hand, snap.table, cfg, snap.orderReversed, engine.soloJokerAllowed(playerId));
   if (combos.length === 0) return null;
   return engine.playCards(playerId, combos[0]!.cards.map((c) => c.id));
 }

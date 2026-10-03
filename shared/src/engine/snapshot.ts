@@ -39,6 +39,8 @@ export interface GameSnapshot {
   orderReversed: boolean;
   /** 答疑改点（修勾）：当前桌面一手牌的判定点数被改写（牌型不变）；null = 无改写 */
   tableRankNote: { rank: number } | null;
+  /** 红楼梦（地坛）：被诅咒的玩家 id（含下一轮生效中；界面展示标记） */
+  cursedPlayerIds: string[];
   turnPlayerId: string | null;
   roundLeaderId: string;
   winnerId: string | null;

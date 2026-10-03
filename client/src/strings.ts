@@ -59,6 +59,8 @@ export const STR = {
     reconnect: '连接已断开，正在重连…',
     skillToast: '【{skill}】{text}',
     roundEndToast: '无人能管，{name} 摸 {n} 张继续出',
+    curseBadge: '红楼梦',
+    curseTakeover: '【地坛】{name} 取而代之，摸 {n} 张继续出',
     drawnToast: '{name} 摸了 {n} 张牌',
     winnerTitle: '{name} 获胜！',
     drawTitle: '流局（无人能出牌）',

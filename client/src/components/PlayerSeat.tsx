@@ -47,6 +47,7 @@ export default function PlayerSeat({ player, isMe, turnLeft }: Props) {
       <div className="seat-meta">
         <span className="seat-role">{role?.name ?? '?'}</span>
         <span className="seat-handcount">×{player.handCount}</span>
+        {snap?.cursedPlayerIds.includes(player.id) && <span className="seat-curse">{STR.game.curseBadge}</span>}
         {player.eliminated && <span className="seat-offline">{STR.game.eliminated}</span>}
         {!player.connected && !player.eliminated && <span className="seat-offline">{STR.room.offlineBadge}</span>}
       </div>

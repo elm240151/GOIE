@@ -519,7 +519,13 @@ export const useStore = create<AppStore>((set, get) => ({
         set({ tablePlayerId: null, passedAt: {}, roundPlays: {}, tableSideCards: [] });
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
         const last = room?.players.find((p) => p.id === e.lastPlayerId);
-        if (last) toast('info', `无人能管，${last.name} 摸了 ${e.drew} 张牌继续出`);
+        if (e.ledBy && e.ledBy !== e.lastPlayerId) {
+          // 地坛取而代之：诅咒目标获得牌权，由橐驼摸牌起牌
+          const banner = room?.players.find((p) => p.id === e.ledBy);
+          if (banner) toast('info', STR.game.curseTakeover.replace('{name}', banner.name).replace('{n}', String(e.drew)));
+        } else if (last) {
+          toast('info', STR.game.roundEndToast.replace('{name}', last.name).replace('{n}', String(e.drew)));
+        }
         break;
       }
       case 'skill:triggered': {

@@ -12,7 +12,7 @@
 import { RANK_2, RANK_3, RANK_A, isJoker, isRank, rankLabel, type Card, type Rank } from '../cards';
 import type { RuleConfig } from '../config';
 
-export type ComboType = 'single' | 'pair' | 'straight' | 'consecutivePairs' | 'bomb';
+export type ComboType = 'single' | 'pair' | 'straight' | 'consecutivePairs' | 'bomb' | 'singleJoker';
 
 export interface Combo {
   type: ComboType;
@@ -66,12 +66,21 @@ function buildCombo(
  * 解析一组牌为牌型；不合法返回 null。
  * 全部真牌同点数 → 单/对/炸；多种点数 → 顺子/连对；其他非法。
  * rev = 倒序（海棠洄游）：顺子/连对按倒序连续解析（起点 = 最高点数）。
+ * allowSoloJoker = 单王可单独打出（橐驼诅咒：点数视作无穷大/无穷小，压一切单张、只有炸弹能压）。
  */
-export function parseCombo(cards: readonly Card[], cfg: RuleConfig, rev = false): Combo | null {
+export function parseCombo(
+  cards: readonly Card[],
+  cfg: RuleConfig,
+  rev = false,
+  allowSoloJoker = false
+): Combo | null {
   if (cards.length === 0) return null;
   const sorted = [...cards].sort((a, b) => a.id - b.id);
   const info = analyzeHand(sorted);
-  if (sorted.length - info.totalJokers < cfg.jokers.minRealCardsInCombo) return null; // 纯王组合非法
+  if (sorted.length - info.totalJokers < cfg.jokers.minRealCardsInCombo) {
+    if (allowSoloJoker && sorted.length === 1 && info.totalJokers === 1) return soloJokerOf(sorted[0]!);
+    return null; // 纯王组合非法
+  }
 
   if (info.realByRank.size === 1) {
     const [rank, rankCards] = [...info.realByRank][0]!;
@@ -251,6 +260,9 @@ function tryConsecutivePairs(sorted: Card[], info: HandInfo, cfg: RuleConfig, re
  */
 export function canBeat(combo: Combo, table: Combo | null, cfg: RuleConfig, rev = false): boolean {
   if (table === null) return true;
+  // 单王（橐驼诅咒）：压一切单张（含当前最大 2/3），只有炸弹能压——正倒序一致（无穷大/无穷小镜像同规则）
+  if (table.type === 'singleJoker') return combo.type === 'bomb';
+  if (combo.type === 'singleJoker') return table.type === 'single';
   if (combo.type === 'bomb') {
     if (table.type !== 'bomb') return true; // 炸弹炸一切
     if (combo.length !== table.length) return combo.length > table.length; // 张数优先
@@ -288,6 +300,7 @@ export function canBeat(combo: Combo, table: Combo | null, cfg: RuleConfig, rev 
  * 展示窗口恒为升序（与 parseCombo 的 label 格式一致）。
  */
 export function relabelCombo(combo: Combo, rank: Rank, rev: boolean): Combo {
+  if (combo.type === 'singleJoker') return combo; // 答疑只对 ≥2 张牌型，单王不会走到这里（防御）
   if (combo.type === 'single') return { ...combo, rank, label: rankLabel(rank) };
   if (combo.type === 'pair') return { ...combo, rank, label: `对${rankLabel(rank)}` };
   if (combo.type === 'bomb') return { ...combo, rank, label: `炸弹 ${combo.length}×${rankLabel(rank)}` };
@@ -306,10 +319,17 @@ export function relabelCombo(combo: Combo, rank: Rank, rev: boolean): Combo {
 /**
  * 枚举手牌当前可出的所有组合（候选间互斥，王可被重复计入不同候选）。
  * rev = 倒序；留 X 禁止收尾：打出后手牌清空的单/对（正序 2 / 倒序 3）直接排除。
+ * allowSoloJoker = 单王单独打出候选（橐驼诅咒）。
  */
-export function listPlayable(hand: readonly Card[], table: Combo | null, cfg: RuleConfig, rev = false): Combo[] {
+export function listPlayable(
+  hand: readonly Card[],
+  table: Combo | null,
+  cfg: RuleConfig,
+  rev = false,
+  allowSoloJoker = false
+): Combo[] {
   const info = analyzeHand(hand);
-  const out = table === null ? listLeading(info, cfg, rev) : listFollowing(info, table, cfg, rev);
+  const out = table === null ? listLeading(info, cfg, rev, allowSoloJoker) : listFollowing(info, table, cfg, rev, allowSoloJoker);
   const finishRank = rev ? RANK_3 : RANK_2;
   return out.filter(
     (c) =>
@@ -320,6 +340,11 @@ export function listPlayable(hand: readonly Card[], table: Combo | null, cfg: Ru
 function singleOf(c: Card): Combo {
   const r = c.rank as Rank;
   return buildCombo('single', [c], r, [{ cardId: c.id, rank: r }], rankLabel(r));
+}
+
+/** 单王（橐驼诅咒）：rank 编码 16（高于 2），正倒序都压一切单张、只有炸弹能压 */
+function soloJokerOf(c: Card): Combo {
+  return buildCombo('singleJoker', [c], 16 as Rank, [{ cardId: c.id, rank: 16 as Rank }], '王');
 }
 
 function pairOf(cards: Card[], rank: Rank): Combo {
@@ -404,18 +429,20 @@ function cpMissing(s: number, pairs: number, info: HandInfo, rev: boolean): numb
 }
 
 /** 枚举出的候选必须能被解析器回验为同一规范形（王牌歧义下与解析器保持一致） */
-function verified(combo: Combo, cfg: RuleConfig, rev: boolean): Combo | null {
-  const re = parseCombo(combo.cards, cfg, rev);
+function verified(combo: Combo, cfg: RuleConfig, rev: boolean, allowSoloJoker: boolean): Combo | null {
+  const re = parseCombo(combo.cards, cfg, rev, allowSoloJoker);
   if (re === null || comboKey(re) !== comboKey(combo)) return null;
   return combo;
 }
 
-function listLeading(info: HandInfo, cfg: RuleConfig, rev: boolean): Combo[] {
+function listLeading(info: HandInfo, cfg: RuleConfig, rev: boolean, allowSoloJoker: boolean): Combo[] {
   const out: Combo[] = [];
   const ranks = [...info.realByRank.keys()].sort((a, b) => a - b);
 
   // 单张
   for (const r of ranks) out.push(singleOf(info.realByRank.get(r)![0]!));
+  // 单王（诅咒：每张王都可单独起牌）
+  if (allowSoloJoker) for (const j of info.jokers) out.push(soloJokerOf(j));
   // 对子
   for (const r of ranks) {
     const cs = info.realByRank.get(r)!;
@@ -449,12 +476,30 @@ function listLeading(info: HandInfo, cfg: RuleConfig, rev: boolean): Combo[] {
       if (cpMissing(s, p, info, rev) <= info.totalJokers) out.push(consecutivePairsOf(s, p, info, rev));
     }
   }
-  return out.filter((c) => verified(c, cfg, rev) !== null);
+  return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
 }
 
-function listFollowing(info: HandInfo, table: Combo, cfg: RuleConfig, rev: boolean): Combo[] {
+function listFollowing(
+  info: HandInfo,
+  table: Combo,
+  cfg: RuleConfig,
+  rev: boolean,
+  allowSoloJoker: boolean
+): Combo[] {
   const out: Combo[] = [];
   const ranks = [...info.realByRank.keys()].sort((a, b) => a - b);
+  // 单王（诅咒）：压一切单张（含 2/3），正倒序一致
+  if (allowSoloJoker && table.type === 'single') for (const j of info.jokers) out.push(soloJokerOf(j));
+
+  if (table.type === 'singleJoker') {
+    // 只有炸弹能压王（诅咒）：任意炸弹均可（王不是实体牌型，不能按 length/rank 走炸弹分支）
+    for (const r of ranks) {
+      const cs = info.realByRank.get(r)!;
+      const maxLen = Math.min(cs.length + info.totalJokers, cfg.bomb.maxSize);
+      for (let len = cfg.bomb.minSize; len <= maxLen; len++) out.push(bombOf(cs, info.jokers, r, len));
+    }
+    return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
+  }
 
   if (table.type === 'bomb') {
     for (const r of ranks) {
@@ -467,7 +512,7 @@ function listFollowing(info: HandInfo, table: Combo, cfg: RuleConfig, rev: boole
       if (higher && table.length >= cfg.bomb.minSize && table.length <= maxLen)
         out.push(bombOf(cs, info.jokers, r, table.length));
     }
-    return out.filter((c) => verified(c, cfg, rev) !== null);
+    return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
   }
 
   if (table.type === 'single') {
@@ -482,7 +527,7 @@ function listFollowing(info: HandInfo, table: Combo, cfg: RuleConfig, rev: boole
       if (table.rank !== RANK_2 && cfg.follow.singlePair.twoBeatsAll && info.realByRank.has(RANK_2))
         out.push(singleOf(info.realByRank.get(RANK_2)![0]!));
     }
-    return out.filter((c) => verified(c, cfg, rev) !== null);
+    return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
   }
 
   if (table.type === 'pair') {
@@ -515,7 +560,7 @@ function listFollowing(info: HandInfo, table: Combo, cfg: RuleConfig, rev: boole
           out.push(pairOf([twos[0]!, info.jokers[0]!], RANK_2));
       }
     }
-    return out.filter((c) => verified(c, cfg, rev) !== null);
+    return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
   }
 
   if (table.type === 'straight') {
@@ -527,7 +572,7 @@ function listFollowing(info: HandInfo, table: Combo, cfg: RuleConfig, rev: boole
       if (windowExcluded(s, len, cfg.straight.exclude, rev)) continue;
       if (straightMissing(s, len, info, rev) <= info.totalJokers) out.push(straightOf(s, len, info, rev));
     }
-    return out.filter((c) => verified(c, cfg, rev) !== null);
+    return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
   }
 
   // consecutivePairs
@@ -538,5 +583,5 @@ function listFollowing(info: HandInfo, table: Combo, cfg: RuleConfig, rev: boole
     if (windowExcluded(s, pairs, cfg.consecutivePairs.exclude, rev)) continue;
     if (cpMissing(s, pairs, info, rev) <= info.totalJokers) out.push(consecutivePairsOf(s, pairs, info, rev));
   }
-  return out.filter((c) => verified(c, cfg, rev) !== null);
+  return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
 }

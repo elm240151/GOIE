@@ -513,6 +513,90 @@ describe('倒序（海棠洄游）：整条牌序反转', () => {
   });
 });
 
+describe('单王（橐驼诅咒）：singleJoker 牌型', () => {
+  const pj = () => parseCombo([mk(JOKER_SMALL)], cfg, false, true)!; // 正序单王
+  const pjR = () => parseCombo([mk(JOKER_BIG)], cfg, true, true)!; // 倒序单王
+  const parseR = (ranks: CardRank[]): Combo | null => parseCombo(ranks.map(mk), cfg, true);
+
+  it('不开启时单王仍非法（正倒序一致）', () => {
+    expect(parseCombo([mk(JOKER_SMALL)], cfg)).toBeNull();
+    expect(parseCombo([mk(JOKER_BIG)], cfg, true)).toBeNull();
+  });
+
+  it('开启后解析为 singleJoker：点数 16、标签 王、可起牌', () => {
+    const c = pj();
+    expectCombo(c, 'singleJoker', 16, 1);
+    expect(c.label).toBe('王');
+    expect(canBeat(c, null, cfg)).toBe(true);
+  });
+
+  it('双王仍是纯王非法（诅咒只解锁单王）', () => {
+    expect(parseCombo([mk(JOKER_SMALL), mk(JOKER_BIG)], cfg, false, true)).toBeNull();
+    expect(parseCombo([mk(JOKER_SMALL), mk(JOKER_SMALL)], cfg, false, true)).toBeNull();
+  });
+
+  it('王压一切单张：正序含 2、倒序含 3（无穷大/无穷小镜像同规则）', () => {
+    expect(canBeat(pj(), parse([15])!, cfg)).toBe(true); // 正序压 2
+    expect(canBeat(pj(), parse([3])!, cfg)).toBe(true);
+    expect(canBeat(pj(), parse([14])!, cfg)).toBe(true);
+    expect(canBeat(pjR(), parseR([3])!, cfg, true)).toBe(true); // 倒序压 3
+    expect(canBeat(pjR(), parseR([15])!, cfg, true)).toBe(true);
+    expect(canBeat(pjR(), parseR([9])!, cfg, true)).toBe(true);
+  });
+
+  it('只有炸弹能压王，王压不了王', () => {
+    expect(canBeat(parse([3, 3, 3])!, pj(), cfg)).toBe(true);
+    expect(canBeat(parseR([3, 3, 3])!, pjR(), cfg, true)).toBe(true);
+    expect(canBeat(parse([15])!, pj(), cfg)).toBe(false); // 单 2 也压不了
+    expect(canBeat(parse([14, 14])!, pj(), cfg)).toBe(false);
+    expect(canBeat(pj(), pj(), cfg)).toBe(false);
+  });
+
+  it('王跨牌型压不了（对子/顺子/炸弹都不吃王）', () => {
+    expect(canBeat(pj(), parse([5, 5])!, cfg)).toBe(false);
+    expect(canBeat(pj(), parse([4, 5, 6])!, cfg)).toBe(false);
+    expect(canBeat(pj(), parse([3, 3, 3])!, cfg)).toBe(false);
+    expect(canBeat(pjR(), parseR([5, 5])!, cfg, true)).toBe(false);
+  });
+
+  it('枚举起牌：开启后含单王候选、不开启不含', () => {
+    const hand = [mk(3), W()];
+    const on = listPlayable(hand, null, cfg, false, true).map(comboKey);
+    expect(on).toContain('singleJoker:16:1');
+    expect(on).toContain('single:3:1');
+    const off = listPlayable(hand, null, cfg).map(comboKey);
+    expect(off).not.toContain('singleJoker:16:1');
+  });
+
+  it('枚举跟单2：只剩王 → 唯一候选是王；不开启则无候选', () => {
+    const hand = [W()];
+    expect(listPlayable(hand, parse([15])!, cfg, false, true).map(comboKey)).toEqual(['singleJoker:16:1']);
+    expect(listPlayable(hand, parse([15])!, cfg)).toEqual([]);
+  });
+
+  it('枚举跟对子：王无候选（跨牌型）', () => {
+    expect(listPlayable([W()], parse([5, 5])!, cfg, false, true)).toEqual([]);
+  });
+
+  it('枚举跟单王：只有炸弹候选（王压不了王）', () => {
+    const hand = [mk(4), mk(4), mk(4), W()];
+    const keys = listPlayable(hand, pj(), cfg, false, true).map(comboKey);
+    expect(keys).toEqual(['bomb:4:3', 'bomb:4:4']);
+  });
+
+  it('留2禁止收尾不过滤单王（王不是 2，可收尾；倒序同理）', () => {
+    expect(listPlayable([W()], null, cfg, false, true).map(comboKey)).toEqual(['singleJoker:16:1']);
+    expect(listPlayable([W()], null, cfg, true, true).map(comboKey)).toEqual(['singleJoker:16:1']);
+  });
+
+  it('relabelCombo 不改单王（答疑只对 ≥2 张牌型，防御不变）', () => {
+    const r = relabelCombo(pj(), 9 as Rank, false);
+    expect(r.type).toBe('singleJoker');
+    expect(r.rank).toBe(16);
+    expect(r.label).toBe('王');
+  });
+});
+
 describe('relabelCombo 答疑改点（修勾）', () => {
   it('对/炸/单：label 改点数，牌型与实体牌不变', () => {
     const pair = parseCombo([mk(3), mk(3)], cfg)!;

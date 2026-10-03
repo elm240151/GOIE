@@ -104,6 +104,10 @@ export class GameEngine {
   private roleStates = new Map<string, unknown>();
   private pendingMods = new Map<string, ActionMods>();
   private forcedPass = new Set<string>();
+  /** 红楼梦（地坛）：本轮不得出牌的玩家（轮末生效、下轮结束清除） */
+  private activeBan = new Set<string>();
+  /** 红楼梦（地坛）：本轮判定成功、下一轮生效的诅咒（被诅咒者 → 取而代之的诅咒者） */
+  private pendingBan = new Map<string, string>();
   private pendingEvents: GameEvent[] = [];
   private seq = 0;
   private startRoundDepth = 0;
@@ -194,6 +198,7 @@ export class GameEngine {
     if (this.phase !== 'playing') return fail('游戏已结束');
     if (this.pendingAsk) return fail('等待技能响应');
     if (playerId !== this.turnPlayerId) return fail('不是你的回合');
+    if (this.activeBan.has(playerId)) return fail('【红楼梦】本回合不得出牌');
     // 响应限制（抽你）：当前桌面一手牌只能由指定玩家响应
     if (this.tableCombo && this.tableResponderRestrict && playerId !== this.tableResponderRestrict) {
       const d = this.players.find((p) => p.id === this.tableResponderRestrict);
@@ -209,7 +214,7 @@ export class GameEngine {
       cards.push(c);
     }
     const rev = this.orderReversed();
-    const combo = parseCombo(cards, this.cfg, rev);
+    const combo = parseCombo(cards, this.cfg, rev, this.soloJokerAllowed(playerId));
     if (!combo) return fail('这不是合法牌型（王不能单独打出）');
     const baseLegal = canBeat(combo, this.tableCombo, this.cfg, rev);
     // 留 X 禁止收尾：以单 2/对 2（倒序：单 3/对 3）打完手牌 → 拒绝（技能优先：钩子可 allowAnyway 放行）
@@ -389,6 +394,8 @@ export class GameEngine {
       tableSide: [...this.tableSide],
       orderReversed: this.orderReversed(),
       tableRankNote: this.tableRankNote,
+      /** 红楼梦（地坛）：被诅咒（含下一轮生效中）的玩家，界面展示标记 */
+      cursedPlayerIds: [...new Set([...this.activeBan, ...this.pendingBan.keys()])],
       turnPlayerId: this.turnPlayerId,
       roundLeaderId: this.roundLeaderId,
       winnerId: this.winnerId,
@@ -408,6 +415,12 @@ export class GameEngine {
 
   get playerIds(): string[] {
     return this.players.map((p) => p.id);
+  }
+
+  /** 该玩家是否可单王单独打出（橐驼诅咒；服务端掉线兜底/测试用） */
+  soloJokerAllowed(playerId: string): boolean {
+    const p = this.players.find((x) => x.id === playerId);
+    return !!p && !!this.roles.get(p.roleId)?.soloJoker;
   }
 
   /** 取走未消费的事件（服务端广播用；start() 产生的事件也走这里） */
@@ -507,8 +520,8 @@ export class GameEngine {
         if (this.phase !== 'playing') return;
       }
     }
-    // 强制过（技能效果）
-    if (this.forcedPass.has(id)) {
+    // 强制过（技能效果）；红楼梦（地坛）禁出玩家同样轮到他自动过
+    if (this.forcedPass.has(id) || this.activeBan.has(id)) {
       this.forcedPass.delete(id);
       this.emit({ type: 'passed', playerId: id });
       this.passCount++;
@@ -727,8 +740,15 @@ export class GameEngine {
     if (
       this.tableCombo &&
       !this.eliminated.has(selfId) &&
+      !this.activeBan.has(selfId) &&
       this.roles.get(this.players.find((p) => p.id === selfId)!.roleId)?.canSelfFollow &&
-      listPlayable(this.hands.get(selfId)!, this.tableCombo, this.cfg, this.orderReversed()).length > 0
+      listPlayable(
+        this.hands.get(selfId)!,
+        this.tableCombo,
+        this.cfg,
+        this.orderReversed(),
+        this.soloJokerAllowed(selfId)
+      ).length > 0
     ) {
       this.suspend(selfId, null, null, [], () => {}, {
         kind: 'selfFollow',
@@ -818,6 +838,7 @@ export class GameEngine {
       (p) =>
         this.roles.get(p.roleId)?.canCutIn &&
         !this.eliminated.has(p.id) &&
+        !this.activeBan.has(p.id) &&
         p.id !== this.roundLastPlayerId &&
         // 响应限制（抽你）：非指定玩家不得插队响应
         !(this.tableResponderRestrict && p.id !== this.tableResponderRestrict)
@@ -832,9 +853,13 @@ export class GameEngine {
       return this.ok();
     }
     const playedSuits = new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit));
-    const qualifying = listPlayable(this.hands.get(cutter.id)!, this.tableCombo, this.cfg, this.orderReversed()).some(
-      (c) => c.cards.some((card) => !isJoker(card) && playedSuits.has(card.suit))
-    );
+    const qualifying = listPlayable(
+      this.hands.get(cutter.id)!,
+      this.tableCombo,
+      this.cfg,
+      this.orderReversed(),
+      this.soloJokerAllowed(cutter.id)
+    ).some((c) => c.cards.some((card) => !isJoker(card) && playedSuits.has(card.suit)));
     if (!qualifying) {
       this.advanceTurn();
       return this.ok();
@@ -905,14 +930,28 @@ export class GameEngine {
       delete mods.suppressDraw;
       suppress = true;
     }
+
     if (mods && Object.keys(mods).length === 0) this.pendingMods.delete(lastId);
+    // 地坛取而代之：被诅咒者本回合轮末获得牌权 → 诅咒者代替摸牌并起新回合
+    const seizedBy = this.pendingBan.get(lastId);
+    const takenOver = !!seizedBy && !this.eliminated.has(seizedBy);
+    const drawId = takenOver ? seizedBy : lastId;
     let drew = 0;
     if (!suppress && this.cfg.roundEnd.lastPlayerDraws && this.cfg.roundEnd.drawCount > 0) {
-      drew = this.drawCards(lastId, this.cfg.roundEnd.drawCount);
+      drew = this.drawCards(drawId, this.cfg.roundEnd.drawCount);
     }
     if (this.phase !== 'playing') return;
-    const leader = this.eliminated.has(lastId) ? this.nextSeat(lastId) : lastId;
-    this.emit({ type: 'round:ended', lastPlayerId: lastId, drew });
+    // 轮更：本轮判定成功的诅咒下一轮生效
+    this.activeBan = new Set(this.pendingBan.keys());
+    this.pendingBan.clear();
+    let leader = drawId;
+    if (this.eliminated.has(leader)) leader = this.nextSeat(leader);
+    // 防御：被诅咒者不得到牌权就跳过（取而代之者被淘汰等边缘），起牌者绝不能是禁出玩家
+    if (this.activeBan.has(leader)) {
+      const alt = this.players.find((p) => !this.eliminated.has(p.id) && !this.activeBan.has(p.id));
+      if (alt) leader = alt.id;
+    }
+    this.emit({ type: 'round:ended', lastPlayerId: lastId, drew, ledBy: takenOver ? seizedBy : undefined });
     this.startRound(leader);
   }
 
@@ -1027,6 +1066,8 @@ export class GameEngine {
     if (hand.length > 0) this.discarded.push(...hand);
     this.pendingMods.delete(playerId);
     this.forcedPass.delete(playerId);
+    this.activeBan.delete(playerId);
+    this.pendingBan.delete(playerId);
     this.emit({ type: 'player:eliminated', playerId, reason });
     this.passCount = Math.min(this.passCount, Math.max(0, this.activeCount() - 1));
     if (this.activeCount() === 1) {
@@ -1228,6 +1269,7 @@ export class GameEngine {
       flipCountThisRound: () => engine.orderFlipCount,
       discardFromHand: (id, cardIds) => engine.discardFromHand(id, cardIds),
       retagTable: (rank) => engine.retagTable(rank),
+      curseNextRound: (targetId) => engine.curseNextRound(playerId, targetId),
     };
   }
 
@@ -1258,6 +1300,15 @@ export class GameEngine {
     // label 同步重写为改点后的牌型（快照里桌面主显新点数；实体牌不变）
     this.tableCombo = relabelCombo(this.tableCombo, rank as Rank, this.orderReversed());
     this.tableRankNote = { rank };
+  }
+
+  /** 地坛（橐驼）：诅咒目标玩家下一轮不得出牌（自动过、不能起牌/插队/狂吠）；
+   *  若其本回合轮末获得牌权，由诅咒者取而代之（摸牌 + 起新回合）。轮末生效、下轮结束清除。 */
+  private curseNextRound(bannerId: string, targetId: string): void {
+    if (targetId === bannerId) return;
+    const target = this.players.find((p) => p.id === targetId);
+    if (!target || this.eliminated.has(targetId)) return;
+    this.pendingBan.set(targetId, bannerId);
   }
 
   /** 手牌指定牌 → 弃牌堆（隐匿重铸等） */
@@ -1348,7 +1399,10 @@ export class GameEngine {
 
   /** 起牌死锁守卫：可起牌的合法组合（beforePlay 干跑否决计为不可起） */
   private legalLeadCombos(playerId: string): Combo[] {
-    return this.playableNotVetoed(playerId, listPlayable(this.hands.get(playerId)!, null, this.cfg, this.orderReversed()));
+    return this.playableNotVetoed(
+      playerId,
+      listPlayable(this.hands.get(playerId)!, null, this.cfg, this.orderReversed(), this.soloJokerAllowed(playerId))
+    );
   }
 
   /** 可合法响应的组合：基础可管且未被 beforePlay 干跑否决（技能否决后允许过） */
@@ -1357,7 +1411,13 @@ export class GameEngine {
     if (this.tableResponderRestrict && playerId !== this.tableResponderRestrict) return [];
     return this.playableNotVetoed(
       playerId,
-      listPlayable(this.hands.get(playerId)!, this.tableCombo, this.cfg, this.orderReversed())
+      listPlayable(
+        this.hands.get(playerId)!,
+        this.tableCombo,
+        this.cfg,
+        this.orderReversed(),
+        this.soloJokerAllowed(playerId)
+      )
     );
   }
 
@@ -1392,6 +1452,7 @@ export class GameEngine {
     if (finishSpecial) return this.orderReversed() ? '不能以单 3/对 3 打完手牌（倒序禁止收尾）' : '不能以单 2/对 2 打完手牌';
     const rev = this.orderReversed();
     const t = this.tableCombo!;
+    if (t.type === 'singleJoker') return '只有炸弹能压住王（橐驼诅咒：单王点数无穷）';
     if (t.type === 'bomb') {
       if (combo.type !== 'bomb') return '只有炸弹能压住炸弹';
       return rev ? '炸弹张数或点数不够大（倒序同张数比点相反）' : '炸弹张数或点数不够大';

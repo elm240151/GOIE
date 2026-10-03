@@ -790,6 +790,127 @@ describe('技能询问（修勾）', () => {
   });
 });
 
+/** 固定手牌 n 人局（橐驼专用）：房主 = 橐驼，其余 = 阿毛/首席蛋神（无被动干扰）。
+ *  hands[i] 为各玩家基础牌（deck 下标）；fills[i] 为目标总张数（≤20），
+ *  不足部分从 deck 下标 fillFrom 起往上填。牌堆顶 = 最大未用下标：
+ *  填充总槽数恰好 = fillFrom..161 的张数时，顶 = fillFrom − 1
+ *  （如 fillFrom=122 → 顶 = 121 = 第三副牌 ♥3，供地坛判定成功）。 */
+function mkGuoSetup(
+  hands: number[][],
+  fills: number[],
+  fillFrom: number,
+  startIdx = 0
+): { manager: RoomManager; sockets: FakeSocket[]; ids: string[]; secrets: Record<string, string>; code: string } {
+  const registry: RoleRegistry = new Map(listRoles().map((r) => [r.id, r]));
+  const deck = buildDeck(3);
+  const padded = hands.map((h) => [...h]);
+  const used = new Set<number>(hands.flat());
+  let next = fillFrom;
+  for (let i = 0; i < padded.length; i++) {
+    while (padded[i]!.length < fills[i]!) {
+      while (used.has(next)) next++;
+      padded[i]!.push(next);
+      used.add(next);
+    }
+  }
+  const cards = padded.map((h) => h.map((id) => deck[id]!));
+  const factory: RoomOptions['engineFactory'] = ({ players }) =>
+    new GameEngine(defaultRules, players, {
+      rng: mulberry32(1),
+      startPlayerId: players[startIdx]!.id,
+      roles: registry,
+      scores: {},
+      handsOverride: Object.fromEntries(players.map((p, i) => [p.id, cards[i]!])),
+    });
+  const mgr = new RoomManager({
+    roles: registry,
+    scoreStore: new MemoryScoreStore(),
+    autoPassMs: 30_000,
+    engineFactory: factory,
+  });
+  const sockets = Array.from({ length: hands.length }, (_, i) => mkSocket(`s${i}`));
+  const { code, playerId, secret } = mgr.create('房主', sockets[0]!);
+  const ids = [playerId];
+  const secrets: Record<string, string> = { [playerId]: secret };
+  for (let i = 1; i < hands.length; i++) {
+    const r = mgr.join(code, `玩家${i + 1}`, sockets[i]!);
+    ids.push(r.playerId);
+    secrets[r.playerId] = r.secret;
+  }
+  mgr.selectRole(sockets[0]!.id, 'guo-tt');
+  for (let i = 1; i < sockets.length; i++) mgr.selectRole(sockets[i]!.id, i % 2 === 1 ? 'flashpoint' : 'cs-champion');
+  for (const s of sockets) mgr.setReady(s.id, true);
+  return { manager: mgr, sockets, ids, secrets, code };
+}
+
+describe('技能询问（橐驼）', () => {
+  it('地坛：下家出顺子 → 询问直达橐驼 → 判定成功诅咒广播 → 轮末取而代之摸牌起牌', () => {
+    // 3 人局把牌堆顶推到第三副牌 ♥3（121）：橐驼 ♠345♠9；玩家2 ♥345♥6 先手出顺子
+    const s = mkGuoSetup([[0, 1, 2, 6], [13, 14, 15, 16], [39]], [19, 20, 10], 122, 1);
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[1]!.id, [13, 14, 15]); // 玩家2 出 ♥345 → 地坛询问直达橐驼
+    const mid = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid.pendingAsk?.playerId).toBe(s.ids[0]); // 询问的是橐驼，不是出牌者
+    const ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.kind).toBe('confirm');
+    expect(ask.prompt).toContain('地坛');
+    expect(ask.prompt).toContain('玩家2');
+    // 同意 → 判定牌 ♥3 与顺子同花色 → 成功
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'yes' });
+    expect(emittedEvents(s.sockets[0]!).some((e) => e.type === 'skill:triggered' && e.skillId === 'di-tan' && /成功/.test(e.text))).toBe(true);
+    let snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.revealed).toHaveLength(0); // 判定牌已弃置
+    expect(snap.cursedPlayerIds).toEqual([s.ids[1]]); // 诅咒已标记（含 pending，判定成功即广播）
+    // 其余人全过 → 轮末玩家2 获牌权 → 橐驼取而代之（摸牌 + 起牌）
+    s.manager.pass(s.sockets[2]!.id);
+    s.manager.pass(s.sockets[0]!.id);
+    expect(emittedEvents(s.sockets[1]!).some((e) => e.type === 'round:ended' && e.lastPlayerId === s.ids[1] && e.ledBy === s.ids[0] && e.drew === 1)).toBe(true);
+    snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.turnPlayerId).toBe(s.ids[0]); // 橐驼起牌
+    expect(snap.cursedPlayerIds).toEqual([s.ids[1]]); // 诅咒生效广播
+    expect(snap.players.find((p) => p.id === s.ids[0])!.handCount).toBe(20); // 19 + 摸 1
+    expect(snap.players.find((p) => p.id === s.ids[1])!.handCount).toBe(17); // 没摸（20 − 3）
+    // 橐驼起单 9 → 玩家2 被禁自动过 → 轮到玩家3
+    s.manager.play(s.sockets[0]!.id, [6]);
+    snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.turnPlayerId).toBe(s.ids[2]);
+  });
+
+  it('地坛：弃权不消耗（下一轮再问）；判定翻到王 → 失败不诅咒', () => {
+    const s = mkGuoSetup([[0, 1, 2], [13, 14, 15, 16, 17, 18, 19]], [3, 7], 80, 1); // 牌堆顶 = 大王
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[1]!.id, [13, 14, 15]); // ♥345 → 询问
+    let ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.prompt).toContain('地坛');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'decline' }); // 弃权
+    s.manager.pass(s.sockets[0]!.id); // 橐驼压不了 → 轮末玩家2 摸牌起牌
+    // 下一轮再出顺子：弃权未消耗 → 仍询问；同意 → 翻到小王 → 失败
+    s.manager.play(s.sockets[1]!.id, [16, 17, 18]); // ♥678
+    ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.prompt).toContain('地坛');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'yes' });
+    expect(emittedEvents(s.sockets[0]!).some((e) => e.type === 'skill:triggered' && e.skillId === 'di-tan' && /失败/.test(e.text))).toBe(true);
+    const snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.cursedPlayerIds).toEqual([]); // 失败不诅咒
+    expect(snap.revealed).toHaveLength(0); // 判定牌已弃置
+  });
+
+  it('诅咒单王：压单 2 → 桌面 singleJoker 广播 → 对方压不了 → 橐驼轮末起牌', () => {
+    const s = mkGuoSetup([[52, 6], [12, 13]], [2, 2], 80, 1); // 橐驼 [小王,♠9]；玩家2 [♠2,♥3] 先手
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[1]!.id, [12]); // 玩家2 起单 2
+    s.manager.play(s.sockets[0]!.id, [52]); // 橐驼单王压之
+    const snap = lastEmit<GameSnapshot>(s.sockets[1]!, SERVER_EVENTS.snapshot)!; // 对手视角也看到
+    expect(snap.table?.type).toBe('singleJoker');
+    expect(snap.table?.label).toBe('王');
+    expect(emittedEvents(s.sockets[1]!).some((e) => e.type === 'cards:played' && e.playerId === s.ids[0] && e.combo.type === 'singleJoker')).toBe(true);
+    // 玩家2 无炸弹压不了 → 轮末橐驼摸牌起牌
+    s.manager.pass(s.sockets[1]!.id);
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.turnPlayerId).toBe(s.ids[0]);
+  });
+});
+
 describe('重连与掉线兜底', () => {
   it('重连：secret 校验并恢复；掉线超时自动过', () => {
     vi.useFakeTimers();
