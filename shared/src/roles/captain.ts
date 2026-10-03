@@ -141,10 +141,15 @@ const captain: RoleDef = {
         st.zwUsed = true; // 弃权即消耗
         return;
       }
-      // 阶段一确认：问压牌者补打一张（只给满足条件的牌）
+      // 阶段一确认：问压牌者补打一张（只给满足条件的牌）；
+      // 留 X 禁止收尾：压牌者只剩一张且是特殊点数（正序 2/倒序 3）→ 不可补打（防空手僵尸态）
       const beater = ctx.game.roundLastPlayerId()!;
       st.zwBeater = beater;
-      const valid = ctx.game.handOf(beater).filter((c) => matchesRankOrSuit(c, ctx.game.table()!));
+      const hand = ctx.game.handOf(beater);
+      const special = ctx.game.orderReversed() ? 3 : 15;
+      const valid = hand.filter(
+        (c) => matchesRankOrSuit(c, ctx.game.table()!) && !(hand.length === 1 && c.rank === special)
+      );
       return {
         ok: true,
         ask: {

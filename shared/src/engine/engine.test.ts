@@ -66,24 +66,28 @@ describe('GameEngine 游戏循环', () => {
           expect(result.ok).toBe(true);
           const snap0 = engine.snapshotFor(players[0]!.id);
           if (snap0.phase === 'finished') {
-            // 恰好一个赢家
-            expect(snap0.winnerId).not.toBeNull();
-            // 赢家手牌为 0；留2规则下赢家可能是唯一幸存者（其余全被淘汰）
-            const winner = snap0.players.find((p) => p.id === snap0.winnerId)!;
-            if (winner.handCount !== 0) {
-              expect(snap0.players.filter((p) => p.id !== snap0.winnerId).every((p) => p.eliminated)).toBe(true);
+            const deltas = snap0.scoreDeltas!;
+            if (snap0.winnerId === null) {
+              // 留 2 禁止收尾：全员只剩单 2/纯王时无人能起牌 → 流局（不记分、手牌都只剩 ≤2 张）
+              for (const p of snap0.players) expect(p.handCount).toBeLessThanOrEqual(2);
+              for (const p of snap0.players) expect(deltas[p.id]).toBe(0);
+            } else {
+              // 赢家手牌为 0；留2规则下赢家可能是唯一幸存者（其余全被淘汰）
+              const winner = snap0.players.find((p) => p.id === snap0.winnerId)!;
+              if (winner.handCount !== 0) {
+                expect(snap0.players.filter((p) => p.id !== snap0.winnerId).every((p) => p.eliminated)).toBe(true);
+              }
+              // 3人局：赢家+2、输家各-1
+              if (n === 3) {
+                for (const p of snap0.players) {
+                  expect(deltas[p.id]).toBe(p.id === snap0.winnerId ? 2 : -1);
+                }
+              }
             }
             // 零和
-            const deltas = snap0.scoreDeltas!;
             let sum = 0;
             for (const id of players.map((p) => p.id)) sum += deltas[id]!;
             expect(sum).toBe(0);
-            // 3人局：赢家+2、输家各-1
-            if (n === 3) {
-              for (const p of snap0.players) {
-                expect(deltas[p.id]).toBe(p.id === snap0.winnerId ? 2 : -1);
-              }
-            }
             // 牌守恒：手牌 + 桌面 + 牌堆 + 弃牌堆 = 162
             expect(totalCards(snap0)).toBe(162);
             // 累计分更新
@@ -142,27 +146,39 @@ describe('GameEngine 游戏循环', () => {
     expect(snap.winnerId).toBe('p1');
   });
 
-  it('留2规则：最后打出单2/对2算输（淘汰继续），2炸与王炸正常获胜', () => {
+  it('留2规则：以单2/对2（含王补）打完手牌被禁止，玩家留在局中不判负', () => {
     const deck = buildDeck(3);
     const twos = (n: number) => deck.filter((c) => c.rank === 15).slice(0, n);
+    const threes = (n: number) => deck.filter((c) => c.rank === 3).slice(0, n);
+    const fours = (n: number) => deck.filter((c) => c.rank === 4).slice(0, n);
     const jokers = deck.filter((c) => c.rank === 16 || c.rank === 17);
 
-    // 单2：p0 出完即判负，2人局 p1 唯一幸存获胜
-    let { engine } = mkEngine(2, { hands: { p0: [twos(1)[0]!], p1: [deck[0]!] }, startPlayerId: 'p0' });
-    expect(engine.playCards('p0', engine.snapshotFor('p0').players[0]!.hand!.map((c) => c.id)).ok).toBe(true);
+    // 单2 打完手牌 → 拒绝（跟牌者只剩一张 2）
+    let { engine } = mkEngine(2, { hands: { p0: [twos(1)[0]!], p1: [...threes(1), ...fours(1)] }, startPlayerId: 'p1' });
+    expect(engine.playCards('p1', [engine.snapshotFor('p1').players[1]!.hand![0]!.id]).ok).toBe(true); // p1 起单3
+    let r = engine.playCards('p0', engine.snapshotFor('p0').players[0]!.hand!.map((c) => c.id));
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).toContain('不能以单 2/对 2 打完手牌');
     let snap = engine.snapshotFor('p0');
-    expect(snap.phase).toBe('finished');
-    expect(snap.winnerId).toBe('p1');
-    expect(snap.players[0]!.eliminated).toBe(true);
-    expect(snap.scoreDeltas!.p0).toBe(-1);
-    expect(snap.scoreDeltas!.p1).toBe(1);
+    expect(snap.phase).toBe('playing');
+    expect(snap.players[0]!.eliminated).toBe(false); // 不判负，留在局中
+    expect(snap.players[0]!.handCount).toBe(1);
 
-    // [2, 王] 也算对2 → 判负
-    engine = mkEngine(2, { hands: { p0: [twos(1)[0]!, jokers[0]!], p1: [deck[0]!] }, startPlayerId: 'p0' }).engine;
-    expect(engine.playCards('p0', engine.snapshotFor('p0').players[0]!.hand!.map((c) => c.id)).ok).toBe(true);
-    expect(engine.snapshotFor('p0').winnerId).toBe('p1');
+    // 对2 打完手牌 → 拒绝
+    engine = mkEngine(2, { hands: { p0: [...twos(2)], p1: [...threes(2), ...fours(1)] }, startPlayerId: 'p1' }).engine;
+    expect(engine.playCards('p1', engine.snapshotFor('p1').players[1]!.hand!.slice(0, 2).map((c) => c.id)).ok).toBe(true); // 对3
+    r = engine.playCards('p0', engine.snapshotFor('p0').players[0]!.hand!.map((c) => c.id));
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).toContain('不能以单 2/对 2 打完手牌');
 
-    // 2炸（3 张 2）：正常获胜
+    // [2, 王] 也算对2 → 拒绝
+    engine = mkEngine(2, { hands: { p0: [twos(1)[0]!, jokers[0]!], p1: [...threes(2), ...fours(1)] }, startPlayerId: 'p1' }).engine;
+    expect(engine.playCards('p1', engine.snapshotFor('p1').players[1]!.hand!.slice(0, 2).map((c) => c.id)).ok).toBe(true);
+    r = engine.playCards('p0', engine.snapshotFor('p0').players[0]!.hand!.map((c) => c.id));
+    expect(r.ok).toBe(false);
+    expect((r as { reason: string }).reason).toContain('不能以单 2/对 2 打完手牌');
+
+    // 2炸（3 张 2）：不受影响，正常获胜
     engine = mkEngine(2, { hands: { p0: [...twos(3)], p1: [deck[0]!] }, startPlayerId: 'p0' }).engine;
     expect(engine.playCards('p0', engine.snapshotFor('p0').players[0]!.hand!.map((c) => c.id)).ok).toBe(true);
     expect(engine.snapshotFor('p0').winnerId).toBe('p0');
@@ -170,22 +186,56 @@ describe('GameEngine 游戏循环', () => {
     // 纯王组合是结构性非法（王炸不存在），无此情形
   });
 
-  it('留2规则：3人局判负后牌局继续，单2 留在桌面轮到下家', () => {
+  it('留2规则：只剩单2 的起牌者死锁守卫自动过，不判负继续在局中', () => {
+    const deck = buildDeck(3);
+    const twos = (n: number) => deck.filter((c) => c.rank === 15).slice(0, n);
+    const hands = { p0: [twos(1)[0]!], p1: [...deck.filter((c) => c.rank === 3).slice(0, 1)] };
+    const { engine } = mkEngine(2, { hands, startPlayerId: 'p0' });
+    // p0 无任何可起牌型 → 自动过，p1 起牌并出完获胜
+    const snap = engine.snapshotFor('p1');
+    expect(snap.phase).toBe('playing');
+    expect(snap.turnPlayerId).toBe('p1');
+    expect(engine.playCards('p1', engine.snapshotFor('p1').players[1]!.hand!.map((c) => c.id)).ok).toBe(true);
+    const end = engine.snapshotFor('p1');
+    expect(end.phase).toBe('finished');
+    expect(end.winnerId).toBe('p1');
+    expect(end.players[0]!.eliminated).toBe(false); // 留2者不判负
+    expect(end.players[0]!.handCount).toBe(1);
+    expect(end.scoreDeltas!.p0).toBe(-1);
+    expect(end.scoreDeltas!.p1).toBe(1);
+  });
+
+  it('留2规则：3人局多人只剩单2/纯王由死锁守卫跳过，能起牌者继续', () => {
+    const deck = buildDeck(3);
+    const byRank = (r: number, n: number) => deck.filter((c) => c.rank === r).slice(0, n);
+    const hands = {
+      p0: [byRank(15, 1)[0]!], // 单2 无法起牌
+      p1: [byRank(16, 1)[0]!, byRank(17, 1)[0]!], // 纯王无法起牌
+      p2: [byRank(3, 1)[0]!, ...byRank(4, 4)],
+    };
+    const { engine } = mkEngine(3, { hands, startPlayerId: 'p0' });
+    const snap = engine.snapshotFor('p2');
+    expect(snap.phase).toBe('playing'); // 不流局（p2 可起牌）
+    expect(snap.turnPlayerId).toBe('p2');
+    expect(snap.players[0]!.eliminated).toBe(false); // 留2者不判负
+    expect(snap.players[0]!.handCount).toBe(1);
+    expect(snap.players[1]!.eliminated).toBe(false);
+    expect(snap.table).toBeNull(); // 前面的人都是死锁自动过，未出牌
+  });
+
+  it('留2规则：全员只剩单2 → 流局（无人能起牌，不记分）', () => {
     const deck = buildDeck(3);
     const byRank = (r: number, n: number) => deck.filter((c) => c.rank === r).slice(0, n);
     const hands = {
       p0: [byRank(15, 1)[0]!],
-      p1: [byRank(16, 1)[0]!, byRank(17, 1)[0]!], // 王炸可压单2
-      p2: [byRank(3, 1)[0]!, ...byRank(4, 4)],
+      p1: [byRank(15, 2)[0]!],
+      p2: [byRank(15, 3)[0]!],
     };
     const { engine } = mkEngine(3, { hands, startPlayerId: 'p0' });
-    expect(engine.playCards('p0', hands.p0.map((c) => c.id)).ok).toBe(true);
-    const snap = engine.snapshotFor('p2');
-    expect(snap.phase).toBe('playing'); // 牌局继续
-    expect(snap.players[0]!.eliminated).toBe(true); // p0 判负淘汰
-    expect(snap.players[0]!.handCount).toBe(0);
-    expect(snap.table?.rank).toBe(15); // 单2 留在桌面待压
-    expect(snap.turnPlayerId).toBe('p1'); // 轮到下家
+    const snap = engine.snapshotFor('p0');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBeNull();
+    expect(snap.scoreDeltas).toEqual({ p0: 0, p1: 0, p2: 0 });
   });
 
   it('纯王手牌起牌者：自动过，下家起牌（死锁守卫）', () => {
@@ -433,6 +483,35 @@ describe('框架：淘汰 / 手牌上限 / 询问挂起 / 插队 / 翻牌池', (
     expect(d.ok).toBe(true);
     expect(e2.snapshotFor('p1').turnPlayerId).toBe('p1');
     expect(e2.snapshotFor('p1').table?.rank).toBe(3);
+  });
+
+  it('洄游切换：插队出牌同样计一次切换（flipsOrderOnPlay + canCutIn）', () => {
+    const flipcut = mkRole('flipcut', { flipsOrderOnPlay: true, canCutIn: true });
+    const sameSuit5 = deck.filter((c) => c.rank === 5 && c.suit === 0).slice(0, 2); // 两张黑桃5
+    const hands = {
+      p0: [byRank(4, 2)[0]!, byRank(4, 2)[1]!, ...byRank(9, 3)],
+      p1: byRank(13, 5),
+      p2: [...sameSuit5, ...byRank(10, 3)],
+    };
+    const { engine } = mkEngine(3, {
+      hands,
+      startPlayerId: 'p0',
+      roles: new Map([['flipcut', flipcut]]),
+      roleIds: { p2: 'flipcut' },
+    });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id]); // 起对4
+    expect(r.ok).toBe(true);
+    expect(engine.snapshotFor('p0').orderReversed).toBe(false); // 插队接受前尚未切换
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect(ask?.kind).toBe('cutIn');
+    const a = engine.resolveAsk('p2', { askId: ask!.askId!, choice: 'yes', cardIds: sameSuit5.map((c) => c.id) });
+    expect(a.ok).toBe(true);
+    const snap = engine.snapshotFor('p2');
+    expect(snap.orderReversed).toBe(true); // 插队者的物理出牌同样切换牌序
+    expect(snap.table?.rank).toBe(5); // 对5 压上
+    expect(snap.turnPlayerId).toBe('p0'); // 从插队者下家继续
+    const p0 = snap.players.find((p) => p.id === 'p0')!;
+    expect(p0.handCount).toBe(5 - 2 + 10); // 被响应者摸 X = 5+5 = 10
   });
 
   it('翻牌池守恒：未收尾的技能泄漏直接抛错；takeRevealed/discardRevealed 正常收尾', () => {

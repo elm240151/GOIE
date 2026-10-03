@@ -96,7 +96,7 @@ function runUntilFinished(setup: ReturnType<typeof setupRoom>): RoomState {
     const idx = setup.ids.indexOf(turnId);
     const mySnap = lastEmit<GameSnapshot>(setup.sockets[idx]!, SERVER_EVENTS.snapshot)!;
     const me = mySnap.players.find((p) => p.id === turnId)!;
-    const combos = listPlayable(me.hand!, mySnap.table, defaultRules);
+    const combos = listPlayable(me.hand!, mySnap.table, defaultRules, mySnap.orderReversed);
     if (combos.length === 0) {
       manager.pass(setup.sockets[idx]!.id);
       continue;
@@ -593,6 +593,109 @@ describe('技能询问（阿色）', () => {
     const r2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
     expect(r2.pendingAsk?.playerId).toBe(s.ids[0]);
     expect(lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!.prompt).toContain('5');
+  });
+});
+
+/** 固定手牌 2 人局（海棠专用）：海棠（房主）不先手，下家先出。
+ *  deck 下标（花色主序）：3♠=0 8♠=5 9♠=6 10♠=7 11♠=8 2♠=12 */
+function mkFishySetup(handA: number[], handB: number[]): ReturnType<typeof mkCaptainSetup> {
+  const registry: RoleRegistry = new Map(listRoles().map((r) => [r.id, r]));
+  const deck = buildDeck(3);
+  const pick = (ids: number[]) => ids.map((id) => deck[id]!);
+  const p0Hand = pick(handA);
+  const p1Hand = pick(handB);
+  const factory: RoomOptions['engineFactory'] = ({ players }) =>
+    new GameEngine(defaultRules, players, {
+      rng: mulberry32(1),
+      startPlayerId: players[1]!.id,
+      roles: registry,
+      scores: {},
+      handsOverride: { [players[0]!.id]: p0Hand, [players[1]!.id]: p1Hand },
+    });
+  const mgr = new RoomManager({
+    roles: registry,
+    scoreStore: new MemoryScoreStore(),
+    autoPassMs: 30_000,
+    engineFactory: factory,
+  });
+  const sockets = [mkSocket('s0'), mkSocket('s1')];
+  const { code, playerId, secret } = mgr.create('房主', sockets[0]!);
+  const ids = [playerId];
+  const secrets: Record<string, string> = { [playerId]: secret };
+  const r = mgr.join(code, '玩家2', sockets[1]!);
+  ids.push(r.playerId);
+  secrets[r.playerId] = r.secret;
+  mgr.selectRole(sockets[0]!.id, 'fishy');
+  mgr.selectRole(sockets[1]!.id, 'flashpoint');
+  for (const s of sockets) mgr.setReady(s.id, true);
+  return { manager: mgr, sockets, ids, secrets, code };
+}
+
+describe('技能询问（海棠）', () => {
+  it('隐匿：整轮未出牌 → 轮末询问 → 选牌重铸 → 弃一摸一', () => {
+    const s = mkFishySetup([6, 5], [0, 7]); // 海棠 [9♠,8♠]；下家 [3♠,10♠]
+    s.manager.startGame(s.sockets[0]!.id);
+    const snap0 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap0.turnPlayerId).toBe(s.ids[1]); // 下家先手
+    expect(snap0.orderReversed).toBe(false);
+    // 下家出 3♠ → 海棠过（9/8 压不了）→ 轮末隐匿询问直达海棠
+    s.manager.play(s.sockets[1]!.id, [0]);
+    s.manager.pass(s.sockets[0]!.id);
+    const mid = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid.pendingAsk?.playerId).toBe(s.ids[0]);
+    const ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.kind).toBe('confirm');
+    expect(ask.prompt).toContain('隐匿');
+    // 确认 → 选牌（1-1 张）
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'yes' });
+    const pickAsk = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(pickAsk.kind).toBe('pickCards');
+    expect(pickAsk.cards!.map((c) => c.id).sort()).toEqual([5, 6]);
+    // 弃 9♠ → 摸 1，轮末下家照常补摸
+    s.manager.useSkill(s.sockets[0]!.id, { askId: pickAsk.askId!, cardIds: [6] });
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.pendingAsk).toBeNull();
+    expect(after.players.find((p) => p.id === s.ids[0])!.handCount).toBe(2); // 8♠ + 摸 1
+    expect(after.discardCount).toBe(2); // 重铸弃 9♠ + 轮末桌面弃 3♠
+    expect(after.deckCount).toBe(156); // 158 - 隐匿摸 1 - 补摸 1
+    expect(after.turnPlayerId).toBe(s.ids[1]);
+    expect(after.orderReversed).toBe(false);
+  });
+
+  it('隐匿：超时自动弃权，不重铸直接补摸', () => {
+    vi.useFakeTimers();
+    const s = mkFishySetup([6, 5], [0, 7]);
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[1]!.id, [0]);
+    s.manager.pass(s.sockets[0]!.id);
+    const ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.kind).toBe('confirm');
+    vi.advanceTimersByTime(15_001); // 技能询问超时
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.pendingAsk).toBeNull();
+    expect(after.players.find((p) => p.id === s.ids[0])!.handCount).toBe(2);
+    expect(after.discardCount).toBe(1); // 只有轮末桌面弃 3♠
+    expect(after.deckCount).toBe(157);
+  });
+
+  it('洄游：出牌切换正↔倒随快照下发，轮末恢复正序', () => {
+    const s = mkFishySetup([8, 6], [7, 12]); // 海棠 [11♠,9♠]；下家 [10♠,2♠]
+    s.manager.startGame(s.sockets[0]!.id);
+    // 下家出 10♠ → 海棠压 11♠（正序判定）→ 切倒序
+    s.manager.play(s.sockets[1]!.id, [7]);
+    s.manager.play(s.sockets[0]!.id, [8]);
+    const snap = lastEmit<GameSnapshot>(s.sockets[1]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.orderReversed).toBe(true);
+    expect(snap.table?.rank).toBe(11);
+    // 下家 2♠ 倒序谁也压不了 → 过 → 轮末：海棠补摸（上一手是她）并起新轮，恢复正序
+    s.manager.pass(s.sockets[1]!.id);
+    const round2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(round2.orderReversed).toBe(false);
+    expect(round2.turnPlayerId).toBe(s.ids[0]);
+    // 海棠起 9♠ → 再切倒序
+    s.manager.play(s.sockets[0]!.id, [6]);
+    const snap2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap2.orderReversed).toBe(true);
   });
 });
 

@@ -1,6 +1,6 @@
 # 角色开发规范（★ 未来工作核心文件）
 
-**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。9 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
+**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。10 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
 
 ## RoleDef 接口（shared/src/roles/types.ts）
 
@@ -16,6 +16,7 @@ interface RoleDef {
   setup?(ctx: RoleSetupContext): unknown; // 角色私有状态：JSON 安全，随快照同步
   skillActions?: SkillActionDef[]; // 客户端技能按钮：{ skillId, when:'myTurn'|'following', label }，通用渲染
   canCutIn?: boolean;         // 可插队响应（无名）——引擎提供插队机制，角色只挂标志
+  flipsOrderOnPlay?: boolean; // 每次出牌（含插队，按物理出牌者计）切换一次牌序正↔倒（海棠洄游）；每轮开始恢复正序。挂上后引擎自动：本手按切换前顺序判定（先判后切）、切换后把桌面牌型按新牌序重新解析（倒序 rank = 最高点数，保证跨序比较用同一约定）、快照携带 orderReversed
 }
 ```
 
@@ -109,7 +110,7 @@ interface ActionMods {
 
 角色**永远不能**直接碰引擎结构，只能通过：
 
-- 只读：`cfg` `players()` `handOf(id)` `deckCount()` `table()` `turnPlayerId()` `roundLeaderId()` `phase()` `passCount()` `roundLastPlayerId()` `nextSeatOf(id, skip?)` `eliminated(id)` `activeCount()` `lastPlayWasCutIn()`
+- 只读：`cfg` `players()` `handOf(id)` `deckCount()` `table()` `turnPlayerId()` `roundLeaderId()` `phase()` `passCount()` `roundLastPlayerId()` `nextSeatOf(id, skip?)` `eliminated(id)` `activeCount()` `lastPlayWasCutIn()` `orderReversed()`（当前是否倒序）`flipCountThisRound()`（本轮内切换牌序角色的实际出牌次数，含插队；隐匿以此判断"一次也没出过"）
 - 受控操作：
   - `draw(playerId, n)`（原始摸牌，不吃钩子不吃 drawBonus）
   - `giveFrom(playerId, cardIds)`（移除指定牌）+ `giveTo(playerId, cards)`（塞牌，**必须配合 giveFrom**，角色作者自己保证来源合法）
@@ -120,8 +121,11 @@ interface ActionMods {
   - `attributeTable(ownerId)`（**桌面一手牌归属改写**，阿色再问：这手牌视作 ownerId 打出——tableOwner/轮末牌权/当前回合全部改到 ownerId，随后轮转从 ownerId 的下家继续；**先于其他角色的判定钩子执行**（角色 priority 设高，如 900），这样「视作谁打出」的判定才会落到新归属者身上；**出完即胜不受归属影响**——谁打完谁赢，引擎按物理出牌者判定（压牌者空手时角色直接不再问））
   - `setTableResponderRestrict(designatedId | null)`（**响应限制**，阿色抽你：当前桌面一手牌只有 designatedId 能响应——出牌/自动过候选/插队邀请/插队答案四处全部校验；被指定者淘汰/掉线时限制继续有效（无人能响应只能全过）；null 解除；桌面一手牌被压/轮末/新轮起牌自动清除，归属改写后需重新设置）
   - `playSideCard(playerId, cardId)`（**明置桌旁**，阿色再问补打：从手牌移除一张明置到桌旁，公开进快照 `tableSide`，随当前一手牌一起弃置；压牌者作答时用它，`handOf` 校验 + 自己校验合规性）
+  - `discardFromHand(playerId, cardIds)`（**静默弃置手牌**，海棠隐匿重铸：从手牌移除进弃牌堆，不发事件——快照 discardCount 与 announce 播报覆盖 UI；角色自行保证合法）
 
 未来需要新的改牌能力 = 在 ActionMods / facade 加一个字段，不动引擎核心。
+
+**倒序下的技能管牌判定**：角色钩子里做 canBeat/listPlayable 判定时一律传当前牌序 `ctx.game.orderReversed()`（flashpoint.ts 即此范式）；桌面 `table()` 的 rank 已按当前牌序解析，跨序混用约定会判错（引擎在切换者出牌后自动重解析桌面，普通出牌不重解析以免覆盖技能改写过的 combo——**带 flipsOrderOnPlay 的角色不要再用 modify 改写 combo**）。
 
 ## 模板（照抄改，以末席 肖亡为例）
 
@@ -159,7 +163,7 @@ const zecheng: RoleDef = {
 export default zecheng;
 ```
 
-## 已有 9 个角色（模板）
+## 已有 10 个角色（模板）
 
 | 文件 | 角色 | 技能 | 用到的机制 |
 |---|---|---|---|
@@ -172,6 +176,7 @@ export default zecheng;
 | patrick.ts | 第七席 圣帕特里克 | 无名 | canCutIn 引擎级插队 |
 | zecheng.ts | 末席 肖亡 | 观股 | onRoundEnd ask + revealTop + giveRevealed + suppressDraw |
 | captain.ts | 阿色 | 抽你 + 再问 | beforePlay/afterPlay/onRoundEnd 多阶段 ask + 响应限制 + 归属改写 + 明置边牌 |
+| fishy.ts | 海棠 | 洄游 + 隐匿 | flipsOrderOnPlay 引擎级牌序切换（含插队）+ onRoundEnd ask(priority 1000 先于整备类) + discardFromHand 重铸 |
 
 ## 新增角色的流程（每个角色照此执行）
 

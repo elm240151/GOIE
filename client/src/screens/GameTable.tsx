@@ -3,7 +3,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { defaultRules, getRole, parseCombo, type Card as CardT } from '@gdys/shared';
 import { useStore } from '../store';
 import { STR, TURN_SECONDS } from '../strings';
-import { beatReason, invalidReason } from '../beatHint';
+import { beatReason, finishHint, invalidReason } from '../beatHint';
 import Card from '../components/Card';
 import ComboBadge from '../components/ComboBadge';
 import Hand from '../components/Hand';
@@ -58,15 +58,17 @@ export default function GameTable() {
   const myHand: readonly CardT[] = me?.hand ?? [];
   const myPlay = myId ? roundPlays[myId] : undefined;
 
-  // 实时预览：所选牌 → parseCombo（与服务端同一套解析器）
+  // 实时预览：所选牌 → parseCombo（与服务端同一套解析器；倒序随快照）
+  const rev = snap?.orderReversed ?? false;
   const preview = useMemo(() => {
     const selected = myHand.filter((c) => selectedCardIds.includes(c.id));
     if (selected.length === 0) return { selected, combo: null, hint: null };
-    const combo = parseCombo(selected, defaultRules);
+    const combo = parseCombo(selected, defaultRules, rev);
     if (!combo) return { selected, combo: null, hint: invalidReason(selected) };
-    const warn = beatReason(combo, snap?.table ?? null);
+    const finish = finishHint(combo, myHand.length, rev);
+    const warn = finish ?? beatReason(combo, snap?.table ?? null, rev);
     return { selected, combo, hint: warn ? STR.game.beatWarn.replace('{hint}', warn) : null };
-  }, [myHand, selectedCardIds, snap?.table]);
+  }, [myHand, selectedCardIds, snap?.table, rev]);
 
   const isLeader = snap?.table === null;
   const finished = room?.phase === 'finished';
@@ -188,6 +190,9 @@ export default function GameTable() {
           </>
         ) : (
           <div className="table-empty">{finished ? '' : STR.game.tableEmpty}</div>
+        )}
+        {!finished && rev && (
+          <div className="order-badge" title="海棠洄游：整条牌序反转中">{STR.game.orderReversed}</div>
         )}
         <div className={`table-turn ${myTurn ? 'table-turn-me' : ''}`}>
           {finished

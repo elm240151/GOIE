@@ -35,6 +35,8 @@ export interface GameSnapshot {
   table: Combo | null;
   /** 明置桌旁的边牌（再问补打等：随当前一手牌一起弃置，公开） */
   tableSide: Card[];
+  /** 是否倒序（海棠洄游：出牌即切换，每轮恢复正序） */
+  orderReversed: boolean;
   turnPlayerId: string | null;
   roundLeaderId: string;
   winnerId: string | null;

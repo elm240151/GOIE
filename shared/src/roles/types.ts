@@ -136,6 +136,12 @@ export interface EngineFacade {
   setTableResponderRestrict(designatedId: string | null): void;
   /** 明置一张手牌到桌旁（阿色再问补打：随当前一手牌一起弃置） */
   playSideCard(playerId: string, cardId: number): void;
+  /** 当前是否倒序（海棠洄游切换后；角色压牌判定需据此镜像） */
+  orderReversed(): boolean;
+  /** 本轮内切换牌序角色（海棠）的实际出牌次数（隐匿：0 = 本回合尚未出牌） */
+  flipCountThisRound(): number;
+  /** 手牌指定牌 → 弃牌堆（隐匿重铸等） */
+  discardFromHand(playerId: string, cardIds: number[]): void;
 }
 
 export interface HookContext<S = unknown> {
@@ -220,6 +226,8 @@ export interface RoleDef {
   skillActions?: SkillActionDef[];
   /** 可插队响应（无名）——引擎提供插队机制，角色只挂标志 */
   canCutIn?: boolean;
+  /** 每次出牌（含插队，按物理出牌者）切换一次牌序正↔倒（海棠洄游）；每轮开始恢复正序 */
+  flipsOrderOnPlay?: boolean;
 }
 
 export type RoleRegistry = Map<string, RoleDef>;

@@ -55,6 +55,7 @@ export const STR = {
     beatWarn: '{hint}（技能可能豁免）',
     passed: '过',
     tableEmpty: '等待出牌',
+    orderReversed: '倒序',
     reconnect: '连接已断开，正在重连…',
     skillToast: '【{skill}】{text}',
     roundEndToast: '无人能管，{name} 摸 {n} 张继续出',

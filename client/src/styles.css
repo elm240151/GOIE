@@ -498,6 +498,7 @@ body {
   gap: 8px;
   min-height: 140px;
   padding: 8px;
+  position: relative;
 }
 .table-owner {
   font-size: 12px;
@@ -549,6 +550,30 @@ body {
   color: var(--gold);
   font-weight: 700;
   font-size: 15px;
+}
+
+/* 倒序徽标（海棠洄游：牌序反转中） */
+.order-badge {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #ffd9a0;
+  background: linear-gradient(135deg, rgba(140, 60, 20, 0.9), rgba(90, 35, 10, 0.9));
+  border: 1px solid rgba(255, 200, 140, 0.5);
+  border-radius: 999px;
+  padding: 2px 10px;
+  animation: order-pulse 1.6s ease-in-out infinite;
+}
+@keyframes order-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 4px rgba(255, 170, 90, 0.35);
+  }
+  50% {
+    box-shadow: 0 0 12px rgba(255, 170, 90, 0.75);
+  }
 }
 
 /* 公开判定/展示牌：逐张翻开的动画 */

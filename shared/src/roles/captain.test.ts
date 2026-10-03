@@ -435,6 +435,28 @@ describe('阿色（抽你/再问）', () => {
     expect(engine.snapshotFor('p0').turnPlayerId).toBe('p1');
   });
 
+  it('再问：压牌者只剩单2（留2禁止收尾）不再作为补打候选', () => {
+    const hands = {
+      p0: byRank(3, 5),
+      p1: [pick(4, 0), pick(15, 0)], // 压牌后只剩 2♠
+      p2: byRank(10, 5),
+    };
+    const engine = mkEngine(hands, { p0: captain });
+    startAsk(engine); // 开局整备：弃权
+    // 阿色出3 → p1 压4♠ → 再问 → 是 → 候选为空（2♠ 同花但补打即空手）
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
+    const r1 = engine.playCards('p1', [hands.p1[0]!.id]);
+    const ask = r1.ok ? (r1.pendingAsk as SkillAsk) : null;
+    const yes = engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'yes' });
+    const pickAsk = yes.ok ? (yes.pendingAsk as SkillAsk) : null;
+    expect(pickAsk?.cards).toHaveLength(0);
+    // 弃权 → 归属改写阿色
+    const d = engine.resolveAsk('p1', { askId: pickAsk!.askId!, choice: 'decline' });
+    expect(d.ok).toBe(true);
+    expect(d.ok && d.events.some((e) => e.type === 'table:attributed' && e.playerId === 'p0' && e.fromPlayerId === 'p1')).toBe(true);
+    expect(total(engine)).toBe(162);
+  });
+
   it('matchesRankOrSuit：王按实际代表点数与包含花色（小王双黑、大王双红）', () => {
     // 对K（K♠ + 小王）：小王代表 K
     const pairK = parseCombo([pick(13, 0), joker(false)], defaultRules)!;

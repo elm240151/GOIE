@@ -14,7 +14,7 @@ export function autoPlayFallback(engine: GameEngine, playerId: string, cfg: Rule
   const snap = engine.snapshotFor(playerId);
   const hand = snap.players.find((p) => p.id === playerId)?.hand ?? null;
   if (!hand) return null;
-  const combos = listPlayable(hand, snap.table, cfg);
+  const combos = listPlayable(hand, snap.table, cfg, snap.orderReversed);
   if (combos.length === 0) return null;
   return engine.playCards(playerId, combos[0]!.cards.map((c) => c.id));
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { JOKER_BIG, JOKER_SMALL, type Card, type CardRank, type Rank } from '../cards';
+import { JOKER_BIG, JOKER_SMALL, RANK_2, type Card, type CardRank, type Rank } from '../cards';
 import { defaultRules } from '../config';
 import { canBeat, comboKey, listPlayable, parseCombo, type Combo } from './combos';
 
@@ -329,6 +329,183 @@ describe('listPlayable 可出牌枚举', () => {
       const leading = listPlayable(hand, null, cfg);
       for (const c of leading) {
         const reparsed = parseCombo(c.cards, cfg);
+        expect(reparsed).not.toBeNull();
+        expect(comboKey(reparsed!)).toBe(comboKey(c));
+      }
+    }
+  });
+
+  it('留2禁止收尾：正序打出后手牌清空的单2/对2被排除', () => {
+    // 只剩单2：无法起牌（死锁守卫自动过）
+    expect(listPlayable([mk(15)], null, cfg)).toEqual([]);
+    // 只剩单2：跟牌同样无候选
+    expect(listPlayable([mk(15)], parse([3])!, cfg)).toEqual([]);
+    // [2,2]：单2 可出（不空手），对2 被排除
+    const twoTwo = listPlayable([mk(15), mk(15)], null, cfg);
+    expect(twoTwo.map((c) => c.type)).toEqual(['single']);
+    // [2,王]：单2 可出（剩王），对2 被排除
+    const twoJoker = listPlayable([mk(15), W()], null, cfg);
+    expect(twoJoker.map((c) => c.type)).toEqual(['single']);
+    // 2炸（3 张 2）不受影响
+    const bomb = listPlayable([mk(15), mk(15), mk(15)], null, cfg);
+    expect(bomb.some((c) => c.type === 'bomb')).toBe(true);
+    // 非收尾单2/对2 正常：手牌还有别的牌
+    expect(listPlayable([mk(15), mk(7)], null, cfg).some((c) => c.type === 'single' && c.rank === 15)).toBe(true);
+    expect(listPlayable([mk(15), mk(15), mk(7)], null, cfg).some((c) => c.type === 'pair' && c.rank === 15)).toBe(true);
+  });
+});
+
+describe('倒序（海棠洄游）：整条牌序反转', () => {
+  const rev = true;
+  const parseR = (ranks: CardRank[]): Combo | null => parseCombo(ranks.map(mk), cfg, rev);
+  const beat = (combo: Combo | null, table: Combo | null) => canBeat(combo!, table, cfg, rev);
+
+  it('倒序顺子解析：543（起点 = 最高点）', () => {
+    const c = parseR([5, 4, 3]);
+    expectCombo(c, 'straight', 5, 3);
+    expect(c!.label).toBe('顺子 5-4-3');
+  });
+
+  it('倒序顺子 4,5,鬼=543（镜像：先向 3 延伸）', () => {
+    const c = parseR([4, 5, JOKER_SMALL]);
+    expectCombo(c, 'straight', 5, 3);
+    expect(c!.label).toBe('顺子 5-4-3');
+  });
+
+  it('倒序顺子 4,5,鬼,鬼=6543（向 3 延伸被 2 挡住，再向 A 延伸）', () => {
+    const c = parseR([4, 5, JOKER_SMALL, JOKER_BIG]);
+    expectCombo(c, 'straight', 6, 4);
+    expect(c!.label).toBe('顺子 6-5-4-3');
+  });
+
+  it('倒序顺子 A,K,鬼=AKQ（镜像：向 A 被挡住，向下延伸）', () => {
+    const c = parseR([14, 13, JOKER_SMALL]);
+    expectCombo(c, 'straight', 14, 3);
+    expect(c!.label).toBe('顺子 A-K-Q');
+  });
+
+  it('倒序顺子含 2 非法', () => {
+    expect(parseR([3, RANK_2, 4])).toBeNull();
+  });
+
+  it('倒序连对：5544（起点 = 最高点）', () => {
+    const c = parseR([5, 5, 4, 4]);
+    expectCombo(c, 'consecutivePairs', 5, 4);
+    expect(c!.label).toBe('连对 5544');
+  });
+
+  it('倒序连对 6,6,5,5,鬼,鬼=665544（镜像：先向 3 延伸）', () => {
+    const c = parseR([6, 6, 5, 5, JOKER_SMALL, JOKER_BIG]);
+    expectCombo(c, 'consecutivePairs', 6, 6);
+    expect(c!.label).toBe('连对 665544');
+  });
+
+  it('倒序连对 4,4,鬼,鬼=炸弹 4×4（同点数优先判炸，与正序一致）', () => {
+    expectCombo(parseR([4, 4, JOKER_SMALL, JOKER_BIG]), 'bomb', 4, 4);
+  });
+
+  it('倒序单张：恰好小一级（5 只能 4 压）', () => {
+    expect(beat(parseR([4]), parseR([5]))).toBe(true);
+    expect(beat(parseR([6]), parseR([5]))).toBe(false);
+    expect(beat(parseR([10]), parseR([5]))).toBe(false);
+  });
+
+  it('倒序单张：3 压一切但 3 压不了 3', () => {
+    expect(beat(parseR([3]), parseR([9]))).toBe(true);
+    expect(beat(parseR([3]), parseR([3]))).toBe(false);
+  });
+
+  it('倒序单张：2 谁也压不了，A 响应 2', () => {
+    expect(beat(parseR([14]), parseR([15]))).toBe(true); // 倒序用 A 响应 2
+    expect(beat(parseR([15]), parseR([9]))).toBe(false); // 2 最小压不了任何牌
+    expect(beat(parseR([15]), parseR([15]))).toBe(false);
+  });
+
+  it('倒序对子：对3 压一切对子、对3 只有炸压', () => {
+    expect(beat(parseR([3, 3]), parseR([9, 9]))).toBe(true);
+    expect(beat(parseR([3, 3]), parseR([3, 3]))).toBe(false);
+    expect(beat(parseR([9, 9]), parseR([3, 3]))).toBe(false);
+    expect(beat(parseR([14, 14]), parseR([15, 15]))).toBe(true); // 对A 响应对2
+    expect(beat(parseR([3, 3, 3]), parseR([3, 3]))).toBe(true); // 只有炸能压对3
+  });
+
+  it('倒序炸弹：张数优先不变、同张数比点反转（3炸最强/2炸最弱）', () => {
+    expect(beat(parseR([3, 3, 3]), parseR([9, 9, 9]))).toBe(true);
+    expect(beat(parseR([9, 9, 9]), parseR([3, 3, 3]))).toBe(false);
+    expect(beat(parseR([15, 15, 15]), parseR([9, 9, 9]))).toBe(false);
+    expect(beat(parseR([9, 9, 9]), parseR([3, 3, 3, 3]))).toBe(false); // 张数优先
+    expect(beat(parseR([9, 9, 9, 9]), parseR([3, 3, 3]))).toBe(true);
+    expect(beat(parseR([9, 9, 9]), parseR([5, 5]))).toBe(true); // 炸压一切不变
+  });
+
+  it('倒序顺子：654/765 接 543，876 不接（窗口镜像）', () => {
+    expect(beat(parseR([6, 5, 4]), parseR([5, 4, 3]))).toBe(true);
+    expect(beat(parseR([7, 6, 5]), parseR([5, 4, 3]))).toBe(true);
+    expect(beat(parseR([8, 7, 6]), parseR([5, 4, 3]))).toBe(false);
+    expect(beat(parseR([5, 4, 3]), parseR([6, 5, 4]))).toBe(false); // 最高点没更高
+    expect(beat(parseR([4, 3, 5]), parseR([5, 4, 3]))).toBe(false); // 长度不同压不了
+  });
+
+  it('倒序连对：4433 只能被 5544 接（窗口镜像，与正序 3344 只被 4455 接一致）', () => {
+    expect(beat(parseR([5, 5, 4, 4]), parseR([4, 4, 3, 3]))).toBe(true);
+    expect(beat(parseR([6, 6, 5, 5]), parseR([4, 4, 3, 3]))).toBe(false);
+    expect(beat(parseR([7, 7, 6, 6]), parseR([4, 4, 3, 3]))).toBe(false);
+  });
+
+  it('倒序：跨牌型判定不变（单压不了对、非炸压不了炸）', () => {
+    expect(beat(parseR([4]), parseR([5, 5]))).toBe(false);
+    expect(beat(parseR([4, 4, 4]), parseR([3]))).toBe(true);
+    expect(beat(parseR([4]), parseR([3, 3, 3]))).toBe(false);
+  });
+
+  it('倒序枚举：跟单5 只能出单4 或单3', () => {
+    const hand = [mk(4), mk(3), mk(6), mk(9)];
+    const out = listPlayable(hand, parseR([5])!, cfg, rev);
+    expect(out.map((c) => `${c.type}:${c.rank}`)).toEqual(['single:4', 'single:3']);
+  });
+
+  it('倒序枚举：跟543 只能出654/765', () => {
+    const hand = [mk(6), mk(5), mk(4), mk(7), mk(6), mk(5), mk(8), mk(7), mk(6)];
+    const out = listPlayable(hand, parseR([5, 4, 3])!, cfg, rev);
+    expect(out.filter((c) => c.type === 'straight').map((c) => c.label)).toEqual(['顺子 6-5-4', '顺子 7-6-5']);
+  });
+
+  it('倒序枚举：跟炸弹3×5 只能更长或同长更小点数', () => {
+    const hand = [mk(3), mk(3), mk(3), mk(9), mk(9), mk(9), mk(9)];
+    const out = listPlayable(hand, parseR([5, 5, 5])!, cfg, rev);
+    expect(out.some((c) => c.type === 'bomb' && c.rank === 3 && c.length === 3)).toBe(true); // 3炸
+    expect(out.some((c) => c.type === 'bomb' && c.rank === 9 && c.length === 4)).toBe(true); // 更长
+    expect(out.some((c) => c.type === 'bomb' && c.rank === 9 && c.length === 3)).toBe(false); // 同长 9 比 5 弱
+  });
+
+  it('倒序禁止收尾：打出后手牌清空的单3/对3被排除', () => {
+    expect(listPlayable([mk(3)], null, cfg, rev)).toEqual([]);
+    expect(listPlayable([mk(3)], parseR([9])!, cfg, rev)).toEqual([]); // 跟牌同样无候选
+    const threeThree = listPlayable([mk(3), mk(3)], null, cfg, rev);
+    expect(threeThree.map((c) => c.type)).toEqual(['single']);
+    const threeJoker = listPlayable([mk(3), W()], null, cfg, rev);
+    expect(threeJoker.map((c) => c.type)).toEqual(['single']);
+    // 3炸 不受影响
+    expect(listPlayable([mk(3), mk(3), mk(3)], null, cfg, rev).some((c) => c.type === 'bomb')).toBe(true);
+    // 非收尾单3/对3 正常
+    expect(listPlayable([mk(3), mk(7)], null, cfg, rev).some((c) => c.type === 'single' && c.rank === 3)).toBe(true);
+    // 倒序下留 2 不再禁止：只剩单2 可起牌
+    expect(listPlayable([mk(15)], null, cfg, rev).map((c) => c.type)).toEqual(['single']);
+  });
+
+  it('倒序往返性质：枚举出的每个组合都能按倒序重新解析为相同规范形', () => {
+    let seed = 777;
+    const rnd = () => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed / 0x7fffffff;
+    };
+    const ranks: CardRank[] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+    for (let iter = 0; iter < 200; iter++) {
+      const size = 3 + Math.floor(rnd() * 15);
+      const hand: Card[] = [];
+      for (let i = 0; i < size; i++) hand.push(mk(ranks[Math.floor(rnd() * ranks.length)]!));
+      for (const c of listPlayable(hand, null, cfg, rev)) {
+        const reparsed = parseCombo(c.cards, cfg, rev);
         expect(reparsed).not.toBeNull();
         expect(comboKey(reparsed!)).toBe(comboKey(c));
       }

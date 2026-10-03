@@ -124,7 +124,7 @@ async function main() {
       continue; // 下一轮循环统一弃权
     }
     const me = mySnap.players.find((p) => p.id === turn)!;
-    const combos = listPlayable(me.hand!, snap.table, defaultRules);
+    const combos = listPlayable(me.hand!, snap.table, defaultRules, snap.orderReversed);
     let moved = false;
     if (combos.length > 0) {
       for (const combo of combos) {

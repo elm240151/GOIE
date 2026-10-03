@@ -47,8 +47,8 @@ const flashpoint: RoleDef = {
         resolved: blacks.map((c) => ({ cardId: c.id, rank: (isJoker(c) ? rank : c.rank) as Combo['rank'] })),
         label,
       };
-      // 接牌时须真能压过桌面（基础规则技能优先，但插队类特殊组合仍需校验）
-      if (ctx.game.table() && !canBeat(combo, ctx.game.table(), cfg)) {
+      // 接牌时须真能压过桌面（基础规则技能优先，但插队类特殊组合仍需校验；倒序同张数比点反转）
+      if (ctx.game.table() && !canBeat(combo, ctx.game.table(), cfg, ctx.game.orderReversed())) {
         ctx.game.announce('flashpoint', 'qie-tang', '【茄汤】成炸但压不过桌面，未能打出');
         return;
       }
