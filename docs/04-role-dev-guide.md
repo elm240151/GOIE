@@ -19,7 +19,7 @@ interface RoleDef {
   canSelfFollow?: boolean;    // 出牌后立刻压自己打出的牌，可连压到放弃/压不了（修勾狂吠）——引擎在出牌后询问（selfFollow ask），角色只挂标志；留 X 禁止收尾与插队同一套过滤
   flipsOrderOnPlay?: boolean; // 每次出牌（含插队，按物理出牌者计）切换一次牌序正↔倒（海棠洄游）；每轮开始恢复正序。挂上后引擎自动：本手按切换前顺序判定（先判后切）、切换后把桌面牌型按新牌序重新解析（倒序 rank = 最高点数，保证跨序比较用同一约定）、快照携带 orderReversed
   soloJoker?: boolean;        // 王直接打出（橐驼诅咒）：该角色的王可直接作为单张/一对打出——引擎解锁单王牌型（type 'singleJoker'，rank 编码 16、label「王」）：正序/倒序都压过一切单张（含 2/3），只有炸弹能压；以及对王牌型（type 'jokerPair'，rank 编码 16、label「对王」，2026-10-03 用户确认）：压一切对子（正序含对 2、倒序含对 3），只有炸弹能压、王压不了王，正倒序一致；预览/枚举（listPlayable 第 5 参）与解析（parseCombo 第 4 参）都要传此标志
-  canFlipResponse?: boolean;  // 翻面接牌（轴承端庄）：游戏提交 `{cardIds, flippedCardId}` 时走引擎 playFlipResponse——纯函数 validateFlipResponse（combos.ts，服务端判定与客户端预览共用）校验两种翻面（桌面单张翻整手接上一手 / 桌面多张翻一张按剩余接），非法剩余打后继（每张剩余牌按原牌型中所当点数 +1、倒序同样 +1，王按所当点数、响应可用王补缺）或炸弹，后继桌面为特殊牌型 type 'gap'（label「翻面接 X」、只有炸弹能压）；翻面牌留在 tableSide 并以牌背展示（tableSideHidden）；角色只挂标志 + 客户端按标志开放交互
+  canFlipResponse?: boolean;  // 翻面接牌（轴承端庄）：游戏提交 `{cardIds, flippedCardId}` 时走引擎 playFlipResponse——纯函数 validateFlipResponse（combos.ts，服务端判定与客户端预览共用）校验两种翻面（桌面单张翻整手接上一手 / 桌面多张翻一张按剩余接），非法剩余打后继（每张剩余牌按原牌型中所当点数 ±1：正序 +1、倒序 −1，王按所当点数、响应可用王补缺）或炸弹，后继桌面为特殊牌型 type 'gap'（label「翻面接 X」、只有炸弹能压）；翻面牌留在 tableSide 并以牌背展示（tableSideHidden）；角色只挂标志 + 客户端按标志开放交互
 }
 ```
 

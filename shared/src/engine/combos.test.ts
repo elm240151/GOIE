@@ -844,17 +844,16 @@ describe('validateFlipResponse 端庄翻面接牌（轴承）', () => {
     expect(validateFlipResponse(t2, null, flip3, [mk(9), mk(9), mk(9)], cfg).ok).toBe(true);
   });
 
-  it('倒序：后继同样 = 点数 +1（543 翻 3 → 剩 54 → 后继 65）；剩 2 同样越界', () => {
+  it('倒序：后继 = 点数 −1（镜像，2026-10-04 用户最终确认）：543 翻 3 → 剩 54 → 后继 43；剩 3 → 后继 2 越界', () => {
     const t = parseCombo([mk(5), mk(4), mk(3)], cfg, true)!; // 倒序顺子 543
     const flip3 = t.cards.find((c) => c.rank === 3)!.id;
-    const r = validateFlipResponse(t, null, flip3, [mk(6), mk(5)], cfg, true);
+    const r = validateFlipResponse(t, null, flip3, [mk(4), mk(3)], cfg, true);
     expect(r.ok).toBe(true);
-    if (r.ok) expect([...r.combo.resolved.map((x) => x.rank)].sort((a, b) => a - b)).toEqual([5, 6]);
+    if (r.ok) expect(r.combo.resolved.map((x) => x.rank)).toEqual([4, 3]);
 
-    // 倒序不镜像：剩 2 → +1 越界（只有炸弹能压），与正序一致
-    const t2 = tableOf([15, 5, 9]); // 2,5,9 非法牌型
-    const flip5 = t2.cards.find((c) => c.rank === 5)!.id;
-    const r2 = validateFlipResponse(t2, null, flip5, [mk(3), mk(10)], cfg, true); // 剩 2,9 → 后继 16 越界
+    // 剩 3 → −1 = 2 越界（只有炸弹能压）
+    const flip4 = t.cards.find((c) => c.rank === 4)!.id;
+    const r2 = validateFlipResponse(t, null, flip4, [mk(3), mk(4)], cfg, true); // 剩 53 → 后继 4,2 越界
     expect(r2.ok).toBe(false);
     if (!r2.ok) expect(r2.reason).toContain('无法后继');
   });
