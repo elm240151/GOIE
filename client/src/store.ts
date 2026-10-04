@@ -119,6 +119,10 @@ interface AppStore {
   organize: boolean;
   /** 新摸入我手牌的牌 id（入场动画标记；只增不删，跨局清空——每局牌 id 重新编号） */
   enteredCardIds: number[];
+  /** 端庄（轴承）翻面：选中的翻面牌 id（须是当前桌面一手牌中的牌；快照桌面变化自动清空） */
+  flippedCardId: number | null;
+  /** 窃笑（轴承）：私密查看到的手牌弹窗（服务端 skill:peek 定向发我） */
+  peekedHand: { targetId: string; cards: Card[] } | null;
 
   // 生命周期
   init(): void;
@@ -139,8 +143,10 @@ interface AppStore {
   // 出牌
   toggleSelect(cardId: number): void;
   clearSelection(): void;
+  toggleFlipSelect(cardId: number): void;
   play(): Promise<void>;
   pass(): Promise<void>;
+  closePeek(): void;
 
   // 技能
   useSkillAction(skillId: string): Promise<void>;
@@ -209,6 +215,8 @@ export const useStore = create<AppStore>((set, get) => ({
   handOrderFor: '',
   organize: false,
   enteredCardIds: [],
+  flippedCardId: null,
+  peekedHand: null,
 
   init() {
     loadAllRolesClient();
@@ -303,6 +311,8 @@ export const useStore = create<AppStore>((set, get) => ({
       organize: false,
       roundPlays: {},
       enteredCardIds: [],
+      flippedCardId: null,
+      peekedHand: null,
       screen: 'lobby',
     });
   },
@@ -345,18 +355,29 @@ export const useStore = create<AppStore>((set, get) => ({
     set({ selectedCardIds: [] });
   },
 
+  toggleFlipSelect(cardId) {
+    set((s) => ({ flippedCardId: s.flippedCardId === cardId ? null : cardId }));
+  },
+
   async play() {
-    const { selectedCardIds } = get();
+    const { selectedCardIds, flippedCardId } = get();
     if (selectedCardIds.length === 0) return;
-    const res = await emitAck(CLIENT_EVENTS.gamePlay, { cardIds: selectedCardIds });
-    if (res.ok) set({ selectedCardIds: [] });
+    const payload: { cardIds: number[]; flippedCardId?: number } = { cardIds: selectedCardIds };
+    if (flippedCardId != null) payload.flippedCardId = flippedCardId;
+    const res = await emitAck(CLIENT_EVENTS.gamePlay, payload);
+    if (res.ok) set({ selectedCardIds: [], flippedCardId: null });
     else get().toast('error', (res as { error: string }).error);
   },
 
   async pass() {
     const res = await emitAck(CLIENT_EVENTS.gamePass);
-    if (res.ok) set({ selectedCardIds: [] });
+    // 翻面选择随过牌作废（「翻面了但没接会自动翻回来」）
+    if (res.ok) set({ selectedCardIds: [], flippedCardId: null });
     else get().toast('error', (res as { error: string }).error);
+  },
+
+  closePeek() {
+    set({ peekedHand: null });
   },
 
   async useSkillAction(skillId) {
@@ -411,7 +432,14 @@ export const useStore = create<AppStore>((set, get) => ({
     set({ room, screen: nextScreen });
     // 新一局开始（再来一局/重开）→ 清空桌面残留
     if (prev && prev.phase !== 'lobby' && room.phase === 'playing') {
-      set({ tablePlayerId: null, passedAt: {}, roundPlays: {}, tableSideCards: [] });
+      set({
+        tablePlayerId: null,
+        passedAt: {},
+        roundPlays: {},
+        tableSideCards: [],
+        flippedCardId: null,
+        peekedHand: null,
+      });
     }
     // 对局结束回到房间（再来一局全员投票通过）→ 清空对局状态，回房间重新选角色/准备
     if (prev && prev.phase === 'finished' && room.phase === 'lobby') {
@@ -425,6 +453,8 @@ export const useStore = create<AppStore>((set, get) => ({
         selectedCardIds: [],
         organize: false,
         enteredCardIds: [],
+        flippedCardId: null,
+        peekedHand: null,
         tablePlayerId: null,
         passedAt: {},
       });
@@ -432,9 +462,22 @@ export const useStore = create<AppStore>((set, get) => ({
   },
 
   applySnapshot(snap) {
-    const { selectedCardIds, myId, handOrder, handOrderFor, revealed, snap: prevSnap, enteredCardIds } = get();
+    const {
+      selectedCardIds,
+      flippedCardId,
+      myId,
+      handOrder,
+      handOrderFor,
+      revealed,
+      snap: prevSnap,
+      enteredCardIds,
+    } = get();
     const myHand = snap.players.find((p) => p.id === myId)?.hand ?? [];
     const myHandIds = new Set(myHand.map((c) => c.id));
+
+    // 翻面选中牌已不在当前桌面（新一轮/被压/自己已出）→ 清空
+    const tableCardIds = new Set(snap.table?.cards.map((c) => c.id) ?? []);
+    const flipped = flippedCardId !== null && tableCardIds.has(flippedCardId) ? flippedCardId : null;
 
     // 新摸入我手牌的牌 id（旧快照手牌差集）；首局初始快照跳过——发牌不播入场动画
     let entered = enteredCardIds;
@@ -474,6 +517,7 @@ export const useStore = create<AppStore>((set, get) => ({
       snap,
       tableSideCards: snap.tableSide,
       selectedCardIds: selectedCardIds.filter((id) => myHandIds.has(id)),
+      flippedCardId: flipped,
       skillAsk: snap.pendingAsk?.playerId === myId ? get().skillAsk : null,
       revealed: revealedNext,
       handOrder: order,
@@ -532,6 +576,17 @@ export const useStore = create<AppStore>((set, get) => ({
         const role = getRole(e.roleId as string);
         const skillName = role?.skills.find((s) => s.id === e.skillId)?.name ?? (e.skillId as string);
         toast('skill', `【${skillName}】${e.text as string}`);
+        break;
+      }
+      case 'skill:peek': {
+        // 窃笑（轴承）：服务端定向发我的私密查看结果 → 弹窗展示目标手牌
+        set({ peekedHand: { targetId: e.targetId as string, cards: e.cards as Card[] } });
+        break;
+      }
+      case 'skill:peeked': {
+        // 窃笑（轴承）：被查看者收到的定向提示（其余人不知道）
+        const viewer = room?.players.find((p) => p.id === e.viewerId)?.name ?? (e.viewerId as string);
+        toast('info', STR.game.peekedToast.replace('{name}', viewer));
         break;
       }
       case 'player:eliminated': {

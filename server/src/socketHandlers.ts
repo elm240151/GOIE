@@ -89,7 +89,9 @@ export function registerHandlers(io: Server, rooms: RoomManager): void {
     socket.on(CLIENT_EVENTS.gamePlay, (payload: PlayPayload | undefined, ack?: (res: AckResult) => void) => {
       try {
         const cardIds = Array.isArray(payload?.cardIds) ? payload!.cardIds.map(Number) : [];
-        rooms.play(socket.id, cardIds);
+        const flippedCardId =
+          typeof payload?.flippedCardId === 'number' ? payload.flippedCardId : undefined;
+        rooms.play(socket.id, cardIds, flippedCardId);
         ack?.({ ok: true });
       } catch (e) {
         ack?.({ ok: false, error: messageOf(e) });

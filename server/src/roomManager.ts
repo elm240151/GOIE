@@ -64,9 +64,9 @@ export class RoomManager {
     room.startGame(playerId);
   }
 
-  play(socketId: string, cardIds: number[]): void {
+  play(socketId: string, cardIds: number[], flippedCardId?: number): void {
     const { room, playerId } = this.locate(socketId);
-    room.play(playerId, cardIds);
+    room.play(playerId, cardIds, flippedCardId);
   }
 
   pass(socketId: string): void {

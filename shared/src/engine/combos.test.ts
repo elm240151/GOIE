@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { JOKER_BIG, JOKER_SMALL, RANK_2, type Card, type CardRank, type Rank } from '../cards';
 import { defaultRules } from '../config';
-import { canBeat, comboKey, listPlayable, parseCombo, relabelCombo, type Combo } from './combos';
+import {
+  canBeat,
+  comboKey,
+  listPlayable,
+  parseCombo,
+  relabelCombo,
+  validateFlipResponse,
+  type Combo,
+} from './combos';
 
 const cfg = defaultRules;
 
@@ -702,5 +710,170 @@ describe('relabelCombo 答疑改点（修勾）', () => {
     const cpRev = parseCombo([mk(4), mk(4), mk(3), mk(3)], cfg, true)!;
     expect(cpRev.rank).toBe(4);
     expect(relabelCombo(cpRev, 6 as Rank, true).label).toBe('连对 5566');
+  });
+});
+
+describe('validateFlipResponse 端庄翻面接牌（轴承）', () => {
+  /** 合成桌面牌型（validateFlipResponse 只用 cards/resolved/length，可绕过 parseCombo 造非法桌面；resolvedRanks 可给王指定所当点数） */
+  function tableOf(ranks: CardRank[], resolvedRanks?: number[]): Combo {
+    const cards = ranks.map(mk);
+    return {
+      type: 'bomb',
+      cards,
+      rank: 15,
+      length: cards.length,
+      resolved: cards.map((c, i) => ({ cardId: c.id, rank: (resolvedRanks?.[i] ?? c.rank) as Rank })),
+      label: 'x',
+    };
+  }
+
+  it('起牌（无桌面）→ 失败', () => {
+    const r = validateFlipResponse(null, null, 1, [mk(6)], cfg);
+    expect(r.ok).toBe(false);
+  });
+
+  it('情况一：翻掉整手单张接上一手（恰好大一级）', () => {
+    const table = parse([9])!;
+    const prevTable = parse([5])!;
+    const r = validateFlipResponse(table, prevTable, table.cards[0]!.id, [mk(6)], cfg);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.pressedKind).toBe('prev');
+      expect(r.combo.type).toBe('single');
+      expect(r.combo.rank).toBe(6);
+    }
+  });
+
+  it('情况一：2 压一切同样可接', () => {
+    const table = parse([9])!;
+    const prevTable = parse([5])!;
+    const r = validateFlipResponse(table, prevTable, table.cards[0]!.id, [mk(15)], cfg);
+    expect(r.ok).toBe(true);
+  });
+
+  it('情况一：不是恰好大一级 → 失败', () => {
+    const table = parse([9])!;
+    const prevTable = parse([5])!;
+    const r = validateFlipResponse(table, prevTable, table.cards[0]!.id, [mk(7)], cfg);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('压不过');
+  });
+
+  it('情况一：前面只有这一手牌 → 无法发动', () => {
+    const table = parse([9])!;
+    const r = validateFlipResponse(table, null, table.cards[0]!.id, [mk(6)], cfg);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('只有这一手');
+  });
+
+  it('翻面的牌不在桌面上 → 失败', () => {
+    const table = parse([9])!;
+    const r = validateFlipResponse(table, parse([5]), 9999, [mk(6)], cfg);
+    expect(r.ok).toBe(false);
+  });
+
+  it('情况二：对5翻一张 → 剩单5 → 单6 接（对6 牌型不符失败）', () => {
+    const table = parse([5, 5])!;
+    const r = validateFlipResponse(table, null, table.cards[0]!.id, [mk(6)], cfg);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.pressedKind).toBe('top');
+      expect(r.combo.type).toBe('single');
+      expect(r.combo.rank).toBe(6);
+    }
+    const r2 = validateFlipResponse(table, null, table.cards[0]!.id, [mk(6), mk(6)], cfg);
+    expect(r2.ok).toBe(false);
+  });
+
+  it('情况二：345 翻 4 → 剩 35 → 后继 46（gap 牌型）', () => {
+    const table = parse([3, 4, 5])!;
+    const flip4 = table.cards.find((c) => c.rank === 4)!.id;
+    const r = validateFlipResponse(table, null, flip4, [mk(4), mk(6)], cfg);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.pressedKind).toBe('top');
+      expect(r.combo.type).toBe('gap');
+      expect(r.combo.label).toBe('翻面接 46');
+      expect(r.combo.rank).toBe(6);
+      expect(r.combo.resolved.map((x) => x.rank)).toEqual([4, 6]);
+    }
+  });
+
+  it('情况二：后继点数不对（47）或张数不对 → 失败', () => {
+    const table = parse([3, 4, 5])!;
+    const flip4 = table.cards.find((c) => c.rank === 4)!.id;
+    expect(validateFlipResponse(table, null, flip4, [mk(4), mk(7)], cfg).ok).toBe(false);
+    expect(validateFlipResponse(table, null, flip4, [mk(4)], cfg).ok).toBe(false);
+    expect(validateFlipResponse(table, null, flip4, [mk(4), mk(4)], cfg).ok).toBe(false);
+  });
+
+  it('情况二：剩余非法 → 炸弹照常可接', () => {
+    const table = parse([3, 4, 5])!;
+    const flip4 = table.cards.find((c) => c.rank === 4)!.id;
+    const r = validateFlipResponse(table, null, flip4, [mk(9), mk(9), mk(9)], cfg);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.combo.type).toBe('bomb');
+  });
+
+  it('情况二：剩余含王按所当点数后继，响应王可补缺', () => {
+    // 合成非法桌面 [3,7,10,王(当9)]：翻 3 → 剩 [7,10,王]（7,10+王组不成任何合法牌型）
+    // → 后继 [8,11,10]，响应用 [8,11,王] 补缺 10
+    const t = tableOf([3, 7, 10, JOKER_SMALL], [3, 7, 10, 9]);
+    const flip3 = t.cards.find((c) => c.rank === 3)!.id;
+    const r = validateFlipResponse(t, null, flip3, [mk(8), mk(11), W()], cfg);
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.combo.type).toBe('gap');
+      expect(r.combo.resolved.map((x) => x.rank)).toEqual([8, 11, 10]);
+      expect(r.combo.rank).toBe(11);
+    }
+  });
+
+  it('后继边界：剩 A → 后继 2 合法；剩 2 → 后继越界（只有炸弹）', () => {
+    const t1 = tableOf([10, 12, 14]); // 10,Q,A 非法牌型
+    const flip10 = t1.cards.find((c) => c.rank === 10)!.id;
+    const r1 = validateFlipResponse(t1, null, flip10, [mk(13), mk(15)], cfg); // 剩 Q,A → 后继 K,2
+    expect(r1.ok).toBe(true);
+    if (r1.ok) expect(r1.combo.resolved.map((x) => x.rank)).toEqual([13, 15]);
+
+    const t2 = tableOf([3, 5, 15]); // 3,5,2 非法牌型
+    const flip3 = t2.cards.find((c) => c.rank === 3)!.id;
+    const r2 = validateFlipResponse(t2, null, flip3, [mk(6), mk(7)], cfg); // 剩 5,2 → 后继 6,16 越界
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.reason).toContain('无法后继');
+    expect(validateFlipResponse(t2, null, flip3, [mk(9), mk(9), mk(9)], cfg).ok).toBe(true);
+  });
+
+  it('倒序：后继 = 点数 −1（543 翻 3 → 剩 54 → 后继 43）；剩 3 后继越界', () => {
+    const t = parseCombo([mk(5), mk(4), mk(3)], cfg, true)!; // 倒序顺子 543
+    const flip3 = t.cards.find((c) => c.rank === 3)!.id;
+    const r = validateFlipResponse(t, null, flip3, [mk(4), mk(3)], cfg, true);
+    expect(r.ok).toBe(true);
+    if (r.ok) expect(r.combo.resolved.map((x) => x.rank)).toEqual([4, 3]);
+
+    const flip4 = t.cards.find((c) => c.rank === 4)!.id;
+    const r2 = validateFlipResponse(t, null, flip4, [mk(3), mk(4)], cfg, true); // 剩 53 → 后继 4,2 越界
+    expect(r2.ok).toBe(false);
+    if (!r2.ok) expect(r2.reason).toContain('无法后继');
+  });
+
+  it('gap 桌面只有炸弹能压；枚举只给炸弹；答疑不改 gap', () => {
+    const table = parse([3, 4, 5])!;
+    const flip4 = table.cards.find((c) => c.rank === 4)!.id;
+    const gap = validateFlipResponse(table, null, flip4, [mk(4), mk(6)], cfg);
+    expect(gap.ok).toBe(true);
+    const g = gap.ok ? gap.combo : null!;
+
+    expect(canBeat(g, parse([3])!, cfg)).toBe(false); // 防御：gap 只能作为桌面出现，压不了任何桌面
+    expect(canBeat(parse([9, 9, 9])!, g, cfg)).toBe(true);
+    expect(canBeat(parse([7])!, g, cfg)).toBe(false);
+    expect(canBeat(parse([7, 7])!, g, cfg)).toBe(false);
+    expect(canBeat(g, parse([9, 9, 9])!, cfg)).toBe(false); // 防御：gap 只作为桌面出现
+
+    const hand = [mk(7), mk(8), mk(9), mk(9), mk(9)];
+    const following = listPlayable(hand, g, cfg, false);
+    expect(following.map((c) => c.type)).toEqual(['bomb']);
+
+    expect(relabelCombo(g, 10 as Rank, false)).toBe(g); // 防御：答疑不对 gap 发动
   });
 });

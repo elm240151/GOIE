@@ -49,8 +49,8 @@ const doggie: RoleDef = {
   },
   hooks: {
     onPlayInterrupt(ctx, played) {
-      // 只对 对/顺子/连对/炸：单张与王类牌型（单王/对王）无点数可改，不触发（与技能描述一致）
-      if (played.type === 'single' || played.type === 'singleJoker' || played.type === 'jokerPair') return;
+      // 只对 对/顺子/连对/炸：单张与王类牌型（单王/对王）无点数可改，翻面接（端庄）无单一判定点数，不触发（与技能描述一致）
+      if (played.type === 'single' || played.type === 'singleJoker' || played.type === 'jokerPair' || played.type === 'gap') return;
       const st = ctx.state as DoggieState;
       const a = ctx.answer;
       if (!a) {

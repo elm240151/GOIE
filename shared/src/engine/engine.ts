@@ -7,7 +7,7 @@
 // - 技能询问：钩子可返回 ask 挂起动作，服务端询问玩家后 resolveAsk 重跑提问钩子（钩子须纯：返回 ask 前不得改状态）
 import { RANK_2, RANK_3, RANK_A, isJoker, isRank, type Card, type Rank } from '../cards';
 import { type RuleConfig } from '../config';
-import { canBeat, listPlayable, parseCombo, relabelCombo, type Combo } from './combos';
+import { canBeat, listPlayable, parseCombo, relabelCombo, validateFlipResponse, type Combo } from './combos';
 import { buildDeck, shuffle } from './deck';
 import { type GameEvent, type GameEventData } from './events';
 import { type Rng } from './rng';
@@ -88,6 +88,8 @@ export class GameEngine {
   private tableOwnerId = '';
   /** 明置桌旁的边牌（再问补打等：随当前一手牌一起进弃牌堆，公开） */
   private tableSide: Card[] = [];
+  /** 端庄（轴承）翻面：桌旁展示的翻面牌 id（渲染为牌背；随当前一手牌一起进弃牌堆） */
+  private tableSideHidden: number[] = [];
   /** 响应限制（抽你）：当前桌面一手牌只能由该玩家响应；null = 无限制 */
   private tableResponderRestrict: string | null = null;
   /** 上一手被压的玩家（无名普通响应加牌的对象；新一轮起牌时重置） */
@@ -197,8 +199,8 @@ export class GameEngine {
     this.startRound(this.startPlayerId);
   }
 
-  /** 出牌（基础规则校验 → beforePlay 钩子覆写 → 执行 → afterPlay/打断钩子） */
-  playCards(playerId: string, cardIds: number[]): ActionResult {
+  /** 出牌（基础规则校验 → beforePlay 钩子覆写 → 执行 → afterPlay/打断钩子）；flippedCardId = 端庄翻面（轴承） */
+  playCards(playerId: string, cardIds: number[], flippedCardId?: number): ActionResult {
     if (this.phase !== 'playing') return fail('游戏已结束');
     if (this.pendingAsk) return fail('等待技能响应');
     if (playerId !== this.turnPlayerId) return fail('不是你的回合');
@@ -218,6 +220,7 @@ export class GameEngine {
       cards.push(c);
     }
     const rev = this.orderReversed();
+    if (flippedCardId !== undefined) return this.playFlipResponse(playerId, cards, flippedCardId, rev);
     const combo = parseCombo(cards, this.cfg, rev, this.soloJokerAllowed(playerId));
     if (!combo) return fail('这不是合法牌型（王不能单独打出）');
     const baseLegal = canBeat(combo, this.tableCombo, this.cfg, rev);
@@ -227,6 +230,37 @@ export class GameEngine {
       (combo.type === 'single' || combo.type === 'pair') &&
       combo.rank === (rev ? RANK_3 : RANK_2);
     return this.runBeforePlayHooks(playerId, combo, baseLegal && !finishSpecial, 0, false, finishSpecial);
+  }
+
+  /** 端庄（轴承）翻面接牌：翻面一张桌面牌后按规则响应（合法剩余走正常管牌、非法剩余走后继或炸弹） */
+  private playFlipResponse(playerId: string, cards: Card[], flippedCardId: number, rev: boolean): ActionResult {
+    const myRole = this.roles.get(this.players.find((p) => p.id === playerId)!.roleId);
+    if (!myRole?.canFlipResponse) return fail('你没有【端庄】技能');
+    const hand = this.hands.get(playerId)!;
+    const res = validateFlipResponse(
+      this.tableCombo,
+      this.prevTableCombo,
+      flippedCardId,
+      cards,
+      this.cfg,
+      rev,
+      this.soloJokerAllowed(playerId)
+    );
+    if (!res.ok) return fail(res.reason);
+    // 留 X 禁止收尾同样适用于翻面接牌（后继 gap 牌型免于此限：多点数无法判定收尾）
+    const finishSpecial =
+      cards.length === hand.length &&
+      (res.combo.type === 'single' || res.combo.type === 'pair') &&
+      res.combo.rank === (rev ? RANK_3 : RANK_2);
+    return this.runBeforePlayHooks(
+      playerId,
+      res.combo,
+      !finishSpecial,
+      0,
+      false,
+      finishSpecial,
+      (pid, combo) => this.commitFlipPlay(pid, combo, flippedCardId, res.pressedKind)
+    );
   }
 
   /** 过牌 */
@@ -395,7 +429,11 @@ export class GameEngine {
       /** 翻牌展示区：判定牌公开，所有人都能看（角色须在动作内清空） */
       revealed: [...this.revealedPool],
       table: this.tableCombo,
+      /** 端庄（轴承）翻面：预览与正常出牌共用（情况一接上一手用） */
+      prevTable: this.prevTableCombo,
       tableSide: [...this.tableSide],
+      /** 端庄（轴承）翻面：桌旁牌背展示的翻面牌 id */
+      tableSideHidden: [...this.tableSideHidden],
       orderReversed: this.orderReversed(),
       tableRankNote: this.tableRankNote,
       /** 红楼梦（地坛）：被诅咒（含下一轮生效中）的玩家，界面展示标记 */
@@ -453,6 +491,7 @@ export class GameEngine {
       if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
       this.tableCombo = null;
       this.tableSide = [];
+      this.tableSideHidden = [];
       this.tableRankNote = null;
       this.tableOwnerId = '';
       this.tableResponderRestrict = null;
@@ -564,7 +603,8 @@ export class GameEngine {
     baseLegal: boolean,
     index: number,
     allowAnyway: boolean,
-    finishSpecial: boolean
+    finishSpecial: boolean,
+    commit: (pid: string, combo: Combo) => ActionResult = (pid, c) => this.commitPlay(pid, c)
   ): ActionResult {
     const hooks = this.orderedHooks('beforePlay');
     for (let i = index; i < hooks.length; i++) {
@@ -586,7 +626,7 @@ export class GameEngine {
           this.applyOutcome(entry, outcome);
           const nextAllow = outcome.result?.allowAnyway ? true : allowAnyway;
           this.finishResumed(
-            this.runBeforePlayHooks(playerId, combo, baseLegal, i + 1, nextAllow, finishSpecial),
+            this.runBeforePlayHooks(playerId, combo, baseLegal, i + 1, nextAllow, finishSpecial, commit),
             playerId
           );
         };
@@ -600,7 +640,7 @@ export class GameEngine {
       }
     }
     if (!baseLegal && !allowAnyway) return fail(this.beatFailReason(combo, finishSpecial));
-    return this.commitPlay(playerId, combo);
+    return commit(playerId, combo);
   }
 
   /** 出牌执行（上一手被压的牌进弃牌堆）→ afterPlay → 打断钩子 → 获胜判定 */
@@ -611,6 +651,7 @@ export class GameEngine {
     this.removeCards(playerId, combo.cards);
     if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
     this.tableSide = [];
+    this.tableSideHidden = [];
     this.tableResponderRestrict = null;
     this.tableRankNote = null;
     const prevSuits: Set<number> = this.tableCombo
@@ -622,6 +663,46 @@ export class GameEngine {
     this.prevTableOwnerId = this.tableOwnerId === '' ? null : this.tableOwnerId;
     this.prevTableSuits = this.prevTableOwnerId == null ? new Set<number>() : prevSuits;
     this.prevTableCombo = this.prevTableOwnerId == null ? null : prevCombo;
+    this.tableOwnerId = playerId;
+    this.roundLastPlayerId = playerId;
+    this.passCount = 0;
+    this.lastPlayWasCutIn = false;
+    this.emit({ type: 'cards:played', playerId, combo });
+    return this.runAfterPlayHooks(playerId, combo, 0);
+  }
+
+  /**
+   * 端庄（轴承）翻面接牌执行：翻面牌留桌旁展示为牌背（tableSideHidden），被翻的手其余牌进弃牌堆。
+   * 情况一（翻掉整手接上一手）：被压的人仍是上一手所有者（prevTable* 保持不变）；
+   * 情况二（翻部分牌接剩余）：被压的人是本手所有者，花色/牌型取剩余牌。
+   */
+  private commitFlipPlay(
+    playerId: string,
+    combo: Combo,
+    flippedCardId: number,
+    pressedKind: 'top' | 'prev'
+  ): ActionResult {
+    const flips = this.orderFlippers.has(playerId);
+    this.lastPlayOrderReversed = this.orderReversed(); // 洄游先判后切：本手按切换前顺序判定
+    if (flips) this.orderFlipCount++;
+    this.removeCards(playerId, combo.cards);
+    const flipped = this.tableCombo?.cards.find((c) => c.id === flippedCardId) ?? null;
+    const remainder = (this.tableCombo?.cards ?? []).filter((c) => c.id !== flippedCardId);
+    if (this.tableCombo) this.discarded.push(...remainder, ...this.tableSide);
+    this.tableSide = flipped ? [flipped] : [];
+    this.tableSideHidden = flipped ? [flippedCardId] : [];
+    this.tableResponderRestrict = null;
+    this.tableRankNote = null;
+    this.tableCombo = combo;
+    if (flips) this.resyncTableOrder(); // 洄游：切换后桌面按新牌序重新解析
+    if (pressedKind === 'top') {
+      this.prevTableOwnerId = this.tableOwnerId === '' ? null : this.tableOwnerId;
+      this.prevTableSuits = new Set(remainder.filter((c) => !isJoker(c)).map((c) => c.suit));
+      this.prevTableCombo =
+        this.prevTableOwnerId == null
+          ? null
+          : (parseCombo(remainder, this.cfg, this.orderReversed(), true) ?? null);
+    }
     this.tableOwnerId = playerId;
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
@@ -819,6 +900,7 @@ export class GameEngine {
     this.removeCards(playerId, combo.cards);
     if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
     this.tableSide = [];
+    this.tableSideHidden = [];
     this.tableResponderRestrict = null;
     this.tableRankNote = null;
     const prevSuits: Set<number> = this.tableCombo
@@ -1286,6 +1368,7 @@ export class GameEngine {
       discardFromHand: (id, cardIds) => engine.discardFromHand(id, cardIds),
       retagTable: (rank) => engine.retagTable(rank),
       curseNextRound: (targetId) => engine.curseNextRound(playerId, targetId),
+      peekHand: (targetId) => engine.peekHand(playerId, targetId),
     };
   }
 
@@ -1336,6 +1419,14 @@ export class GameEngine {
     if (taken.length === 0) return;
     this.hands.set(playerId, hand.filter((c) => !ids.has(c.id)));
     this.discarded.push(...taken);
+  }
+
+  /** 窃笑（轴承）：私密查看一名玩家的手牌——查看者与目标各收一条私有事件（服务端按人路由，不广播） */
+  private peekHand(viewerId: string, targetId: string): void {
+    const hand = this.hands.get(targetId);
+    if (!hand) return;
+    this.emit({ type: 'skill:peek', viewerId, targetId, cards: [...hand] });
+    this.emit({ type: 'skill:peeked', viewerId, targetId });
   }
 
   // ---------- 询问挂起 ----------
@@ -1468,6 +1559,7 @@ export class GameEngine {
     if (finishSpecial) return this.orderReversed() ? '不能以单 3/对 3 打完手牌（倒序禁止收尾）' : '不能以单 2/对 2 打完手牌';
     const rev = this.orderReversed();
     const t = this.tableCombo!;
+    if (t.type === 'gap') return '只有炸弹能压（翻面接出的牌型）';
     if (t.type === 'singleJoker') return '只有炸弹能压住王（橐驼诅咒：单王点数无穷）';
     if (t.type === 'jokerPair') return '只有炸弹能压住对王（橐驼诅咒：对王压一切对子）';
     if (t.type === 'bomb') {

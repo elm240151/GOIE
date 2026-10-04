@@ -15,6 +15,8 @@ export type GameEventData =
   | { type: 'cards:revealed'; playerId: string; cards: Card[]; purpose: string }
   | { type: 'player:eliminated'; playerId: string; reason: string }
   | { type: 'skill:triggered'; playerId: string; roleId: string; skillId: string; text: string }
+  | { type: 'skill:peek'; viewerId: string; targetId: string; cards: Card[] }
+  | { type: 'skill:peeked'; viewerId: string; targetId: string }
   | { type: 'game:error'; playerId: string; reason: string }
   | { type: 'game:ended'; winnerId: string | null; scoreDeltas: Record<string, number>; totals: Record<string, number> };
 

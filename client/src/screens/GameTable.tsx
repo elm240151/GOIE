@@ -1,6 +1,6 @@
 // 游戏桌：对手座位 + 中央牌区 + 手牌扇形点选 + 实时牌型预览 + 终局弹窗。
 import { useEffect, useMemo, useState } from 'react';
-import { defaultRules, getRole, parseCombo, type Card as CardT } from '@gdys/shared';
+import { defaultRules, getRole, parseCombo, rankLabel, validateFlipResponse, type Card as CardT } from '@gdys/shared';
 import { useStore } from '../store';
 import { STR, TURN_SECONDS } from '../strings';
 import { beatReason, finishHint, invalidReason } from '../beatHint';
@@ -35,6 +35,10 @@ export default function GameTable() {
   const clearSelection = useStore((s) => s.clearSelection);
   const toast = useStore((s) => s.toast);
   const enteredCardIds = useStore((s) => s.enteredCardIds);
+  const flippedCardId = useStore((s) => s.flippedCardId);
+  const toggleFlipSelect = useStore((s) => s.toggleFlipSelect);
+  const peekedHand = useStore((s) => s.peekedHand);
+  const closePeek = useStore((s) => s.closePeek);
 
   // 回合倒计时（以快照的 turnPlayerId 变化为基准）
   const [deadline, setDeadline] = useState(0);
@@ -58,25 +62,41 @@ export default function GameTable() {
   const myHand: readonly CardT[] = me?.hand ?? [];
   const myPlay = myId ? roundPlays[myId] : undefined;
   const myRole = getRole(me?.roleId ?? '');
+  const finished = room?.phase === 'finished';
 
-  // 实时预览：所选牌 → parseCombo（与服务端同一套解析器；倒序随快照；单王按角色解锁）
+  // 实时预览：所选牌 → parseCombo（与服务端同一套解析器；倒序随快照；单王按角色解锁）；
+  // 端庄（轴承）翻面选中时走翻面接牌校验（与服务端同一套 validateFlipResponse）
   const rev = snap?.orderReversed ?? false;
+  const canFlip = myTurn && !finished && !!myRole?.canFlipResponse && snap?.table !== null;
   const preview = useMemo(() => {
     const selected = myHand.filter((c) => selectedCardIds.includes(c.id));
+    if (flippedCardId != null && snap?.table) {
+      if (selected.length === 0) return { selected, combo: null, hint: STR.game.flipPickCards };
+      const res = validateFlipResponse(
+        snap.table,
+        snap.prevTable ?? null,
+        flippedCardId,
+        selected,
+        defaultRules,
+        rev,
+        myRole?.soloJoker
+      );
+      if (!res.ok) return { selected, combo: null, hint: res.reason };
+      return { selected, combo: res.combo, hint: null };
+    }
     if (selected.length === 0) return { selected, combo: null, hint: null };
     const combo = parseCombo(selected, defaultRules, rev, myRole?.soloJoker);
     if (!combo) return { selected, combo: null, hint: invalidReason(selected) };
     const finish = finishHint(combo, myHand.length, rev);
     const warn = finish ?? beatReason(combo, snap?.table ?? null, rev);
     return { selected, combo, hint: warn ? STR.game.beatWarn.replace('{hint}', warn) : null };
-  }, [myHand, selectedCardIds, snap?.table, rev, myRole]);
+  }, [myHand, selectedCardIds, flippedCardId, snap?.table, snap?.prevTable, rev, myRole]);
 
   // 答疑改点：桌面牌型标签已按新点数重写（金色主显），小标展示原牌型（按实体牌重解析）
   const originalTableLabel =
     snap?.tableRankNote && snap?.table ? (parseCombo(snap.table.cards, defaultRules, rev)?.label ?? '') : '';
 
   const isLeader = snap?.table === null;
-  const finished = room?.phase === 'finished';
   const turnPlayer = snap?.turnPlayerId ? players.find((p) => p.id === snap.turnPlayerId) : null;
   const tableOwner = snap?.table ? players.find((p) => p.id === tablePlayerId) : null;
 
@@ -182,7 +202,12 @@ export default function GameTable() {
           <>
             <div className="table-owner">{tableOwner ? `${tableOwner.name} 出了` : '上一手'}</div>
             <div className="table-row">
-              <ComboBadge combo={snap.table} retagged={!!snap.tableRankNote} />
+              <ComboBadge
+                combo={snap.table}
+                retagged={!!snap.tableRankNote}
+                onCardClick={canFlip ? toggleFlipSelect : undefined}
+                flippedCardId={canFlip ? flippedCardId : null}
+              />
               {snap.tableRankNote && (
                 <span className="retag-badge" title={STR.game.retagTitle}>
                   {STR.game.retagFrom.replace('{label}', originalTableLabel)}
@@ -191,11 +216,21 @@ export default function GameTable() {
               {tableSideCards.length > 0 && (
                 <div className="table-side">
                   {tableSideCards.map((c) => (
-                    <Card key={c.id} card={c} />
+                    <Card key={c.id} card={c} faceDown={(snap?.tableSideHidden ?? []).includes(c.id)} />
                   ))}
                 </div>
               )}
             </div>
+            {canFlip && (
+              <div className="flip-hint">
+                {flippedCardId != null
+                  ? STR.game.flipPicked.replace(
+                      '{label}',
+                      rankLabel(snap.table.cards.find((c) => c.id === flippedCardId)!.rank)
+                    )
+                  : STR.game.flipHint}
+              </div>
+            )}
           </>
         ) : (
           <div className="table-empty">{finished ? '' : STR.game.tableEmpty}</div>
@@ -357,11 +392,36 @@ export default function GameTable() {
 
       {finished && room && <FinishedModal />}
 
+      {peekedHand && <PeekModal />}
+
       {!connected && (
         <div className="reconnect-overlay">
           <div className="reconnect-box">{STR.game.reconnect}</div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** 窃笑（轴承）：私密查看目标手牌的弹窗（服务端定向发我，其余人不可见） */
+function PeekModal() {
+  const peekedHand = useStore((s) => s.peekedHand)!;
+  const snap = useStore((s) => s.snap);
+  const closePeek = useStore((s) => s.closePeek);
+  const targetName = snap?.players.find((p) => p.id === peekedHand.targetId)?.name ?? '对方';
+  return (
+    <div className="modal-overlay" onClick={closePeek}>
+      <div className="modal peek-modal" onClick={(ev) => ev.stopPropagation()}>
+        <h2 className="peek-title">{STR.game.peekTitle.replace('{name}', targetName)}</h2>
+        <div className="peek-cards">
+          {peekedHand.cards.map((c) => (
+            <Card key={c.id} card={c} />
+          ))}
+        </div>
+        <button type="button" className="btn btn-primary" onClick={closePeek}>
+          {STR.game.peekClose}
+        </button>
+      </div>
     </div>
   );
 }

@@ -8,12 +8,21 @@ interface Props {
   selected?: boolean;
   onClick?: () => void;
   disabled?: boolean;
+  /** 牌背（端庄翻面牌：翻面后公开可见，但只显示牌背） */
+  faceDown?: boolean;
 }
 
-export default function Card({ card, asRank, selected, onClick, disabled }: Props) {
+export default function Card({ card, asRank, selected, onClick, disabled, faceDown }: Props) {
   const joker = isJoker(card);
   const red = cardColor(card) === 'red';
   const label = asRank !== undefined ? rankLabel(asRank) : rankLabel(card.rank);
+  if (faceDown) {
+    return (
+      <button type="button" className="card card-back" disabled={!onClick} onClick={onClick}>
+        <span className="card-center card-back-mark">✦</span>
+      </button>
+    );
+  }
   const cls = ['card', red ? 'card-red' : 'card-black', joker ? 'card-joker' : '', selected ? 'card-selected' : '']
     .filter(Boolean)
     .join(' ');

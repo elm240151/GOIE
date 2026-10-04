@@ -178,11 +178,11 @@ export class Room {
 
   // ---------- 对局 ----------
 
-  play(playerId: string, cardIds: number[]): void {
+  play(playerId: string, cardIds: number[], flippedCardId?: number): void {
     const engine = this.requireEngine(); // 大厅/终局动作照常抛「游戏不在进行中」
     let r: ActionResult;
     try {
-      r = engine.playCards(playerId, cardIds);
+      r = engine.playCards(playerId, cardIds, flippedCardId);
     } catch (e) {
       this.abortGame(e);
       return;
@@ -409,7 +409,18 @@ export class Room {
   }
 
   private dispatchEvents(events: GameEvent[]): void {
-    for (const e of events) this.broadcast(SERVER_EVENTS.event, e);
+    for (const e of events) {
+      // 窃笑（轴承）：查看手牌是私密动作——skill:peek 只发查看者，skill:peeked 只发被查看者
+      if (e.type === 'skill:peek') {
+        this.sendTo(e.viewerId, SERVER_EVENTS.event, e);
+        continue;
+      }
+      if (e.type === 'skill:peeked') {
+        this.sendTo(e.targetId, SERVER_EVENTS.event, e);
+        continue;
+      }
+      this.broadcast(SERVER_EVENTS.event, e);
+    }
   }
 
   private syncSnapshots(): void {

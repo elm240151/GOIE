@@ -33,8 +33,12 @@ export interface GameSnapshot {
   /** 翻牌展示区（判定牌等公开牌，所有人可见；动作内须清空） */
   revealed: Card[];
   table: Combo | null;
+  /** 上一手被压的牌型（端庄情况一接上一手、预览用；起牌时 null） */
+  prevTable: Combo | null;
   /** 明置桌旁的边牌（再问补打等：随当前一手牌一起弃置，公开） */
   tableSide: Card[];
+  /** 端庄（轴承）翻面：桌旁翻面牌 id（渲染为牌背） */
+  tableSideHidden: number[];
   /** 是否倒序（海棠洄游：出牌即切换，每轮恢复正序） */
   orderReversed: boolean;
   /** 答疑改点（修勾）：当前桌面一手牌的判定点数被改写（牌型不变）；null = 无改写 */

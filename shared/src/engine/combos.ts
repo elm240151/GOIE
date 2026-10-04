@@ -11,10 +11,12 @@
 //   2 最小谁也压不了（倒序用 A 响应 2）；顺子/连对为倒序连续（起点 = 最高点数，接牌窗口规则镜像，
 //   百搭延伸镜像：先向 3 再向 A）；炸弹张数优先不变、同张数比点反转（3 炸最强/2 炸最弱）
 // - 留 X 禁止收尾：正序单 2/对 2、倒序单 3/对 3（含王补），打出后手牌清空 → 不可出（listPlayable 直接排除）
+// - 翻面接（轴承端庄，type 'gap'）：剩余非法牌型被后继接出的桌面（如 345 翻 4 → 接 46）——不是可解析的牌型，
+//   只能由引擎经 validateFlipResponse 构造；只有炸弹能压（特殊技能例外），枚举（listPlayable）只给炸弹
 import { RANK_2, RANK_3, RANK_A, isJoker, isRank, rankLabel, type Card, type Rank } from '../cards';
 import type { RuleConfig } from '../config';
 
-export type ComboType = 'single' | 'pair' | 'straight' | 'consecutivePairs' | 'bomb' | 'singleJoker' | 'jokerPair';
+export type ComboType = 'single' | 'pair' | 'straight' | 'consecutivePairs' | 'bomb' | 'singleJoker' | 'jokerPair' | 'gap';
 
 export interface Combo {
   type: ComboType;
@@ -263,6 +265,9 @@ function tryConsecutivePairs(sorted: Card[], info: HandInfo, cfg: RuleConfig, re
  */
 export function canBeat(combo: Combo, table: Combo | null, cfg: RuleConfig, rev = false): boolean {
   if (table === null) return true;
+  // 翻面接（轴承端庄）接出的非法牌型桌面：只有炸弹能压（其余响应经技能豁免，如斜视的 allowAnyway 不作用于 gap）
+  if (table.type === 'gap') return combo.type === 'bomb';
+  if (combo.type === 'gap') return false; // gap 组合只作为桌面出现（防御）
   // 单王（橐驼诅咒）：压一切单张（含当前最大 2/3），只有炸弹能压——正倒序一致（无穷大/无穷小镜像同规则）
   if (table.type === 'singleJoker') return combo.type === 'bomb';
   if (combo.type === 'singleJoker') return table.type === 'single';
@@ -308,6 +313,7 @@ export function canBeat(combo: Combo, table: Combo | null, cfg: RuleConfig, rev 
 export function relabelCombo(combo: Combo, rank: Rank, rev: boolean): Combo {
   if (combo.type === 'singleJoker') return combo; // 答疑只对 ≥2 张牌型，单王不会走到这里（防御）
   if (combo.type === 'jokerPair') return combo; // 对王同理：王无点数可改，答疑不会对其发动（防御）
+  if (combo.type === 'gap') return combo; // 翻面接：多点数牌型无单一判定点数可改，答疑不会对其发动（防御）
   if (combo.type === 'single') return { ...combo, rank, label: rankLabel(rank) };
   if (combo.type === 'pair') return { ...combo, rank, label: `对${rankLabel(rank)}` };
   if (combo.type === 'bomb') return { ...combo, rank, label: `炸弹 ${combo.length}×${rankLabel(rank)}` };
@@ -507,8 +513,8 @@ function listFollowing(
   // 对王（诅咒）：压一切对子（含对 2/对 3），正倒序一致
   if (allowSoloJoker && table.type === 'pair' && info.jokers.length >= 2) out.push(jokerPairOf(info.jokers.slice(0, 2)));
 
-  if (table.type === 'singleJoker' || table.type === 'jokerPair') {
-    // 只有炸弹能压王/对王（诅咒）：任意炸弹均可（王不是实体牌型，不能按 length/rank 走炸弹分支）
+  if (table.type === 'singleJoker' || table.type === 'jokerPair' || table.type === 'gap') {
+    // 只有炸弹能压王/对王（诅咒）与翻面接（端庄）：任意炸弹均可（无 length/rank 可比，不走炸弹比较分支）
     for (const r of ranks) {
       const cs = info.realByRank.get(r)!;
       const maxLen = Math.min(cs.length + info.totalJokers, cfg.bomb.maxSize);
@@ -600,4 +606,89 @@ function listFollowing(
     if (cpMissing(s, pairs, info, rev) <= info.totalJokers) out.push(consecutivePairsOf(s, pairs, info, rev));
   }
   return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
+}
+
+// ---------- 端庄（轴承）：翻面接牌 ----------
+
+export type FlipResponse =
+  | { ok: true; combo: Combo; pressedKind: 'top' | 'prev' }
+  | { ok: false; reason: string };
+
+/**
+ * 端庄翻面接牌校验（轴承；纯函数，服务端判定与客户端预览共用）。
+ * - 桌面只有一张牌（情况一）：翻掉整手 → 接上一手的牌（按正常管牌规则；前面只有这一手则无法发动）。
+ * - 桌面多张（情况二）：翻掉其中一张，剩余牌仍是合法牌型 → 按正常管牌规则接；剩余非法 →
+ *   打后继（每张剩余牌按原牌型中所当点数 ±1：正序 +1、倒序 −1；王按所当点数，响应可用王补缺）或炸弹。
+ *   后继接出的桌面（type 'gap'）只有炸弹能压。
+ */
+export function validateFlipResponse(
+  table: Combo | null,
+  prevTable: Combo | null,
+  flippedCardId: number,
+  cards: readonly Card[],
+  cfg: RuleConfig,
+  rev = false,
+  allowSoloJoker = false
+): FlipResponse {
+  if (!table) return { ok: false, reason: '起牌时不能发动【端庄】（只能在响应时翻面）' };
+  const flipped = table.cards.find((c) => c.id === flippedCardId);
+  if (!flipped) return { ok: false, reason: '翻面的牌不在桌面上' };
+  if (cards.length === 0) return { ok: false, reason: '请选择要出的牌' };
+  if (table.cards.length === 1) {
+    // 情况一：翻掉整手单张，接上一手的牌（按正常管牌规则）
+    if (!prevTable) return { ok: false, reason: '前面只有这一手牌，无法发动【端庄】' };
+    const combo = parseCombo(cards, cfg, rev, allowSoloJoker);
+    if (!combo) return { ok: false, reason: '这不是合法牌型（王不能单独打出）' };
+    if (!canBeat(combo, prevTable, cfg, rev)) return { ok: false, reason: '压不过上一手的牌' };
+    return { ok: true, combo, pressedKind: 'prev' };
+  }
+  // 情况二：翻掉其中一张，剩余按规则响应
+  const remainder = table.cards.filter((c) => c.id !== flippedCardId);
+  const remainderCombo = parseCombo(remainder, cfg, rev, true); // 剩余单王/对王视为王类牌型（只有炸弹能压）
+  const combo = parseCombo(cards, cfg, rev, allowSoloJoker);
+  if (remainderCombo) {
+    if (!combo) return { ok: false, reason: '这不是合法牌型（王不能单独打出）' };
+    if (!canBeat(combo, remainderCombo, cfg, rev)) return { ok: false, reason: '压不过翻面后剩余的牌' };
+    return { ok: true, combo, pressedKind: 'top' };
+  }
+  // 剩余非法：炸弹照常炸一切；否则后继接牌（每张剩余牌按原牌型中所当点数 ±1，
+  // 后继响应本身不是合法牌型——如剩 35 接 46——不能先按合法牌型卡掉）
+  if (combo?.type === 'bomb') return { ok: true, combo, pressedKind: 'top' };
+  if (cards.length !== remainder.length)
+    return { ok: false, reason: '剩余不是合法牌型：只能打后继（每张点数 ±1，王可补缺）或炸弹' };
+  const resolvedOf = new Map(table.resolved.map((r) => [r.cardId, r.rank]));
+  const successorRanks: number[] = [];
+  for (const c of remainder) {
+    const r = (resolvedOf.get(c.id) ?? c.rank) as number;
+    const s = rev ? r - 1 : r + 1;
+    if (s < RANK_3 || s > RANK_2) return { ok: false, reason: '翻面后无法后继接牌（只有炸弹能压）' };
+    successorRanks.push(s);
+  }
+  const need = [...successorRanks].sort((a, b) => a - b);
+  let jokers = 0;
+  for (const c of cards) {
+    if (isJoker(c)) {
+      jokers++;
+      continue;
+    }
+    const i = need.indexOf(c.rank);
+    if (i < 0) return { ok: false, reason: '后继接牌点数不对（正序 +1、倒序 −1，王可补缺）' };
+    need.splice(i, 1);
+  }
+  if (need.length !== jokers) return { ok: false, reason: '后继接牌点数不对（正序 +1、倒序 −1，王可补缺）' };
+  // 构造后继牌型：真牌记实际点数，王按剩余未命中的后继点数逐个分配（确定性：按牌 id 序）
+  const assigned = [...need].sort((a, b) => a - b);
+  const sorted = [...cards].sort((a, b) => a.id - b.id);
+  let ji = 0;
+  const resolved = sorted.map((c) => ({
+    cardId: c.id,
+    rank: isJoker(c) ? (assigned[ji++]! as Rank) : (c.rank as Rank),
+  }));
+  const maxRank = Math.max(...resolved.map((r) => r.rank));
+  const label = `翻面接 ${resolved.map((r) => rankLabel(r.rank)).join('')}`;
+  return {
+    ok: true,
+    combo: buildCombo('gap', sorted, maxRank as Rank, resolved, label),
+    pressedKind: 'top',
+  };
 }

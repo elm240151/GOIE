@@ -152,6 +152,8 @@ export interface EngineFacade {
   retagTable(rank: number): void;
   /** 地坛（橐驼）：诅咒目标玩家下一轮不得出牌；若其本回合轮末获得牌权，由技能所有者取而代之 */
   curseNextRound(targetPlayerId: string): void;
+  /** 窃笑（轴承）：私密查看目标玩家手牌（skill:peek 私发查看者、skill:peeked 私发目标） */
+  peekHand(targetPlayerId: string): void;
 }
 
 export interface HookContext<S = unknown> {
@@ -242,6 +244,8 @@ export interface RoleDef {
   flipsOrderOnPlay?: boolean;
   /** 单王可单独打出（橐驼诅咒）：点数视作无穷（正序压一切单张含 2、倒序同样压一切单张含 3），只有炸弹能压 */
   soloJoker?: boolean;
+  /** 响应时可翻面一张上次打出的牌并接牌（轴承端庄）——引擎提供机制，角色只挂标志（客户端出翻面按钮） */
+  canFlipResponse?: boolean;
 }
 
 export type RoleRegistry = Map<string, RoleDef>;

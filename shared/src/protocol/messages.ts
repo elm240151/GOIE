@@ -58,6 +58,8 @@ export interface ReadyPayload {
 
 export interface PlayPayload {
   cardIds: number[];
+  /** 端庄（轴承）翻面：翻面的桌面牌 id（缺省 = 普通出牌） */
+  flippedCardId?: number;
 }
 
 /** 主动技 / 技能询问回答（有 askId = 回答询问；否则 = 发动主动技） */

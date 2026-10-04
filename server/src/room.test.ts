@@ -1101,3 +1101,35 @@ describe('引擎异常安全网', () => {
     expect(st2.phase).toBe('lobby');
   });
 });
+
+describe('私密事件路由（窃笑）', () => {
+  it('skill:peek 只发查看者、skill:peeked 只发被查看者，其余玩家两者都不收', () => {
+    const s = setupRoom(3);
+    manager.selectRole(s.sockets[0]!.id, 'button'); // 玩家1 改选轴承
+    manager.startGame(s.sockets[0]!.id); // 房主先手 → 玩家1 的回合
+
+    // 主动技窃笑 → pickTarget 询问
+    manager.useSkill(s.sockets[0]!.id, { skillId: 'qie-xiao' });
+    const ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.kind).toBe('pickTarget');
+    expect(ask.targetCandidates).toEqual([s.ids[1], s.ids[2]]);
+
+    // 查看玩家2 的手牌
+    manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, targetPlayerId: s.ids[1] });
+
+    const e0 = emittedEvents(s.sockets[0]!);
+    const e1 = emittedEvents(s.sockets[1]!);
+    const e2 = emittedEvents(s.sockets[2]!);
+    const peek0 = e0.find((e) => e.type === 'skill:peek');
+    expect(peek0).toBeDefined();
+    if (peek0 && peek0.type === 'skill:peek') {
+      expect(peek0.viewerId).toBe(s.ids[0]);
+      expect(peek0.targetId).toBe(s.ids[1]);
+      expect(peek0.cards.length).toBeGreaterThan(0); // 携带被查看者完整手牌
+    }
+    expect(e0.some((e) => e.type === 'skill:peeked')).toBe(false); // 查看者不收提示
+    expect(e1.some((e) => e.type === 'skill:peek')).toBe(false); // 被查看者不收手牌
+    expect(e1.some((e) => e.type === 'skill:peeked')).toBe(true); // 被查看者收到提示
+    expect(e2.some((e) => e.type === 'skill:peek' || e.type === 'skill:peeked')).toBe(false); // 旁人完全不知
+  });
+});
