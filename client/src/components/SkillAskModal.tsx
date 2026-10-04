@@ -138,9 +138,10 @@ export default function SkillAskModal() {
       break;
   }
 
-  // pickCards 也可弃权（再问补打「打不出」、观股大跌放弃等）
+  // pickCards 也可弃权（再问补打「打不出」、观股大跌放弃等）；suit/choice 同样可弃权（巨石花色判定、答疑点数、骚骚换 1/2 张——服务端均支持 decline）
   const showDecline =
-    ask.kind === 'confirm' || ask.kind === 'cutIn' || ask.kind === 'selfFollow' || ask.kind === 'pickCards';
+    ask.kind === 'confirm' || ask.kind === 'cutIn' || ask.kind === 'selfFollow' || ask.kind === 'pickCards' ||
+    ask.kind === 'suit' || ask.kind === 'choice';
 
   return (
     <div className="modal-overlay">

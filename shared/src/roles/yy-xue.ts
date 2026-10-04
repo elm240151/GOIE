@@ -32,6 +32,7 @@ const yyXue: RoleDef = {
     onPlayInterrupt(ctx, played) {
       const owner = ctx.game.roundLastPlayerId()!;
       if (owner === ctx.self.id) return;
+      const ownerName = ctx.game.players().find((p) => p.id === owner)?.name ?? owner;
       const ownerRole = ctx.game.players().find((p) => p.id === owner)?.roleId;
       // 按实体牌判定：答疑（修勾）改点只改判定点数，不改变"打出的是 2"这一事实——
       // 对 2 即使被答疑改点，巨石仍可判定（避免触发与否取决于钩子执行顺序）
@@ -53,7 +54,7 @@ const yyXue: RoleDef = {
           ok: true,
           ask: {
             kind: 'suit',
-            prompt: `是否发动【巨石】驱逐 ${owner}？请声明花色（翻到该花色即驱逐，本场还可判定 ${ctx.game.players().length + 2 - state.used} 次）`,
+            prompt: `是否发动【巨石】驱逐 ${ownerName}？请声明花色（翻到该花色即驱逐，弃权不消耗次数，本场还可判定 ${ctx.game.players().length + 2 - state.used} 次）`,
             options: [...SUITS],
           },
         };
@@ -69,7 +70,7 @@ const yyXue: RoleDef = {
         : SUITS[card.suit] === choice;
       if (hit) {
         ctx.game.discardRevealed();
-        ctx.game.announce('yy-xue', 'ju-shi', `【巨石】判定成功！驱逐 ${owner}，雪灾天使获得牌权`);
+        ctx.game.announce('yy-xue', 'ju-shi', `【巨石】判定成功！驱逐 ${ownerName}，雪灾天使获得牌权`);
         return { ok: true, modify: { eliminate: [owner], seizeLead: true } };
       }
       // 判定失败：判定牌摸回（takeRevealed 豁免本回合手牌上限）

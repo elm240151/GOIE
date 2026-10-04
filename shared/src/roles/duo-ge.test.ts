@@ -192,7 +192,7 @@ describe('惰戈（亢奋/法音）', () => {
     expect(attributed(a1)).toBe(true); // 缓冲事件随第一次恢复一起返回（挂起期间 events 为空）
     const juShi = askOf(a1);
     expect(juShi?.kind).toBe('suit');
-    expect(juShi?.prompt).toContain('驱逐 p0'); // 判定对象 = 惰戈
+    expect(juShi?.prompt).toContain('驱逐 玩家0'); // 判定对象 = 惰戈（prompt 用玩家名，不用原始 id）
     const a2 = engine.resolveAsk('p2', { askId: juShi!.askId!, choice: 'decline' });
     expect(engine.snapshotFor('p0').turnPlayerId).toBe('p1'); // 轮转从惰戈下家
   });
