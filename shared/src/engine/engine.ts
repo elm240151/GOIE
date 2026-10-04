@@ -5,7 +5,7 @@
 // - 技能优先：每个判定点 = 基础规则校验 → 角色钩子覆写（allowAnyway 放行 / ok:false 否决）
 // - 角色只能通过 EngineFacade + ActionMods 有界改牌，无法破坏引擎不变量
 // - 技能询问：钩子可返回 ask 挂起动作，服务端询问玩家后 resolveAsk 重跑提问钩子（钩子须纯：返回 ask 前不得改状态）
-import { RANK_2, RANK_3, RANK_A, isJoker, isRank, type Card, type Rank } from '../cards';
+import { RANK_2, RANK_3, RANK_A, isJoker, isRank, pointValue, type Card, type Rank } from '../cards';
 import { type RuleConfig } from '../config';
 import { canBeat, listPlayable, parseCombo, relabelCombo, validateFlipResponse, type Combo } from './combos';
 import { buildDeck, shuffle } from './deck';
@@ -137,6 +137,8 @@ export class GameEngine {
   private lastPlayOrderReversed = false;
   /** 出牌即切换牌序的角色（RoleDef.flipsOrderOnPlay，按物理出牌者计，含插队） */
   private orderFlippers = new Set<string>();
+  /** 亢奋（惰戈，RoleDef.exciteOnPlay）：点数和 ≥20 的手牌打出那一刻归属改写的角色 */
+  private exciteOwners = new Set<string>();
 
   constructor(cfg: RuleConfig, players: EnginePlayer[], opts: EngineOptions) {
     if (players.length < cfg.players.min || players.length > cfg.players.max)
@@ -152,6 +154,7 @@ export class GameEngine {
     for (const p of players) this.scores[p.id] = opts.scores?.[p.id] ?? 0;
     for (const p of players) {
       if (this.roles.get(p.roleId)?.flipsOrderOnPlay) this.orderFlippers.add(p.id);
+      if (this.roles.get(p.roleId)?.exciteOnPlay) this.exciteOwners.add(p.id);
     }
   }
 
@@ -645,7 +648,8 @@ export class GameEngine {
 
   /** 出牌执行（上一手被压的牌进弃牌堆）→ afterPlay → 打断钩子 → 获胜判定 */
   private commitPlay(playerId: string, combo: Combo): ActionResult {
-    const flips = this.orderFlippers.has(playerId);
+    const effOwner = this.exciteOwnerFor(playerId, combo); // 亢奋：点数和 ≥20 打出那一刻归属惰戈
+    const flips = this.orderFlippers.has(effOwner ?? playerId);
     this.lastPlayOrderReversed = this.orderReversed(); // 洄游先判后切：本手按切换前顺序判定（巨石触发镜像用）
     if (flips) this.orderFlipCount++; // 洄游：物理出牌即切换（先判后切，本手按切换前顺序判定）
     this.removeCards(playerId, combo.cards);
@@ -668,6 +672,7 @@ export class GameEngine {
     this.passCount = 0;
     this.lastPlayWasCutIn = false;
     this.emit({ type: 'cards:played', playerId, combo });
+    if (effOwner) this.attributeTable(effOwner); // 归属惰戈：轮转从其下家、判定对其生效（发出 table:attributed）
     return this.runAfterPlayHooks(playerId, combo, 0);
   }
 
@@ -682,7 +687,8 @@ export class GameEngine {
     flippedCardId: number,
     pressedKind: 'top' | 'prev'
   ): ActionResult {
-    const flips = this.orderFlippers.has(playerId);
+    const effOwner = this.exciteOwnerFor(playerId, combo); // 亢奋：翻面接同样适用（任何「打出」都算）
+    const flips = this.orderFlippers.has(effOwner ?? playerId);
     this.lastPlayOrderReversed = this.orderReversed(); // 洄游先判后切：本手按切换前顺序判定
     if (flips) this.orderFlipCount++;
     this.removeCards(playerId, combo.cards);
@@ -708,6 +714,7 @@ export class GameEngine {
     this.passCount = 0;
     this.lastPlayWasCutIn = false;
     this.emit({ type: 'cards:played', playerId, combo });
+    if (effOwner) this.attributeTable(effOwner); // 亢奋：翻面接归属惰戈
     return this.runAfterPlayHooks(playerId, combo, 0);
   }
 
@@ -894,7 +901,8 @@ export class GameEngine {
 
   /** 狂吠提交：压自己的牌（无插队后续），走完整流水线——获胜判定/打断钩子/狂吠连压照常 */
   private commitSelfFollow(playerId: string, combo: Combo): ActionResult {
-    const flips = this.orderFlippers.has(playerId);
+    const effOwner = this.exciteOwnerFor(playerId, combo); // 亢奋：狂吠连压同样适用
+    const flips = this.orderFlippers.has(effOwner ?? playerId);
     this.lastPlayOrderReversed = this.orderReversed(); // 同上：狂吠连压也按切换前顺序判定
     if (flips) this.orderFlipCount++;
     this.removeCards(playerId, combo.cards);
@@ -917,6 +925,7 @@ export class GameEngine {
     this.passCount = 0;
     this.lastPlayWasCutIn = false;
     this.emit({ type: 'cards:played', playerId, combo });
+    if (effOwner) this.attributeTable(effOwner); // 亢奋：狂吠连压归属惰戈
     return this.runAfterPlayHooks(playerId, combo, 0);
   }
 
@@ -962,7 +971,8 @@ export class GameEngine {
   }
 
   private commitCutIn(playerId: string, combo: Combo): ActionResult {
-    const flips = this.orderFlippers.has(playerId);
+    const effOwner = this.exciteOwnerFor(playerId, combo); // 亢奋：插队打出同样适用
+    const flips = this.orderFlippers.has(effOwner ?? playerId);
     if (flips) this.orderFlipCount++; // 插队也是物理出牌：洄游照常切换
     this.aftermathMode = 'cutIn';
     this.cutInVictimId = this.tableOwnerId;
@@ -983,6 +993,7 @@ export class GameEngine {
     this.passCount = 0;
     this.lastPlayWasCutIn = true;
     this.emit({ type: 'cards:played', playerId, combo });
+    if (effOwner) this.attributeTable(effOwner); // 亢奋：插队归属惰戈（受害者仍是旧桌面所有者，已在上面捕获）
     return this.runAfterPlayHooks(playerId, combo, 0);
   }
 
@@ -1480,6 +1491,28 @@ export class GameEngine {
     this.roundLastPlayerId = ownerId;
     this.turnPlayerId = ownerId; // 之后 advanceTurn 从其下家开始轮转
     this.emit({ type: 'table:attributed', playerId: ownerId, fromPlayerId: from, combo: this.tableCombo });
+  }
+
+  /**
+   * 亢奋（惰戈）：点数和 ≥20 的手牌打出那一刻归属改写的惰戈（无则 null）。
+   * 点数和 = 牌面点数（2 记 2、A 记 1、J=11、Q=12、K=13，2026-10-04 用户确认），
+   * 王按所当点数（combo.resolved）、单王/对王视为无穷（必触发）；惰戈被淘汰后失效；
+   * 惰戈自己打出的牌不重复改写。提交路径在翻转/判定钩子之前调用，保证「打出那一刻即算惰戈出的」。
+   */
+  private exciteOwnerFor(playerId: string, combo: Combo): string | null {
+    const infinite = combo.type === 'singleJoker' || combo.type === 'jokerPair';
+    let sum = 0;
+    if (!infinite) {
+      for (const c of combo.cards) {
+        const r = combo.resolved.find((x) => x.cardId === c.id)?.rank ?? c.rank;
+        sum += pointValue(r);
+      }
+    }
+    if (!infinite && sum < 20) return null;
+    for (const id of this.exciteOwners) {
+      if (id !== playerId && !this.eliminated.has(id)) return id;
+    }
+    return null;
   }
 
   /** 明置一张手牌到桌旁（再问补打：随当前一手牌一起进弃牌堆） */

@@ -41,6 +41,7 @@ const ROLE_IDS = [
   'captain',
   'cs-champion',
   'doggie',
+  'duo-ge',
   'elm-yao',
   'fishy',
   'flashpoint',
@@ -97,6 +98,7 @@ describe('席位排序（seatOrder）', () => {
     'button',
     'captain',
     'doggie',
+    'duo-ge',
     'fishy',
     'guo-tt',
     'king-nan',
@@ -183,10 +185,10 @@ describe('技能优先原则', () => {
 });
 
 describe('角色加载器', () => {
-  it('node loader：默认目录自动发现全部 14 个初始角色（幂等）', async () => {
+  it('node loader：默认目录自动发现全部 15 个初始角色（幂等）', async () => {
     clearRoles();
     expect(await loadAllRoles()).toEqual(ROLE_IDS);
-    expect(listRoles()).toHaveLength(14);
+    expect(listRoles()).toHaveLength(15);
     expect(await loadAllRoles()).toEqual([]); // 重复加载不重复注册
   });
 
@@ -214,6 +216,6 @@ export default def;
     loadAllRolesClient();
     expect(listRoles().map((r) => r.id).sort()).toEqual(ROLE_IDS);
     loadAllRolesClient(); // 幂等
-    expect(listRoles()).toHaveLength(14);
+    expect(listRoles()).toHaveLength(15);
   });
 });

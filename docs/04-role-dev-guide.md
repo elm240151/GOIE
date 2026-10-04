@@ -1,6 +1,6 @@
 # 角色开发规范（★ 未来工作核心文件）
 
-**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。14 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
+**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。15 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
 
 ## RoleDef 接口（shared/src/roles/types.ts）
 
@@ -20,6 +20,7 @@ interface RoleDef {
   flipsOrderOnPlay?: boolean; // 每次出牌（含插队，按物理出牌者计）切换一次牌序正↔倒（海棠洄游）；每轮开始恢复正序。挂上后引擎自动：本手按切换前顺序判定（先判后切）、切换后把桌面牌型按新牌序重新解析（倒序 rank = 最高点数，保证跨序比较用同一约定）、快照携带 orderReversed
   soloJoker?: boolean;        // 王直接打出（橐驼诅咒）：该角色的王可直接作为单张/一对打出——引擎解锁单王牌型（type 'singleJoker'，rank 编码 16、label「王」）：正序/倒序都压过一切单张（含 2/3），只有炸弹能压；以及对王牌型（type 'jokerPair'，rank 编码 16、label「对王」，2026-10-03 用户确认）：压一切对子（正序含对 2、倒序含对 3），只有炸弹能压、王压不了王，正倒序一致；预览/枚举（listPlayable 第 5 参）与解析（parseCombo 第 4 参）都要传此标志
   canFlipResponse?: boolean;  // 翻面接牌（轴承端庄）：游戏提交 `{cardIds, flippedCardId}` 时走引擎 playFlipResponse——纯函数 validateFlipResponse（combos.ts，服务端判定与客户端预览共用）校验两种翻面（桌面单张翻整手接上一手 / 桌面多张翻一张按剩余接），非法剩余打后继（每张剩余牌按原牌型中所当点数 ±1：正序 +1、倒序 −1，王按所当点数、响应可用王补缺）或炸弹，后继桌面为特殊牌型 type 'gap'（label「翻面接 X」、只有炸弹能压）；翻面牌留在 tableSide 并以牌背展示（tableSideHidden）；角色只挂标志 + 客户端按标志开放交互
+  exciteOnPlay?: boolean;    // 亢奋（惰戈，锁定技无需询问）：点数和 ≥20 的手牌在打出那一刻归属改写为自己——引擎在四个提交路径（commitPlay/commitFlipPlay/commitSelfFollow/commitCutIn）开头自动改写：exciteOwnerFor 判定（点数和 = 牌面点数 2 记 2/A 记 1/J=11/Q=12/K=13，王按所当点数，单王/对王视为无穷；自己淘汰或自己打出 → null）→ 若有效则不触发实际出牌者的 flipsOrderOnPlay 切换、attributeTable(effOwner) 发 table:attributed。适用于一切打出（正常出牌/插队/狂吠连压/翻面接/茄汤强制）；接牌轮转从归属者下家继续（原出牌者不跳过）、判定（巨石/地坛等）对归属者生效、轮末牌权归归属者、打完按物理出牌者获胜；插队受害者仍是归属改写前捕获的旧桌面所有者
 }
 ```
 
@@ -186,6 +187,7 @@ export default zecheng;
 | guo-tt.ts | 橐驼 | 地坛 + 诅咒 | onPlayInterrupt ask(confirm 判定，≥3 张、仅他人、每回合限一次：弃权不消耗/失败消耗) + revealTop/discardRevealed + curseNextRound 下回合禁出（轮末取而代之）+ soloJoker 引擎级单王/对王；判定中的王按颜色双花色（打出的牌里与翻出的判定牌都算，见 cards.ts `jokerSuits`） |
 | king-nan.ts | 楠王 | 旺旺 + 回味 | onPlayInterrupt ask(confirm 亡语判定：翻牌非红桃 → 压牌者摸 3，打光手牌也无法获胜——打断钩子跑在获胜判定前即亡语；`prevTableOwnerId()` === 自己时触发；每回合限一次：弃权不消耗/发动即消耗；判定牌一律弃置；王按 `jokerSuits` 双花色；priority 100 先于巨石——2026-10-03 用户确认) + afterPlay 锁定回味（`prevTableOwnerId()` 被压者摸牌：点数总和差绝对值封顶 3，`pointValue` 2 记 2/A 记 1、单王/对王视为无穷）+ onRoundEnd 重置 |
 | button.ts | 轴承 | 端庄 + 窃笑 | canFlipResponse 引擎级翻面接牌（validateFlipResponse 纯函数：桌面单张翻整手接上一手 / 桌面多张翻一张按剩余接，非法剩余打后继或炸弹，后继桌面 type 'gap' 只有炸弹能压；翻面牌 tableSide 牌背展示）+ onSkillAction 主动技（pickTarget ask，每轮一次弃权不消耗，经 facade `peekHand` 发私密事件 skill:peek/skill:peeked——服务端按人路由不广播）+ onRoundEnd 重置 |
+| duo-ge.ts | 惰戈 | 亢奋 + 法音 | exciteOnPlay 引擎级归属改写（点数和 ≥20 打出那一刻视作惰戈打出：不触发实际出牌者技能含洄游、判定对惰戈生效、轮转从惰戈下家——详见 types.ts 字段注释）+ afterPlay ask(confirm 法音：打出牌 ≥2 花色（王按 jokerSuits 双计）→ pickTarget 选目标（含自己，自己手牌 ≤3 时不含）→ pickCards 被弃者自选弃一张进弃牌堆；无次数限制，decline 时重置阶段二残留；priority 950 先于阿色再问 900) |
 
 ## 新增角色的流程（每个角色照此执行）
 
