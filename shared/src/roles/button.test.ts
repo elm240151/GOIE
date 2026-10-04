@@ -230,9 +230,9 @@ describe('轴承：端庄（翻面接牌）', () => {
     expect((r as { reason: string }).reason).toContain('不能以单 2');
   });
 
-  it('倒序（海棠洄游）：后继 = 点数 −1（345 翻 4 剩 35 → 后继越界失败；翻 3 剩 45 → 后继 34）', () => {
+  it('倒序（海棠洄游）：后继同样 = 点数 +1（345 翻 4 剩 35 → 后继 46，不镜像）', () => {
     const hands = {
-      p0: [deck[13]!, deck[14]!, deck[15]!], // 轴承：♥3♥4♥5
+      p0: [deck[16]!, deck[14]!, deck[13]!], // 轴承：♥6 ♥4 ♥3
       p1: [deck[0]!, deck[1]!, deck[2]!], // 海棠：♠345
     };
     pad(hands, { p0: 8, p1: 8 }, [109, 159]);
@@ -241,21 +241,37 @@ describe('轴承：端庄（翻面接牌）', () => {
     engine.playCards('p1', [hands.p1[0]!.id, hands.p1[1]!.id, hands.p1[2]!.id]); // 起 345 → 洄游切倒序
     expect(engine.snapshotFor('p0').orderReversed).toBe(true);
 
-    // 翻 4 → 剩 35 → 后继 24 越界 → 只有炸弹能压
-    const bad = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id], hands.p1[1]!.id);
-    expect(bad.ok).toBe(false);
-    expect((bad as { reason: string }).reason).toContain('无法后继');
-
-    // 翻 3 → 剩 45 → 后继 34（倒序 −1）
-    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id], hands.p1[0]!.id);
+    // 翻 4 → 剩 35 → 后继 46（倒序同样 +1，与正序一致）
+    const r = engine.playCards('p0', [hands.p0[1]!.id, hands.p0[0]!.id], hands.p1[1]!.id);
     expect(r.ok).toBe(true);
-    expect(r.ok && r.events.some((e) => e.type === 'cards:played' && e.combo.type === 'gap' && e.combo.label === '翻面接 34')).toBe(true);
+    expect(r.ok && r.events.some((e) => e.type === 'cards:played' && e.combo.type === 'gap' && e.combo.label === '翻面接 46')).toBe(true);
     const snap = engine.snapshotFor('p0');
     expect(snap.table?.type).toBe('gap');
-    expect(snap.table?.rank).toBe(4);
+    expect(snap.table?.rank).toBe(6);
     expect(snap.orderReversed).toBe(true);
+    expect(snap.tableSideHidden).toEqual([hands.p1[1]!.id]);
+    expect(snap.discardCount).toBe(2); // 剩余 ♠3♠5
+    assertConserved(engine);
+  });
+
+  it('倒序：剩余合法时按倒序镜像接牌（对2 翻一张 → 剩单2 → A 响应 2，与正序对称）', () => {
+    const hands = {
+      p0: [deck[11]!, deck[3]!, deck[4]!], // 轴承：♠A ♠6 ♠7
+      p1: [deck[12]!, deck[25]!], // 海棠：♠2 ♥2（对2）
+    };
+    pad(hands, { p0: 8, p1: 8 }, [109, 159]);
+    const engine = mkEngine(hands, { p0: button, p1: fishy }, 'p1');
+
+    engine.playCards('p1', [hands.p1[0]!.id, hands.p1[1]!.id]); // 起对 2 → 洄游切倒序
+    expect(engine.snapshotFor('p0').orderReversed).toBe(true);
+
+    const r = engine.playCards('p0', [hands.p0[0]!.id], hands.p1[0]!.id); // 翻 ♠2 → 剩单 ♥2 → 倒序 A 响应 2
+    expect(r.ok).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.table?.type).toBe('single');
+    expect(snap.table?.rank).toBe(14); // A
     expect(snap.tableSideHidden).toEqual([hands.p1[0]!.id]);
-    expect(snap.discardCount).toBe(2); // 剩余 ♠4♠5
+    expect(snap.orderReversed).toBe(true);
     assertConserved(engine);
   });
 

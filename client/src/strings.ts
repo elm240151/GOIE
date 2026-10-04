@@ -95,6 +95,7 @@ export const STR = {
     flipHint: '端庄：点桌面一张牌翻面，再选要出的牌',
     flipPicked: '已翻面 {label}，选要出的牌（接不上可「过」，翻面自动复原）',
     flipPickCards: '请选择要出的牌（或「过」放弃翻面）',
+    flipSuggest: '｜端庄：点桌面一张牌翻面再出',
     peekedToast: '{name} 查看了你的手牌',
     peekTitle: '【窃笑】{name} 的手牌',
     peekClose: '关闭',

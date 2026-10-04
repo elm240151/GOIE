@@ -618,7 +618,7 @@ export type FlipResponse =
  * 端庄翻面接牌校验（轴承；纯函数，服务端判定与客户端预览共用）。
  * - 桌面只有一张牌（情况一）：翻掉整手 → 接上一手的牌（按正常管牌规则；前面只有这一手则无法发动）。
  * - 桌面多张（情况二）：翻掉其中一张，剩余牌仍是合法牌型 → 按正常管牌规则接；剩余非法 →
- *   打后继（每张剩余牌按原牌型中所当点数 ±1：正序 +1、倒序 −1；王按所当点数，响应可用王补缺）或炸弹。
+ *   打后继（每张剩余牌按原牌型中所当点数 +1，倒序同样 +1；王按所当点数，响应可用王补缺）或炸弹。
  *   后继接出的桌面（type 'gap'）只有炸弹能压。
  */
 export function validateFlipResponse(
@@ -651,17 +651,17 @@ export function validateFlipResponse(
     if (!canBeat(combo, remainderCombo, cfg, rev)) return { ok: false, reason: '压不过翻面后剩余的牌' };
     return { ok: true, combo, pressedKind: 'top' };
   }
-  // 剩余非法：炸弹照常炸一切；否则后继接牌（每张剩余牌按原牌型中所当点数 ±1，
-  // 后继响应本身不是合法牌型——如剩 35 接 46——不能先按合法牌型卡掉）
+  // 剩余非法：炸弹照常炸一切；否则后继接牌（每张剩余牌按原牌型中所当点数 +1，倒序同样 +1）
+  // 后继响应本身不是合法牌型——如剩 35 接 46——不能先按合法牌型卡掉
   if (combo?.type === 'bomb') return { ok: true, combo, pressedKind: 'top' };
   if (cards.length !== remainder.length)
-    return { ok: false, reason: '剩余不是合法牌型：只能打后继（每张点数 ±1，王可补缺）或炸弹' };
+    return { ok: false, reason: '剩余不是合法牌型：只能打后继（每张点数 +1，王可补缺）或炸弹' };
   const resolvedOf = new Map(table.resolved.map((r) => [r.cardId, r.rank]));
   const successorRanks: number[] = [];
   for (const c of remainder) {
     const r = (resolvedOf.get(c.id) ?? c.rank) as number;
-    const s = rev ? r - 1 : r + 1;
-    if (s < RANK_3 || s > RANK_2) return { ok: false, reason: '翻面后无法后继接牌（只有炸弹能压）' };
+    const s = r + 1;
+    if (s > RANK_2) return { ok: false, reason: '翻面后无法后继接牌（只有炸弹能压）' };
     successorRanks.push(s);
   }
   const need = [...successorRanks].sort((a, b) => a - b);
@@ -672,10 +672,10 @@ export function validateFlipResponse(
       continue;
     }
     const i = need.indexOf(c.rank);
-    if (i < 0) return { ok: false, reason: '后继接牌点数不对（正序 +1、倒序 −1，王可补缺）' };
+    if (i < 0) return { ok: false, reason: '后继接牌点数不对（每张剩余牌点数 +1，王可补缺）' };
     need.splice(i, 1);
   }
-  if (need.length !== jokers) return { ok: false, reason: '后继接牌点数不对（正序 +1、倒序 −1，王可补缺）' };
+  if (need.length !== jokers) return { ok: false, reason: '后继接牌点数不对（每张剩余牌点数 +1，王可补缺）' };
   // 构造后继牌型：真牌记实际点数，王按剩余未命中的后继点数逐个分配（确定性：按牌 id 序）
   const assigned = [...need].sort((a, b) => a - b);
   const sorted = [...cards].sort((a, b) => a.id - b.id);

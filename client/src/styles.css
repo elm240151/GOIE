@@ -783,10 +783,11 @@ body {
 .combo-gap {
   border-color: rgba(224, 168, 255, 0.45);
 }
-/* 端庄翻面模式：桌面每张牌可点选 */
+/* 端庄翻面模式：桌面每张牌可点选（虚线描边提示可点） */
 .combo-mini-btn {
   cursor: pointer;
-  border: 1px solid transparent;
+  border: 1px dashed rgba(224, 168, 255, 0.8);
+  box-shadow: 0 0 5px rgba(224, 168, 255, 0.3);
   transition: transform 0.1s, box-shadow 0.1s;
 }
 .combo-mini-btn:active {

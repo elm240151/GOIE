@@ -89,8 +89,10 @@ export default function GameTable() {
     if (!combo) return { selected, combo: null, hint: invalidReason(selected) };
     const finish = finishHint(combo, myHand.length, rev);
     const warn = finish ?? beatReason(combo, snap?.table ?? null, rev);
-    return { selected, combo, hint: warn ? STR.game.beatWarn.replace('{hint}', warn) : null };
-  }, [myHand, selectedCardIds, flippedCardId, snap?.table, snap?.prevTable, rev, myRole]);
+    // 压不过但端庄可翻面 → 附翻面提示（防止没点桌面牌直接出导致「用不出」）
+    const tip = warn && canFlip ? STR.game.flipSuggest : '';
+    return { selected, combo, hint: warn ? STR.game.beatWarn.replace('{hint}', warn) + tip : null };
+  }, [myHand, selectedCardIds, flippedCardId, snap?.table, snap?.prevTable, rev, myRole, canFlip]);
 
   // 答疑改点：桌面牌型标签已按新点数重写（金色主显），小标展示原牌型（按实体牌重解析）
   const originalTableLabel =
