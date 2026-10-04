@@ -97,6 +97,7 @@ export const STR = {
     flipPickCards: '请选择要出的牌（或「过」放弃翻面）',
     flipSuggest: '｜端庄：点桌面一张牌翻面再出',
     peekedToast: '{name} 查看了你的手牌',
+    ouYaHint: '【呕哑】已包含桌面所有点数，无视管牌规则',
     peekTitle: '【窃笑】{name} 的手牌',
     peekClose: '关闭',
   },

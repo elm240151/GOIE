@@ -305,6 +305,22 @@ export function canBeat(combo: Combo, table: Combo | null, cfg: RuleConfig, rev 
   return true;
 }
 
+// ---------- 呕哑（玊） ----------
+
+/**
+ * 呕哑（玊）：轮到自己接牌时，可打出包含桌面那一手牌全部实际点数的任意合法牌型（无视管牌规则）。
+ * 按实体牌判定（table.resolved 逐张实际所当点数，答疑改点不改实体——与巨石同口径）；
+ * 单王/对王桌面（王类牌型，点数无穷）无实际点数 → 不可发动；起牌（无桌面）不可发动。
+ */
+export function ouYaCovers(combo: Combo, table: Combo | null): boolean {
+  if (!table) return false;
+  const need = new Set<number>();
+  for (const r of table.resolved) if (isRank(r.rank)) need.add(r.rank);
+  if (need.size === 0) return false;
+  for (const r of combo.resolved) need.delete(r.rank);
+  return need.size === 0;
+}
+
 /**
  * 重建 combo 的 label 与 rank 为指定点数（修勾答疑改点：牌型不变、判定点数改写，
  * 实体牌不变）。顺子/连对改的是起点（按当前牌序约定：正序 = 最低点、倒序 = 最高点），

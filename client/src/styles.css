@@ -913,6 +913,11 @@ body {
   color: var(--warn);
   font-size: 12px;
 }
+/* 呕哑（玊）：无视管牌规则的接牌提示（金色 = 技能放行） */
+.preview-ouya {
+  color: var(--gold);
+  font-size: 12px;
+}
 .preview-error {
   color: var(--danger);
   font-size: 13px;

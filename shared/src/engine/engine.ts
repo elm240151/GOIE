@@ -7,7 +7,7 @@
 // - 技能询问：钩子可返回 ask 挂起动作，服务端询问玩家后 resolveAsk 重跑提问钩子（钩子须纯：返回 ask 前不得改状态）
 import { RANK_2, RANK_3, RANK_A, isJoker, isRank, pointValue, type Card, type Rank } from '../cards';
 import { type RuleConfig } from '../config';
-import { canBeat, listPlayable, parseCombo, relabelCombo, validateFlipResponse, type Combo } from './combos';
+import { canBeat, listPlayable, ouYaCovers, parseCombo, relabelCombo, validateFlipResponse, type Combo } from './combos';
 import { buildDeck, shuffle } from './deck';
 import { type GameEvent, type GameEventData } from './events';
 import { type Rng } from './rng';
@@ -170,7 +170,7 @@ export class GameEngine {
       this.deck = shuffle(buildDeck(this.cfg.deck.count), this.rng);
       for (const p of this.players) {
         const n = p.id === this.startPlayerId ? this.cfg.deal.leaderCards : this.cfg.deal.others;
-        this.rawDraw(p.id, n);
+        this.rawDraw(p.id, n); // 两倍（玊）：发牌 ×2（先手 6×2=12、其余 5×2=10）在 rawDraw 内统一处理
       }
     }
     // 角色 setup（发牌后可见手牌）
@@ -227,12 +227,15 @@ export class GameEngine {
     const combo = parseCombo(cards, this.cfg, rev, this.soloJokerAllowed(playerId));
     if (!combo) return fail('这不是合法牌型（王不能单独打出）');
     const baseLegal = canBeat(combo, this.tableCombo, this.cfg, rev);
+    // 呕哑（玊）：接牌时可打出包含桌面全部实际点数的任意合法牌型，无视管牌规则（单王/对王桌面不可发动）
+    const role = this.players.find((p) => p.id === playerId);
+    const ouYaLegal = !!role && !!this.roles.get(role.roleId)?.ouYa && ouYaCovers(combo, this.tableCombo);
     // 留 X 禁止收尾：以单 2/对 2（倒序：单 3/对 3）打完手牌 → 拒绝（技能优先：钩子可 allowAnyway 放行）
     const finishSpecial =
       cards.length === hand.length &&
       (combo.type === 'single' || combo.type === 'pair') &&
       combo.rank === (rev ? RANK_3 : RANK_2);
-    return this.runBeforePlayHooks(playerId, combo, baseLegal && !finishSpecial, 0, false, finishSpecial);
+    return this.runBeforePlayHooks(playerId, combo, (baseLegal || ouYaLegal) && !finishSpecial, 0, false, finishSpecial);
   }
 
   /** 端庄（轴承）翻面接牌：翻面一张桌面牌后按规则响应（合法剩余走正常管牌、非法剩余走后继或炸弹） */
@@ -466,6 +469,12 @@ export class GameEngine {
   soloJokerAllowed(playerId: string): boolean {
     const p = this.players.find((x) => x.id === playerId);
     return !!p && !!this.roles.get(p.roleId)?.soloJoker;
+  }
+
+  /** 两倍（玊）：该玩家的发牌/摸牌/手牌上限均翻倍 */
+  private doubleSupplyFor(playerId: string): boolean {
+    const p = this.players.find((x) => x.id === playerId);
+    return !!p && !!this.roles.get(p.roleId)?.doubleSupply;
   }
 
   /** 取走未消费的事件（服务端广播用；start() 产生的事件也走这里） */
@@ -1113,15 +1122,17 @@ export class GameEngine {
       }
     }
     const bonus = this.takeDrawBonus(playerId);
-    const actual = this.rawDraw(playerId, n + bonus);
+    const actual = this.rawDraw(playerId, n + bonus); // 两倍（玊）翻倍在 rawDraw 内统一处理
     if (actual > 0) this.emit({ type: 'cards:drawn', playerId, count: actual });
     return actual;
   }
 
-  /** 原始摸牌（不走钩子、不吃 drawBonus） */
+  /** 原始摸牌（不走钩子、不吃 drawBonus）；两倍（玊）：一切从牌堆摸的牌 ×2（发牌/轮末/技能摸牌；
+   *  拿回特定牌与别人给牌走 takeRevealed/giveRevealed，不翻倍——2026-10-04 用户确认） */
   private rawDraw(playerId: string, n: number): number {
     if (n <= 0) return 0;
-    const actual = Math.min(n, this.deck.length);
+    const total = n * (this.doubleSupplyFor(playerId) ? 2 : 1);
+    const actual = Math.min(total, this.deck.length);
     const drawn = this.deck.splice(this.deck.length - actual, actual);
     const hand = this.hands.get(playerId);
     if (hand) {
@@ -1189,7 +1200,9 @@ export class GameEngine {
     const hand = this.hands.get(playerId);
     if (!hand) return;
     const exempt = (this.handLimitExempt.get(playerId) ?? 0) + (this.handLimitExemptPrev.get(playerId) ?? 0);
-    if (hand.length - exempt > this.cfg.hand.limit) this.eliminate(playerId, '手牌超过上限');
+    // 两倍（玊）：手牌上限 20×2=40，超出照常淘汰
+    const limit = this.cfg.hand.limit * (this.doubleSupplyFor(playerId) ? 2 : 1);
+    if (hand.length - exempt > limit) this.eliminate(playerId, '手牌超过上限');
   }
 
   private activeCount(): number {

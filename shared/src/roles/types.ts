@@ -254,6 +254,19 @@ export interface RoleDef {
    * 轮末无人再接则自己获得牌权，打完手牌仍按实际出牌者获胜；自己淘汰后失效。
    */
   exciteOnPlay?: boolean;
+  /**
+   * 两倍（玊）：初始手牌、手牌上限、所有从牌堆的摸牌数量均为正常数量的两倍——
+   * 初始手牌 = 发牌张数 ×2（先手 6×2=12、其余 5×2=10）；手牌上限 20×2=40（超出照常淘汰）；
+   * 轮末补摸/插队受害者 X/无名加牌 X/旺旺 3/回味 n/隐匿重铸等一切经 drawCards 的摸牌 ×2；
+   * 拿回特定牌（takeRevealed 判定牌摸回）与别人给牌（giveRevealed 展示区拿牌）不翻倍。
+   */
+  doubleSupply?: boolean;
+  /**
+   * 呕哑（玊）：轮到自己接牌时，可打出包含桌面那一手牌全部实际点数的任意合法牌型，
+   * 无视管牌规则（判定见 combos.ouYaCovers；单王/对王桌面无实际点数不可发动）。
+   * 引擎在 playCards 校验层放行，其余流程（获胜/判定/插队）照常。
+   */
+  ouYa?: boolean;
 }
 
 export type RoleRegistry = Map<string, RoleDef>;

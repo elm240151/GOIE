@@ -1,6 +1,6 @@
 // 游戏桌：对手座位 + 中央牌区 + 手牌扇形点选 + 实时牌型预览 + 终局弹窗。
 import { useEffect, useMemo, useState } from 'react';
-import { defaultRules, getRole, parseCombo, rankLabel, validateFlipResponse, type Card as CardT } from '@gdys/shared';
+import { defaultRules, getRole, ouYaCovers, parseCombo, rankLabel, validateFlipResponse, type Card as CardT } from '@gdys/shared';
 import { useStore } from '../store';
 import { STR, TURN_SECONDS } from '../strings';
 import { beatReason, finishHint, invalidReason } from '../beatHint';
@@ -68,7 +68,12 @@ export default function GameTable() {
   // 端庄（轴承）翻面选中时走翻面接牌校验（与服务端同一套 validateFlipResponse）
   const rev = snap?.orderReversed ?? false;
   const canFlip = myTurn && !finished && !!myRole?.canFlipResponse && snap?.table !== null;
-  const preview = useMemo(() => {
+  const preview = useMemo((): {
+    selected: readonly CardT[];
+    combo: ReturnType<typeof parseCombo>;
+    hint: string | null;
+    ouYa?: boolean;
+  } => {
     const selected = myHand.filter((c) => selectedCardIds.includes(c.id));
     if (flippedCardId != null && snap?.table) {
       if (selected.length === 0) return { selected, combo: null, hint: STR.game.flipPickCards };
@@ -89,6 +94,10 @@ export default function GameTable() {
     if (!combo) return { selected, combo: null, hint: invalidReason(selected) };
     const finish = finishHint(combo, myHand.length, rev);
     const warn = finish ?? beatReason(combo, snap?.table ?? null, rev);
+    // 呕哑（玊）：接牌时包含桌面全部实际点数的任意合法牌型——无视管牌规则，「压不过」不再是警告
+    if (warn && !finish && myRole?.ouYa && snap?.table && ouYaCovers(combo, snap.table)) {
+      return { selected, combo, hint: STR.game.ouYaHint, ouYa: true };
+    }
     // 压不过但端庄可翻面 → 附翻面提示（防止没点桌面牌直接出导致「用不出」）
     const tip = warn && canFlip ? STR.game.flipSuggest : '';
     return { selected, combo, hint: warn ? STR.game.beatWarn.replace('{hint}', warn) + tip : null };
@@ -277,7 +286,7 @@ export default function GameTable() {
             <em className="tag">{getRole(me?.roleId ?? '')?.name ?? ''}</em>
           </span>
           <span className="my-handcount">
-            ×{me?.handCount ?? 0}/{defaultRules.hand.limit}
+            ×{me?.handCount ?? 0}/{myRole?.doubleSupply ? defaultRules.hand.limit * 2 : defaultRules.hand.limit}
           </span>
           {myPlay && (
             <span className="my-play">
@@ -317,7 +326,9 @@ export default function GameTable() {
           {preview.combo ? (
             <>
               <ComboBadge combo={preview.combo} small />
-              {preview.hint && <span className="preview-warn">{preview.hint}</span>}
+              {preview.hint && (
+                <span className={preview.ouYa ? 'preview-ouya' : 'preview-warn'}>{preview.hint}</span>
+              )}
             </>
           ) : preview.hint ? (
             <span className="preview-error">{preview.hint}</span>

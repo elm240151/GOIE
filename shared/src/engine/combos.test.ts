@@ -5,6 +5,7 @@ import {
   canBeat,
   comboKey,
   listPlayable,
+  ouYaCovers,
   parseCombo,
   relabelCombo,
   validateFlipResponse,
@@ -671,6 +672,58 @@ describe('单王（橐驼诅咒）：singleJoker 牌型', () => {
     expect(r.type).toBe('singleJoker');
     expect(r.rank).toBe(16);
     expect(r.label).toBe('王');
+  });
+});
+
+describe('ouYaCovers 呕哑包含判定（玊）', () => {
+  it('包含桌面全部实际点数即可（无视牌型与大小）', () => {
+    const table = parse([5, 5])!; // 对5
+    expect(ouYaCovers(parse([5])!, table)).toBe(true); // 单5 接对5（牌型不同也放行）
+    expect(ouYaCovers(parse([3, 4, 5, 6, 7])!, table)).toBe(true); // 顺子含5
+    expect(ouYaCovers(parse([5, 5, 5, 5])!, table)).toBe(true); // 炸弹含5
+    expect(ouYaCovers(parse([9])!, table)).toBe(false); // 不含5
+    expect(ouYaCovers(parse([9, 9])!, table)).toBe(false);
+  });
+
+  it('顺子桌面须包含每个点数', () => {
+    const table = parse([3, 4, 5, 6, 7])!;
+    expect(ouYaCovers(parse([3, 4, 5, 6, 7])!, table)).toBe(true);
+    expect(ouYaCovers(parse([4, 5, 6, 7, 8])!, table)).toBe(false); // 缺3
+    expect(ouYaCovers(parse([3, 3, 4, 4, 5, 5, 6, 6, 7, 7])!, table)).toBe(true); // 连对覆盖
+  });
+
+  it('王按所当点数参与（响应王补缺、桌面王计所当）', () => {
+    const tableK = parse([13, 16])!; // 王+K = 对K
+    expect(ouYaCovers(parse([13, 16])!, tableK)).toBe(true); // 王+K 响应
+    expect(ouYaCovers(parse([12])!, tableK)).toBe(false); // 不含K
+    const tableStraight = parse([3, 4, 16, 6, 7])!; // 王当5
+    expect(ouYaCovers(parse([3, 4, 5, 6, 7])!, tableStraight)).toBe(true);
+    expect(ouYaCovers(parse([3, 4, 16, 6, 7])!, tableStraight)).toBe(true);
+  });
+
+  it('单王/对王桌面（点数无穷）不可发动；起牌（无桌面）不可发动', () => {
+    const solo = parseCombo([mk(16)], cfg, false, true)!; // 单王（诅咒）
+    expect(ouYaCovers(parse([9])!, solo)).toBe(false);
+    expect(ouYaCovers(parse([9, 9, 9])!, solo)).toBe(false); // 炸弹也不走呕哑（正常管牌规则另算）
+    const pair = parseCombo([mk(16), mk(17)], cfg, false, true)!; // 对王
+    expect(ouYaCovers(parse([9, 9])!, pair)).toBe(false);
+    expect(ouYaCovers(parse([9])!, null)).toBe(false);
+  });
+
+  it('答疑改点不改实体：按实际所含判定（与巨石同口径）', () => {
+    const table = parse([5, 5])!;
+    const retagged = relabelCombo(table, 9, false);
+    expect(ouYaCovers(parse([5, 5])!, retagged)).toBe(true); // 实体仍是对5
+    expect(ouYaCovers(parse([9, 9])!, retagged)).toBe(false); // 按实际所含 5，对9 不含 → false
+  });
+
+  it('翻面接（gap）桌面按实际点数判定', () => {
+    const table = parse([3, 4, 5])!;
+    const res = validateFlipResponse(table, null, table.cards[1]!.id, [mk(4), mk(6)], cfg);
+    expect(res.ok).toBe(true); // 翻面接 46（gap）
+    const gap = res.ok ? res.combo : null;
+    expect(ouYaCovers(parse([4, 5, 6])!, gap!)).toBe(true); // 顺子456 含4、6
+    expect(ouYaCovers(parse([4])!, gap!)).toBe(false); // 缺6
   });
 });
 
