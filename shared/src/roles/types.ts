@@ -284,6 +284,24 @@ export interface RoleDef {
    * ③阿色抽你限制适用（算响应）、红楼梦禁出期间不可吃、起牌（无桌面）不可吃。
    */
   pancake?: boolean;
+  /**
+   * 贪婪（阿摩，锁定技无需询问）：
+   * ①初始手牌 = 2×全场人数张（X = 全场人数含自己；先手/后手同，不沿用「先手多 1」），
+   *   在 start 发牌处直接按 2X 发。
+   * ②手牌上限 30（超出照常淘汰）。
+   * ③每次普通主动出牌后摸 1 张（从牌堆，牌堆空走弃牌洗回）：出完最后一张先判获胜不摸；
+   *   再问补打（playSideCard）不算；被惰戈亢奋归属改写（tableOwnerId ≠ 自己）不算——
+   *   那手牌视作惰戈打出（2026-10-05 用户确认）。
+   */
+  greedy?: boolean;
+  /**
+   * 耀武（阿摩，锁定技无需询问）：手牌覆盖 A~K 全部 13 个点数（3..15，含 2）→ 立即获胜
+   * （combos.yaoWuCovers：每张王补一个缺的点数，王视作任意点数仅用于此判定）。
+   * 每次手牌变化后立即判定：发牌后（start 里 phase 置 playing 后统一判）、一切 rawDraw 摸牌后、
+   * 拿回/收下展示牌后（moveRevealedToHand）、别人给牌后（facade giveTo，如骚骚换牌）；
+   * 满足即 finishGame（2026-10-05 用户确认：任何时刻满足立即获胜，含发牌时）。
+   */
+  yaoWu?: boolean;
 }
 
 export type RoleRegistry = Map<string, RoleDef>;

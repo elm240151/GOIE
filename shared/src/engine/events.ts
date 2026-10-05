@@ -14,6 +14,7 @@ export type GameEventData =
   | { type: 'cards:drawn'; playerId: string; count: number }
   | { type: 'cards:revealed'; playerId: string; cards: Card[]; purpose: string }
   | { type: 'pancake:flipped'; playerId: string; count: number }
+  | { type: 'deck:recycled'; count: number }
   | { type: 'player:eliminated'; playerId: string; reason: string }
   | { type: 'skill:triggered'; playerId: string; roleId: string; skillId: string; text: string }
   | { type: 'skill:peek'; viewerId: string; targetId: string; cards: Card[] }

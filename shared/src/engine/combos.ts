@@ -358,6 +358,20 @@ export function ouYaCovers(combo: Combo, table: Combo | null): boolean {
 }
 
 /**
+ * 耀武（阿摩）：手牌覆盖 A~K 全部 13 个点数（3..15，含 2）→ 立即获胜。
+ * 每张王补一个缺的点数（王视作任意点数仅用于此判定，不影响管牌/打出）。
+ */
+export function yaoWuCovers(cards: Card[]): boolean {
+  const real = new Set<number>();
+  let jokers = 0;
+  for (const c of cards) {
+    if (isJoker(c)) jokers++;
+    else real.add(c.rank);
+  }
+  return jokers >= 13 - real.size;
+}
+
+/**
  * 重建 combo 的 label 与 rank 为指定点数（修勾答疑改点：牌型不变、判定点数改写，
  * 实体牌不变）。顺子/连对改的是起点（按当前牌序约定：正序 = 最低点、倒序 = 最高点），
  * 展示窗口恒为升序（与 parseCombo 的 label 格式一致）。

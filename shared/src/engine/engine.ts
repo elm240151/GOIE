@@ -7,7 +7,7 @@
 // - 技能询问：钩子可返回 ask 挂起动作，服务端询问玩家后 resolveAsk 重跑提问钩子（钩子须纯：返回 ask 前不得改状态）
 import { RANK_2, RANK_3, RANK_A, isJoker, isRank, pointValue, type Card, type Rank } from '../cards';
 import { type RuleConfig } from '../config';
-import { canBeat, exactFollows, isExactFollow, listPlayable, ouYaCovers, parseCombo, relabelCombo, validateFlipResponse, type Combo } from './combos';
+import { canBeat, exactFollows, isExactFollow, listPlayable, ouYaCovers, parseCombo, relabelCombo, validateFlipResponse, yaoWuCovers, type Combo } from './combos';
 import { buildDeck, shuffle } from './deck';
 import { type GameEvent, type GameEventData } from './events';
 import { type Rng } from './rng';
@@ -181,7 +181,12 @@ export class GameEngine {
     } else {
       this.deck = shuffle(buildDeck(this.cfg.deck.count), this.rng);
       for (const p of this.players) {
-        const n = p.id === this.startPlayerId ? this.cfg.deal.leaderCards : this.cfg.deal.others;
+        // 贪婪（阿摩）：初始手牌 = 2×全场人数张（先手/后手同，不沿用「先手多 1」）
+        const n = this.roles.get(p.roleId)?.greedy
+          ? this.players.length * 2
+          : p.id === this.startPlayerId
+            ? this.cfg.deal.leaderCards
+            : this.cfg.deal.others;
         this.rawDraw(p.id, n); // 两倍（玊）：发牌 ×2（先手 6×2=12、其余 5×2=10）在 rawDraw 内统一处理
       }
     }
@@ -211,6 +216,8 @@ export class GameEngine {
     this.phase = 'playing';
     this.emit({ type: 'game:started', leaderId: this.startPlayerId });
     this.emit({ type: 'deal:done' });
+    this.checkYaoWu(); // 耀武（阿摩）：发牌时就满足 → 立即获胜（phase 已置 playing，rawDraw 内的检查在发牌期跳过）
+    if (this.phase !== 'playing') return;
     this.startRound(this.startPlayerId);
   }
 
@@ -865,6 +872,14 @@ export class GameEngine {
       this.finishGame(playerId);
       return this.ok();
     }
+    // 贪婪（阿摩）：每次普通主动出牌后摸 1 张（从牌堆）。归属改写（亢奋：桌面视作惰戈打出）不摸；
+    // 再问补打走 playSideCard 不经此流程；出完即胜已在上面先判（获胜不摸）。
+    // 摸牌可能触发耀武立即获胜或超上限淘汰 → 终局则跳过后续询问。
+    if (this.roles.get(this.players.find((p) => p.id === playerId)?.roleId ?? '')?.greedy && this.tableOwnerId === playerId) {
+      const drawn = this.rawDraw(playerId, 1);
+      if (drawn > 0 && this.phase === 'playing') this.emit({ type: 'cards:drawn', playerId, count: drawn });
+      if (this.phase !== 'playing') return this.ok();
+    }
     // 吐饼（R.F）：每次打出后最先问（先于狂吠/插队）；物理出牌者 ≠ R费（归属改写不改物理出牌者）
     const offer = this.offerPancake(playerId);
     if (offer) return offer;
@@ -1365,6 +1380,7 @@ export class GameEngine {
   }
 
   private finishGame(winnerId: string): void {
+    if (this.phase === 'finished') return; // 守卫：耀武/淘汰可能在技能解析中先于获胜判定终局，避免重复计分
     this.phase = 'finished';
     this.winnerId = winnerId;
     this.turnPlayerId = null;
@@ -1425,6 +1441,7 @@ export class GameEngine {
    *  拿回特定牌与别人给牌走 takeRevealed/giveRevealed，不翻倍——2026-10-04 用户确认） */
   private rawDraw(playerId: string, n: number): number {
     if (n <= 0) return 0;
+    this.recycleDiscard(); // 牌堆耗尽洗回（2026-10-05 用户确认）：牌堆空时弃牌堆洗回当新牌堆
     const total = n * (this.doubleSupplyFor(playerId) ? 2 : 1);
     const actual = Math.min(total, this.deck.length);
     const drawn = this.deck.splice(this.deck.length - actual, actual);
@@ -1433,7 +1450,20 @@ export class GameEngine {
       hand.push(...drawn);
       this.checkHandLimit(playerId);
     }
+    if (this.phase === 'playing') this.checkYaoWu(); // 耀武（阿摩）：摸牌后立即判定（发牌阶段的检查统一在 start 末尾做）
     return actual;
+  }
+
+  /**
+   * 牌堆耗尽洗回（2026-10-05 用户确认，全局规则）：牌堆空时弃牌堆洗回当新牌堆继续摸；
+   * 判定类技能「牌堆已空视为未判定」相应变为「牌堆+弃牌堆都空才视为未判定」（revealTop 同走此路）。
+   * 牌守恒不变：162 = 手牌+桌面+牌堆+弃牌+饼+翻牌池+边牌，洗回只是牌堆/弃牌两堆之间流转。
+   */
+  private recycleDiscard(): void {
+    if (this.deck.length > 0 || this.discarded.length === 0) return;
+    this.deck = shuffle(this.discarded, this.rng);
+    this.discarded = [];
+    this.emit({ type: 'deck:recycled', count: this.deck.length });
   }
 
   private removeCards(playerId: string, cards: Card[]): void {
@@ -1494,8 +1524,10 @@ export class GameEngine {
     const hand = this.hands.get(playerId);
     if (!hand) return;
     const exempt = (this.handLimitExempt.get(playerId) ?? 0) + (this.handLimitExemptPrev.get(playerId) ?? 0);
-    // 两倍（玊）：手牌上限 20×2=40，超出照常淘汰
-    const limit = this.cfg.hand.limit * (this.doubleSupplyFor(playerId) ? 2 : 1);
+    // 贪婪（阿摩）：上限 30；两倍（玊）：20×2=40；超出均照常淘汰
+    const limit = this.roles.get(this.players.find((p) => p.id === playerId)?.roleId ?? '')?.greedy
+      ? 30
+      : this.cfg.hand.limit * (this.doubleSupplyFor(playerId) ? 2 : 1);
     if (hand.length - exempt > limit) this.eliminate(playerId, '手牌超过上限');
   }
 
@@ -1503,10 +1535,33 @@ export class GameEngine {
     return this.players.filter((p) => !this.eliminated.has(p.id)).length;
   }
 
+  // ---------- 耀武（阿摩）：手牌覆盖 A~K 全部 13 点立即获胜（2026-10-05 用户确认） ----------
+
+  /** 手牌变化后立即判定（发牌/摸牌/收牌/别人给牌后调用）；满足即终局 */
+  private checkYaoWu(): boolean {
+    for (const p of this.players) {
+      if (this.eliminated.has(p.id)) continue;
+      if (!this.roles.get(p.roleId)?.yaoWu) continue;
+      if (yaoWuCovers(this.hands.get(p.id) ?? [])) {
+        this.emit({
+          type: 'skill:triggered',
+          playerId: p.id,
+          roleId: p.roleId,
+          skillId: 'yao-wu',
+          text: `${p.name} 集齐 A~K 全部点数，直接宣布胜利！`,
+        });
+        this.finishGame(p.id);
+        return true;
+      }
+    }
+    return false;
+  }
+
   // ---------- 翻牌展示区 ----------
 
   /** 翻牌堆顶 n 张到展示区（角色须 takeRevealed/giveRevealed/discardRevealed 收尾） */
   private revealTop(n: number): Card[] {
+    this.recycleDiscard(); // 洗回后翻牌；牌堆+弃牌堆都空 → 翻 0 张（判定类技能视为未判定）
     const actual = Math.min(Math.max(0, n), this.deck.length);
     const cards = this.deck.splice(this.deck.length - actual, actual);
     this.revealedPool.push(...cards);
@@ -1527,6 +1582,7 @@ export class GameEngine {
     hand.push(...taken);
     if (exempt) this.handLimitExempt.set(playerId, (this.handLimitExempt.get(playerId) ?? 0) + taken.length);
     this.checkHandLimit(playerId);
+    if (this.phase === 'playing') this.checkYaoWu(); // 耀武（阿摩）：拿回/收下牌后立即判定
   }
 
   /** 展示区指定牌（缺省全部）→ 弃牌堆 */
@@ -1643,6 +1699,7 @@ export class GameEngine {
         if (!hand || cards.length === 0) return;
         hand.push(...cards);
         engine.checkHandLimit(id);
+        if (engine.phase === 'playing') engine.checkYaoWu(); // 耀武（阿摩）：别人给牌（骚骚换牌等）后立即判定
       },
       announce: (roleId, skillId, text) => {
         if (!opts?.dryRun) engine.emit({ type: 'skill:triggered', playerId, roleId, skillId, text });

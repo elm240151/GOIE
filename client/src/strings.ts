@@ -101,6 +101,7 @@ export const STR = {
     rfRestrict: '【吐饼】无牌权时只能打出 {rank} 或炸弹（恰好接上的牌请走吃饼询问）',
     rfNoPass: '【吐饼】吃过饼不能过：只能打 {rank} 或炸弹',
     pancakeBadge: '🍪{n}',
+    deckRecycled: '牌堆已空：弃牌堆洗回牌堆（{n} 张）',
     peekTitle: '【窃笑】{name} 的手牌',
     peekClose: '关闭',
   },

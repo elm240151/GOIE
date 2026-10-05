@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { JOKER_SMALL, cardColor, type Card } from '../cards';
 import { defaultRules } from '../config';
+import type { GameEvent } from './events';
 import type { RoleDef, RoleRegistry, SkillAsk } from '../roles/types';
 import { listPlayable } from './combos';
 import { buildDeck } from './deck';
@@ -322,6 +323,72 @@ describe('GameEngine 游戏循环', () => {
     expect(snap0.winnerId).not.toBeNull();
     // 牌守恒：手牌 + 桌面 + 牌堆 + 弃牌堆 = 54（单副牌）
     expect(totalCards(snap0)).toBe(54);
+  });
+
+  it('牌堆耗尽：轮末补摸时弃牌堆洗回牌堆（发 deck:recycled）', () => {
+    const deck = buildDeck(1);
+    const pick = (r: number, s: number) => deck.find((c) => c.rank === r && c.suit === s)!;
+    const used = new Set([pick(3, 2).id, pick(5, 0).id, pick(4, 3).id]);
+    const filler = deck.filter((c) => !used.has(c.id));
+    const hands = {
+      p0: [pick(3, 2), pick(5, 0), ...filler.slice(0, 16)], // 18 张
+      p1: [pick(4, 3), ...filler.slice(16, 33)], // 18 张
+      p2: filler.slice(33), // 18 张
+    }; // 18 × 3 = 54 → 牌堆 0
+    const { engine } = mkEngine(3, { hands, deckCount: 1, startPlayerId: 'p0' });
+    expect(engine.playCards('p0', [pick(3, 2).id]).ok).toBe(true); // 单3
+    expect(engine.playCards('p1', [pick(4, 3).id]).ok).toBe(true); // 压单4 → ♣3 进弃牌堆
+    expect(engine.pass('p2').ok).toBe(true); // p2 过 → 轮回 p0
+    expect(engine.playCards('p0', [pick(5, 0).id]).ok).toBe(true); // 压单5
+    expect(engine.pass('p1').ok).toBe(true);
+    const r = engine.pass('p2'); // 除出牌者外全过 → 轮末 p0 摸 1 → 牌堆空 → 弃牌 2 张洗回（桌面 ♠5 尚未进弃牌堆）
+    expect(r.ok).toBe(true);
+    expect((r as { events: GameEvent[] }).events.some((e) => e.type === 'deck:recycled' && e.count === 2)).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.deckCount).toBe(1); // 洗回 2、摸 1
+    expect(snap.discardCount).toBe(1); // 洗回后桌面 ♠5 进弃牌堆
+    expect(totalCards(snap)).toBe(54);
+  });
+
+  it('牌堆耗尽：判定类技能翻牌时弃牌堆洗回（revealTop 走洗回）', () => {
+    const deck = buildDeck(1);
+    const pick = (r: number, s: number) => deck.find((c) => c.rank === r && c.suit === s)!;
+    const probe = mkRole('probe', {
+      hooks: {
+        onRoundEnd(ctx) {
+          const cards = ctx.game.revealTop(1, '探针');
+          if (cards.length > 0) ctx.game.discardRevealed(cards.map((c) => c.id));
+          return { ok: true };
+        },
+      },
+    });
+    const used = new Set([pick(3, 2).id, pick(4, 3).id]);
+    const filler = deck.filter((c) => !used.has(c.id));
+    const hands = {
+      p0: [pick(3, 2), ...filler.slice(0, 17)], // 18 张
+      p1: [pick(4, 3), ...filler.slice(17, 34)], // 18 张
+      p2: filler.slice(34), // 18 张（探针）
+    }; // 18 × 3 = 54 → 牌堆 0
+    const registry: RoleRegistry = new Map([['probe', probe]]);
+    const { engine } = mkEngine(3, {
+      hands,
+      deckCount: 1,
+      startPlayerId: 'p0',
+      roles: registry,
+      roleIds: { p2: 'probe' },
+    });
+    expect(engine.playCards('p0', [pick(3, 2).id]).ok).toBe(true); // 单3
+    expect(engine.playCards('p1', [pick(4, 3).id]).ok).toBe(true); // 压单4 → ♣3 进弃牌堆
+    expect(engine.pass('p2').ok).toBe(true);
+    const r = engine.pass('p0'); // 全过 → 轮末钩子：翻牌 → 牌堆空 → 弃牌 1 张洗回 → 翻 1 弃 1
+    expect(r.ok).toBe(true);
+    const evs = (r as { events: GameEvent[] }).events;
+    expect(evs.some((e) => e.type === 'deck:recycled' && e.count === 1)).toBe(true);
+    expect(evs.some((e) => e.type === 'cards:revealed')).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.deckCount).toBe(0); // 翻牌洗回 1 → 翻 1 弃 1 → 轮末补摸再次洗回摸 1 → 0
+    expect(snap.discardCount).toBe(1); // 轮末后桌面 ♦4 进弃牌堆
+    expect(totalCards(snap)).toBe(54);
   });
 
   it('起牌者出牌后，跟牌者必须恰好大一级（基础规则拒绝）', () => {

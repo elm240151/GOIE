@@ -578,6 +578,10 @@ export const useStore = create<AppStore>((set, get) => ({
         toast('skill', `【${skillName}】${e.text as string}`);
         break;
       }
+      case 'deck:recycled': {
+        toast('info', STR.game.deckRecycled.replace('{n}', String(e.count)));
+        break;
+      }
       case 'skill:peek': {
         // 窃笑（轴承）：服务端定向发我的私密查看结果 → 弹窗展示目标手牌
         set({ peekedHand: { targetId: e.targetId as string, cards: e.cards as Card[] } });
