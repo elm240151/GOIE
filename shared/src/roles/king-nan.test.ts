@@ -5,6 +5,7 @@ import { buildDeck } from '../engine/deck';
 import { GameEngine, type EnginePlayer } from '../engine/engine';
 import { mulberry32 } from '../engine/rng';
 import type { RoleDef, RoleRegistry, SkillAsk } from './types';
+import doggie from './doggie';
 import guoTT from './guo-tt';
 import kingNan from './king-nan';
 import yyXue from './yy-xue';
@@ -307,6 +308,52 @@ describe('楠王：旺旺（亡语）+ 回味', () => {
     expect(snap.phase).toBe('finished');
     expect(snap.winnerId).toBe('p0'); // 楠王照常获胜
     expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(8); // 8 − 1 + 1
+  });
+
+  it('回味只对楠王压牌生效：修勾狂吠压自己的牌不触发（2026-10-05 用户实机 bug：每手狂吠都触发回味）', () => {
+    const hands = {
+      p0: [deck[2]!], // 楠王：♠5 起牌
+      p1: [deck[3]!, deck[4]!], // 修勾：♠6 压楠王的牌、♠7 狂吠压自己的 ♠6
+    };
+    pad(hands, { p0: 8, p1: 8 }, [109, 159]);
+    const engine = mkEngine(hands, { p0: kingNan, p1: doggie });
+
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true); // 起 ♠5（起牌不触发）
+    const r = engine.playCards('p1', [hands.p1[0]!.id]); // ♠6 压楠王的牌 → 旺旺询问（压的是楠王，正常）
+    expect(r.ok && r.suspended).toBe(true);
+    const ww = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect(ww?.kind).toBe('confirm');
+    const d = engine.resolveAsk('p0', { askId: ww!.askId!, choice: 'decline' }); // 旺旺弃权
+    expect(d.ok && d.suspended).toBe(true); // 修勾狂吠询问
+    const kf = d.ok ? (d.pendingAsk as SkillAsk) : null;
+    expect(kf?.kind).toBe('selfFollow');
+    const a = engine.resolveAsk('p1', { askId: kf!.askId!, choice: 'yes', cardIds: [hands.p1[1]!.id] }); // ♠7 压自己的 ♠6
+    expect(a.ok).toBe(true);
+    expect(a.ok && a.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'hui-wei')).toBe(false); // 自己压自己不触发回味
+    const snap = engine.snapshotFor('p0');
+    expect(snap.table?.rank).toBe(7); // 桌面是狂吠的 ♠7
+    expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(6); // 8 − 2，没有被回味摸牌
+    assertConserved(engine);
+  });
+
+  it('回味只对楠王压牌生效：其他玩家压牌不触发被压者摸牌（afterPlay 对全场每个角色都跑）', () => {
+    const hands = {
+      p0: byRank(9, 1), // 楠王：♠9（可压但选择过）
+      p1: byRank(6, 1), // ♠6 压 p2 的 ♠5
+      p2: byRank(5, 1), // ♠5 起牌
+    };
+    pad(hands, { p0: 8, p1: 8, p2: 8 }, [109, 159]);
+    const engine = mkEngine(hands, { p0: kingNan }, 'p2');
+
+    expect(engine.playCards('p2', [hands.p2[0]!.id]).ok).toBe(true); // p2 起 ♠5
+    engine.pass('p0'); // 楠王过牌
+    const r = engine.playCards('p1', [hands.p1[0]!.id]); // ♠6 压 ♠5（压牌者不是楠王）
+    expect(r.ok && !r.suspended).toBe(true); // 楠王的牌没被压：旺旺不询问
+    expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'hui-wei')).toBe(false); // 压牌者不是楠王：回味不触发
+    const snap = engine.snapshotFor('p0');
+    expect(snap.players.find((p) => p.id === 'p2')!.handCount).toBe(7); // 8 − 1，没有被回味摸牌
+    expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(7); // 8 − 1
+    assertConserved(engine);
   });
 
   it('亡语同场顺序：旺旺先判成功 +3 → 巨石后判命中驱逐（压牌者淘汰、无人获胜、雪灾夺权）', () => {

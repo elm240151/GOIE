@@ -95,7 +95,10 @@ const kingNan: RoleDef = {
       return { ok: true };
     },
     afterPlay(ctx, played) {
-      // 锁定技：不询问。压牌 = 本手出牌前桌面有归属者且不是自己（起牌不触发）
+      // 锁定技：不询问。触发 = 楠王压牌（本手出牌者是楠王——afterPlay 对全场每个角色的每次出牌都会跑，
+      // 不守出牌者会把「别人压别人」也当成回味：2026-10-05 用户实机发现修勾狂吠自压每手都触发）；
+      // 压牌 = 本手出牌前桌面有归属者且不是自己（起牌不触发）
+      if (ctx.game.roundLastPlayerId() !== ctx.self.id) return;
       const target = ctx.game.prevTableOwnerId();
       if (target == null || target === ctx.self.id) return;
       if (ctx.game.eliminated(target)) return;
