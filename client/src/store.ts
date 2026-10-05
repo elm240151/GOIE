@@ -104,10 +104,10 @@ interface AppStore {
   tablePlayerId: string | null;
   /** 最近谁过了（气泡用，值为过牌时间戳） */
   passedAt: Record<string, number>;
-  /** 本轮每人最近一次打出的牌（打出者面前保持可见，轮末清除进弃牌堆） */
-  roundPlays: Record<string, Combo>;
-  /** 本轮全部出牌按时间序（出牌记录条；轮末统一弃置时清空） */
+  /** 本轮全部出牌按时间序（中央暂存区 + 出牌记录条共用；轮末统一弃置时清空） */
   roundPlayLog: { playerId: string; combo: Combo }[];
+  /** 本轮判定翻出的牌（中央暂存区保留到回合结束，回合结束统一弃置） */
+  judgedCards: Card[];
   /** 明置桌旁的边牌（再问补打等，随当前一手牌一起弃置） */
   tableSideCards: Card[];
   /** 服务端发给我的技能询问（完整载荷，弹窗用） */
@@ -242,8 +242,8 @@ export const useStore = create<AppStore>((set, get) => ({
   records: null,
   tablePlayerId: null,
   passedAt: {},
-  roundPlays: {},
   roundPlayLog: [],
+  judgedCards: [],
   tableSideCards: [],
   skillAsk: null,
   revealed: null,
@@ -354,8 +354,8 @@ export const useStore = create<AppStore>((set, get) => ({
       skillAsk: null,
       revealed: null,
       organize: false,
-      roundPlays: {},
       roundPlayLog: [],
+      judgedCards: [],
       enteredCardIds: [],
       turnSeq: 0,
       flippedCardId: null,
@@ -482,8 +482,8 @@ export const useStore = create<AppStore>((set, get) => ({
       set({
         tablePlayerId: null,
         passedAt: {},
-        roundPlays: {},
         roundPlayLog: [],
+        judgedCards: [],
         tableSideCards: [],
         drawnAt: {},
         curseActiveIds: [],
@@ -501,8 +501,8 @@ export const useStore = create<AppStore>((set, get) => ({
         snap: null,
         skillAsk: null,
         revealed: null,
-        roundPlays: {},
         roundPlayLog: [],
+        judgedCards: [],
         tableSideCards: [],
         selectedCardIds: [],
         organize: false,
@@ -601,25 +601,20 @@ export const useStore = create<AppStore>((set, get) => ({
           tablePlayerId: e.playerId as string,
           passedAt: {},
           tableSideCards: [],
-          roundPlays: { ...s.roundPlays, [e.playerId as string]: e.combo as Combo },
           roundPlayLog: [...s.roundPlayLog, { playerId: e.playerId as string, combo: e.combo as Combo }],
         }));
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
         break;
       case 'table:attributed': {
-        // 桌面一手牌归属改写（再问/亢奋）：展示移到新归属者名下；记录条末条同步改归属（同手牌不新增）
-        const from = e.fromPlayerId as string;
+        // 桌面一手牌归属改写（再问/亢奋）：记录末条同步改归属（同手牌不新增）
         const to = e.playerId as string;
         set((s) => {
-          const plays = { ...s.roundPlays };
-          delete plays[from];
-          plays[to] = e.combo as Combo;
           const log = [...s.roundPlayLog];
           const last = log[log.length - 1];
           if (last && last.combo.cards[0]!.id === (e.combo as Combo).cards[0]!.id) {
             log[log.length - 1] = { playerId: to, combo: last.combo };
           }
-          return { tablePlayerId: to, roundPlays: plays, roundPlayLog: log };
+          return { tablePlayerId: to, roundPlayLog: log };
         });
         break;
       }
@@ -633,8 +628,8 @@ export const useStore = create<AppStore>((set, get) => ({
       }
       case 'round:ended': {
         cancelDrawnToast(); // 轮末摸牌由 roundEndToast 播报（避免「摸了 N 张」重复）
-        // 本轮牌全部进弃牌堆：清空打出者面前的展示与出牌记录
-        set({ tablePlayerId: null, passedAt: {}, roundPlays: {}, roundPlayLog: [], tableSideCards: [] });
+        // 本轮牌全部进弃牌堆：清空中央暂存区与出牌记录、判定牌
+        set({ tablePlayerId: null, passedAt: {}, roundPlayLog: [], judgedCards: [], tableSideCards: [] });
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
         const last = room?.players.find((p) => p.id === e.lastPlayerId);
         if (e.ledBy && e.ledBy !== e.lastPlayerId) {
@@ -678,13 +673,27 @@ export const useStore = create<AppStore>((set, get) => ({
         break;
       }
       case 'cards:revealed': {
-        // 公开判定牌：追加进展示区流（同 id 去重），渲染层做逐张入场动画
-        // 不同用途的翻牌流（如茄汤亮牌 → 黑脸判定）不混合：新流开始先清空旧的
         const cards = (e.cards as Card[] | undefined) ?? [];
         if (cards.length > 0) {
-          cancelRevealClear(); // 新翻牌流开始，作废上一次的延迟清除
           const purpose =
             (e.purpose as string | undefined) ?? get().revealed?.purpose ?? STR.game.defaultRevealPurpose;
+          // 判定牌（巨石/地坛/旺旺/黑脸等 purpose 含「判定」）：暂存到中央暂存区，回合结束统一弃置
+          if (purpose.includes('判定')) {
+            cancelRevealClear();
+            set((s) => ({ judgedCards: [...s.judgedCards, ...cards] }));
+            const revealer = room?.players.find((p) => p.id === e.playerId)?.name ?? (e.playerId as string);
+            toast(
+              'info',
+              STR.game.revealedToast
+                .replace('{name}', revealer)
+                .replace('{n}', String(cards.length))
+                .replace('{purpose}', purpose)
+            );
+            break;
+          }
+          // 其余公开亮牌（茄汤亮牌/观股流等）：追加进展示区流（同 id 去重），渲染层做逐张入场动画
+          // 不同用途的翻牌流不混合：新流开始先清空旧的
+          cancelRevealClear(); // 新翻牌流开始，作废上一次的延迟清除
           const prev = get().revealed;
           const isNewStream = !prev || prev.purpose !== purpose;
           const base = isNewStream ? [] : (prev?.cards ?? []);
@@ -737,8 +746,8 @@ export const useStore = create<AppStore>((set, get) => ({
         const winner = room?.players.find((p) => p.id === e.winnerId);
         set({
           revealed: null,
-          roundPlays: {},
           roundPlayLog: [],
+          judgedCards: [],
           banner: winner
             ? { kind: 'win', text: STR.game.winnerTitle.replace('{name}', winner.name) }
             : { kind: 'draw', text: STR.game.drawTitle },

@@ -330,7 +330,7 @@ body {
 }
 .role-card {
   background: var(--ink-5);
-  border: 1px solid var(--ink-25);
+  border: 1px solid var(--ink-35);
   border-radius: var(--radius);
   color: var(--text);
   padding: 12px;
@@ -355,9 +355,11 @@ body {
   font-size: 16px;
   font-weight: 700;
 }
+/* 选角色阶段字体清晰度（2026-10-05 用户要求）：技能名改深金、说明放大加深 */
 .role-skill {
-  font-size: 12px;
-  color: var(--gold);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold-deep);
 }
 .role-skill-block {
   display: flex;
@@ -365,12 +367,12 @@ body {
   gap: 2px;
 }
 .role-desc {
-  font-size: 12px;
+  font-size: 13px;
   color: var(--text-dim);
-  line-height: 1.5;
+  line-height: 1.6;
 }
 .role-status {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--danger);
 }
 .room-actions {
@@ -634,18 +636,6 @@ body {
   100% { transform: translateY(0); }
 }
 
-/* 本轮打出的牌：常驻在打出者面前，轮末进弃牌堆 */
-.seat-play {
-  display: flex;
-  justify-content: center;
-  margin-top: 2px;
-  pointer-events: none;
-}
-.seat-play .combo-badge {
-  transform: scale(0.72);
-  transform-origin: center top;
-}
-
 /* 中央牌区 */
 .game-table {
   flex: 1;
@@ -717,27 +707,57 @@ body {
   transform: scale(0.85);
   transform-origin: center bottom;
 }
+/* 侧条形态：桌面端（≥1000px）右侧竖排；移动端隐藏（用牌桌顶部横条） */
+.round-history-side {
+  display: none;
+}
+
+/* 中央暂存区（线下打牌感）：本回合打过的其余手牌 + 判定牌，回合结束统一弃置 */
+.table-pile {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-end;
+  gap: 6px;
+  max-width: 100%;
+  padding: 2px 4px;
+}
+.table-pile-item,
+.table-pile-judged {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 3px;
+  border-radius: 8px;
+  animation: history-in 0.3s ease-out;
+}
+.table-pile-name {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-dim);
+  max-width: 56px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.table-pile-item .combo-badge {
+  transform: scale(0.75);
+  transform-origin: center bottom;
+}
+/* 判定牌暂存：虚线金框小牌，与手牌徽章区分 */
+.table-pile-judged {
+  border: 1px dashed var(--gold-dark);
+  background: var(--gold-10);
+}
+.table-pile-judged .card {
+  transform: scale(0.62);
+  transform-origin: center top;
+}
 
 .table-owner {
   font-size: 13px;
   color: var(--text-dim);
-}
-/* 上一手：被压的那手，弱化展示在桌面主显下方 */
-.table-prev {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  opacity: 0.62;
-  margin-top: -2px;
-}
-.table-prev-label {
-  font-size: 11px;
-  color: var(--text-dim);
-}
-.table-prev .combo-badge {
-  transform: scale(0.72);
-  transform-origin: center top;
-  margin-bottom: -4px;
 }
 .table-row {
   display: flex;
@@ -1058,13 +1078,6 @@ body {
   padding: 2px 10px;
   font-weight: 700;
   font-size: 14px;
-}
-.my-play {
-  pointer-events: none;
-}
-.my-play .combo-badge {
-  transform: scale(0.8);
-  transform-origin: center;
 }
 .my-countdown.urgent {
   background: var(--danger);
@@ -1532,6 +1545,7 @@ body {
 }
 .role-view-modal .role-skill {
   font-size: 13px;
+  color: var(--gold-deep);
 }
 .role-view-modal .role-desc {
   font-size: 13px;
@@ -1960,8 +1974,63 @@ body {
     --card-w: 88px;
     --card-h: 124px;
   }
+  /* 桌面端：右侧 240px 出牌记录侧条（用户选定「记录条做成侧边的一条」，顶栏通栏） */
+  .game {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 240px;
+    grid-template-rows: auto auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'top top'
+      'seats side'
+      'table side'
+      'bottom side';
+  }
+  .game-top {
+    grid-area: top;
+  }
+  .game-opponents {
+    grid-area: seats;
+  }
   .game-table {
+    grid-area: table;
     min-height: 300px;
+  }
+  .game-bottom {
+    grid-area: bottom;
+  }
+  /* 桌面端隐藏牌桌顶部横条，改用右侧竖排记录条 */
+  .game-table .round-history {
+    display: none;
+  }
+  .round-history-side {
+    grid-area: side;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    overflow-y: auto;
+    min-height: 0;
+    width: auto;
+    border: none;
+    border-left: 1px solid var(--gold-16);
+    border-radius: 0;
+    background: var(--ink-5);
+    padding: 8px;
+  }
+  .round-history-side .round-history-item {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .round-history-side .round-history-name {
+    max-width: 64px;
+    flex: none;
+    text-align: right;
+  }
+  .round-history-side .round-history-item .combo-badge {
+    transform: scale(0.8);
+    transform-origin: center right;
   }
 }
 

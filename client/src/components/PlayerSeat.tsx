@@ -1,11 +1,10 @@
 // 座位：头像+名字、手牌数/上限、角色名、起牌标、询问中、诅咒两级标、掉线标、
-// 回合高亮+倒计时、本轮打出的牌（常驻至轮末）、过牌气泡；title 展示上/下家方位（倒序互换）；
+// 回合高亮+倒计时、过牌气泡；title 展示上/下家方位（倒序互换）；
 // 可点击（onView）弹角色技能查看（「别人的技能也能看到」）。
 import { useEffect, useMemo, useState } from 'react';
 import { getRole, type GameSnapshot } from '@gdys/shared';
 import { handLimitOf, useStore } from '../store';
 import { STR } from '../strings';
-import ComboBadge from './ComboBadge';
 
 interface Props {
   player: GameSnapshot['players'][number];
@@ -19,7 +18,6 @@ interface Props {
 export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
   const snap = useStore((s) => s.snap);
   const passedAt = useStore((s) => s.passedAt);
-  const roundPlays = useStore((s) => s.roundPlays);
   const myId = useStore((s) => s.myId);
   const curseActiveIds = useStore((s) => s.curseActiveIds);
   const isTurn = snap?.turnPlayerId === player.id && snap?.phase === 'playing';
@@ -58,9 +56,6 @@ export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
     const t = setTimeout(() => setElimPop(false), 1200);
     return () => clearTimeout(t);
   }, [eliminatedTs]);
-
-  // 本轮打出的牌：在打出者面前保持到轮末（轮末进弃牌堆）
-  const roundPlay = roundPlays[player.id];
 
   // 方位（按席位序 ±1 计上家/下家，倒序互换；2 人局互为上下家，其余「对面」）
   const directionTitle = useMemo(() => {
@@ -134,12 +129,6 @@ export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
           {Array.from({ length: Math.min(player.handCount, 8) }, (_, i) => (
             <span key={i} className="seat-cardback" />
           ))}
-        </div>
-      )}
-      {/* 本轮打出的牌：常驻显示到轮末；key=首张牌 id，每次打出重播入场弹跳 */}
-      {roundPlay && (
-        <div className="seat-play combo-enter" key={roundPlay.cards[0]!.id}>
-          <ComboBadge combo={roundPlay} small />
         </div>
       )}
       <div className="seat-bubble">

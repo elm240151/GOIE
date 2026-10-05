@@ -29,7 +29,8 @@ export default function GameTable() {
   const tableSideCards = useStore((s) => s.tableSideCards);
   const useSkillAction = useStore((s) => s.useSkillAction);
   const revealed = useStore((s) => s.revealed);
-  const roundPlays = useStore((s) => s.roundPlays);
+  const roundPlayLog = useStore((s) => s.roundPlayLog);
+  const judgedCards = useStore((s) => s.judgedCards);
   const handOrder = useStore((s) => s.handOrder);
   const organize = useStore((s) => s.organize);
   const toggleOrganize = useStore((s) => s.toggleOrganize);
@@ -76,9 +77,12 @@ export default function GameTable() {
   const opponents = players.filter((p) => p.id !== myId);
   const myTurn = snap?.phase === 'playing' && snap?.turnPlayerId === myId;
   const myHand: readonly CardT[] = me?.hand ?? [];
-  const myPlay = myId ? roundPlays[myId] : undefined;
   const myRole = getRole(me?.roleId ?? '');
   const finished = room?.phase === 'finished';
+
+  // 中央暂存区（线下打牌感）：本回合除当前这一手外所有打过的牌 + 判定牌；
+  // 回合结束统一弃置（roundPlayLog/judgedCards 随 round:ended 清空）
+  const pileEntries = snap?.table ? roundPlayLog.slice(0, -1) : roundPlayLog;
 
   // 实时预览：所选牌 → parseCombo（与服务端同一套解析器；倒序随快照；单王按角色解锁）；
   // 端庄（轴承）翻面选中时走翻面接牌校验（与服务端同一套 validateFlipResponse）
@@ -273,13 +277,6 @@ export default function GameTable() {
                   {STR.game.retagFrom.replace('{label}', originalTableLabel)}
                 </span>
               )}
-              {/* 上一手：被压的那手（弱化小徽章，起牌时服务端已清空） */}
-              {snap.prevTable && (
-                <div className="table-prev">
-                  <span className="table-prev-label">{STR.game.prevTable}</span>
-                  <ComboBadge combo={snap.prevTable} small />
-                </div>
-              )}
               {tableSideCards.length > 0 && (
                 <div className="table-side">
                   {tableSideCards.map((c) => (
@@ -288,6 +285,26 @@ export default function GameTable() {
                 </div>
               )}
             </div>
+            {/* 中央暂存区（线下打牌感）：本回合打过的其余手牌 + 判定牌，回合结束统一弃置 */}
+            {(pileEntries.length > 0 || judgedCards.length > 0) && (
+              <div className="table-pile" title={STR.game.pileTitle}>
+                {pileEntries.map((entry) => {
+                  const owner = players.find((p) => p.id === entry.playerId);
+                  return (
+                    <div key={entry.combo.cards[0]!.id} className="table-pile-item">
+                      <span className="table-pile-name">{owner?.name ?? STR.game.opponentFallback}</span>
+                      <ComboBadge combo={entry.combo} small />
+                    </div>
+                  );
+                })}
+                {judgedCards.map((c) => (
+                  <div key={c.id} className="table-pile-judged" title={STR.game.judgedTitle}>
+                    <span className="table-pile-name">{STR.game.judgedLabel}</span>
+                    <Card card={c} />
+                  </div>
+                ))}
+              </div>
+            )}
             {canFlip && (
               <div className="flip-hint">
                 {flippedCardId != null
@@ -319,6 +336,9 @@ export default function GameTable() {
         <RevealPanel revealed={revealed} />
       </div>
 
+      {/* 出牌记录侧条：桌面端（≥1000px）右侧竖排；移动端隐藏（用牌桌顶部横条） */}
+      <RoundHistory variant="side" />
+
       <div className="game-bottom">
         <div className={`my-bar ${myElimPop ? 'my-bar-shake' : ''}`}>
           <span className="my-name">
@@ -331,11 +351,6 @@ export default function GameTable() {
           {(me?.pancakeCount ?? 0) > 0 && (
             <span className="my-pancake" title={STR.game.pancakeTitle}>
               {STR.game.pancakeBadge.replace('{n}', String(me?.pancakeCount ?? 0))}
-            </span>
-          )}
-          {myPlay && (
-            <span className="my-play combo-enter" key={myPlay.cards[0]!.id}>
-              <ComboBadge combo={myPlay} small />
             </span>
           )}
           {myTurn && turnLeft !== null && (
