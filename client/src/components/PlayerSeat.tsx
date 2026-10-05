@@ -47,6 +47,11 @@ export default function PlayerSeat({ player, isMe, turnLeft }: Props) {
       <div className="seat-meta">
         <span className="seat-role">{role?.name ?? '?'}</span>
         <span className="seat-handcount">×{player.handCount}</span>
+        {player.pancakeCount > 0 && (
+          <span className="seat-pancake" title="饼：倒置的牌，任何人不可看牌面、不可使用">
+            {STR.game.pancakeBadge.replace('{n}', String(player.pancakeCount))}
+          </span>
+        )}
         {snap?.cursedPlayerIds.includes(player.id) && <span className="seat-curse">{STR.game.curseBadge}</span>}
         {player.eliminated && <span className="seat-offline">{STR.game.eliminated}</span>}
         {!player.connected && !player.eliminated && <span className="seat-offline">{STR.room.offlineBadge}</span>}

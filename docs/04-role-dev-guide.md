@@ -1,6 +1,6 @@
 # 角色开发规范（★ 未来工作核心文件）
 
-**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。16 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
+**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。17 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
 
 ## RoleDef 接口（shared/src/roles/types.ts）
 
@@ -23,6 +23,7 @@ interface RoleDef {
   exciteOnPlay?: boolean;    // 亢奋（惰戈，锁定技无需询问）：点数和 ≥20 的手牌在打出那一刻归属改写为自己——引擎在四个提交路径（commitPlay/commitFlipPlay/commitSelfFollow/commitCutIn）开头自动改写：exciteOwnerFor 判定（点数和 = 牌面点数 2 记 2/A 记 1/J=11/Q=12/K=13，王按所当点数，单王/对王视为无穷；自己淘汰或自己打出 → null）→ 若有效则不触发实际出牌者的 flipsOrderOnPlay 切换、attributeTable(effOwner) 发 table:attributed。适用于一切打出（正常出牌/插队/狂吠连压/翻面接/茄汤强制）；接牌轮转从归属者下家继续（原出牌者不跳过）、判定（巨石/地坛等）对归属者生效、轮末牌权归归属者、打完按物理出牌者获胜；插队受害者仍是归属改写前捕获的旧桌面所有者
   doubleSupply?: boolean;    // 两倍（玊，锁定技无需询问）：初始手牌、手牌上限、所有从牌堆的摸牌数量 ×2——统一在 rawDraw 内翻倍（发牌/轮末补摸/一切技能摸牌全走 rawDraw：初始手牌先手 6×2=12、其余 5×2=10）；checkHandLimit 上限同样 ×2（20×2=40，超出照常淘汰）；拿回特定牌（takeRevealed）与别人给牌（giveRevealed）不走 rawDraw、不翻倍（2026-10-04 用户确认）
   ouYa?: boolean;            // 呕哑（玊，校验层放行、无需询问）：轮到自己接牌时，可打出包含桌面那一手牌全部实际点数的任意合法牌型、无视管牌规则——playCards 校验层 ouYaLegal = ouYaCovers(combo, tableCombo)（combos.ts：按实体牌判定 table.resolved 逐张实际所当点数，答疑改点不改实体、与巨石同口径；王按所当点数；单王/对王桌面 resolved 无穷无实际点数 → 空集不可发动；起牌无桌面不可发动）；其余流程（获胜/判定/插队/留 X 禁止收尾）照常；无次数限制
+  pancake?: boolean;         // 吐饼（R.F，特殊响应但**不算出牌**）：任何人每次出牌后（物理出牌者 ≠ R.F，含插队/狂吠每手/翻面接；归属改写不改物理出牌者）最先询问 R.F——先于狂吠/插队，每手限问一次、无上限；可「吃饼」：①自选一组恰好接上的牌公开亮出（留在手中，cards:revealed purpose 吐饼亮牌）→ ② rawDraw N（N=桌面张数，手牌上限淘汰照常）→ ③ 自选 N 张倒置成饼（pancake:flipped 只公开张数、永久牌背、任何人不可看不可用）；饼数 ≥ 手牌数 → 立即获胜（**他人打完手牌的获胜判定先于吃饼询问**——afterPlayCommitted 获胜判定在前）。恰好接上 = 同型同长且 rank 恰差一级（正序 +1、倒序 −1）：A↔2 自然衔接、2 压非 A 不算；炸弹同张数差一级才算；单王/对王/首席 Q 压一切类不算；王按所当点数；顺子/连对按起点 rank 差一级。牌权不变、轮末起牌权归吃饼者（provisionalLeadId）；吃饼不消耗响应，轮到他时只能打 2（倒序 3）/炸弹、无则自动过；首席 Q 压一切特判：桌面单 Q + roundLastPlayerId 是首席 + prevTableCombo 非单 J → 不询问
 }
 ```
 
@@ -171,7 +172,7 @@ const zecheng: RoleDef = {
 export default zecheng;
 ```
 
-## 已有 11 个角色（模板）
+## 已有 17 个角色（模板）
 
 | 文件 | 角色 | 技能 | 用到的机制 |
 |---|---|---|---|
@@ -191,6 +192,7 @@ export default zecheng;
 | button.ts | 轴承 | 端庄 + 窃笑 | canFlipResponse 引擎级翻面接牌（validateFlipResponse 纯函数：桌面单张翻整手接上一手 / 桌面多张翻一张按剩余接，非法剩余打后继或炸弹，后继桌面 type 'gap' 只有炸弹能压；翻面牌 tableSide 牌背展示）+ onSkillAction 主动技（pickTarget ask，每轮一次弃权不消耗，经 facade `peekHand` 发私密事件 skill:peek/skill:peeked——服务端按人路由不广播）+ onRoundEnd 重置 |
 | duo-ge.ts | 惰戈 | 亢奋 + 法音 | exciteOnPlay 引擎级归属改写（点数和 ≥20 打出那一刻视作惰戈打出：不触发实际出牌者技能含洄游、判定对惰戈生效、轮转从惰戈下家——详见 types.ts 字段注释）+ afterPlay ask(confirm 法音：打出牌 ≥2 花色（王按 jokerSuits 双计）→ pickTarget 选目标（含自己，自己手牌 ≤3 时不含）→ pickCards 被弃者自选弃一张进弃牌堆；无次数限制，decline 时重置阶段二残留；priority 950 先于阿色再问 900) |
 | su.ts | 玊 | 两倍 + 呕哑 | 纯标志角色（无钩子、无 setup）：doubleSupply 引擎级发牌/摸牌/上限 ×2（rawDraw 内统一翻倍，拿回/别人给牌不翻倍）+ ouYa 引擎级校验放行（ouYaCovers 按实体点数判定，无视管牌规则；客户端预览同函数复用显金色提示） |
+| rf.ts | R.F | 吐饼 | pancake 引擎级吃饼询问（PendingAsk kind 'pancake'，resolvePancake 两阶段 pickCards：亮牌 → 倒饼，decline/超时干净作废、倒置阶段自动倒前 N 张）：每次出牌后最先询问（先于狂吠/插队）、特殊响应不算出牌（不触发洄游/归属改写）、恰好接上（同型同长 rank ±1、倒序 −1）判定走引擎 canExactFollow；吃饼后限制（无牌权时只能打 2/倒序 3 或炸弹、无则自动过）、轮末起牌权走 provisionalLeadId；饼数 ≥ 手牌数立即获胜（他人获胜先判）；首席 Q 特判排除 |
 
 ## 新增角色的流程（每个角色照此执行）
 

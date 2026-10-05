@@ -35,7 +35,7 @@ function mkEngine(hands: Record<string, Card[]>, roles: Record<string, RoleDef>,
   return engine;
 }
 
-/** 全部 16 个角色 id（loader 按文件名排序注册） */
+/** 全部 17 个角色 id（loader 按文件名排序注册） */
 const ROLE_IDS = [
   'button',
   'captain',
@@ -48,6 +48,7 @@ const ROLE_IDS = [
   'guo-tt',
   'king-nan',
   'patrick',
+  'rf',
   'skywalker',
   'su',
   'unhumanity',
@@ -103,6 +104,7 @@ describe('席位排序（seatOrder）', () => {
     'fishy',
     'guo-tt',
     'king-nan',
+    'rf',
     'su',
   ];
 
@@ -187,10 +189,10 @@ describe('技能优先原则', () => {
 });
 
 describe('角色加载器', () => {
-  it('node loader：默认目录自动发现全部 16 个初始角色（幂等）', async () => {
+  it('node loader：默认目录自动发现全部 17 个初始角色（幂等）', async () => {
     clearRoles();
     expect(await loadAllRoles()).toEqual(ROLE_IDS);
-    expect(listRoles()).toHaveLength(16);
+    expect(listRoles()).toHaveLength(17);
     expect(await loadAllRoles()).toEqual([]); // 重复加载不重复注册
   });
 
@@ -218,6 +220,6 @@ export default def;
     loadAllRolesClient();
     expect(listRoles().map((r) => r.id).sort()).toEqual(ROLE_IDS);
     loadAllRolesClient(); // 幂等
-    expect(listRoles()).toHaveLength(16);
+    expect(listRoles()).toHaveLength(17);
   });
 });

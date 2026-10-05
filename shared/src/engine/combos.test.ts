@@ -4,6 +4,8 @@ import { defaultRules } from '../config';
 import {
   canBeat,
   comboKey,
+  exactFollows,
+  isExactFollow,
   listPlayable,
   ouYaCovers,
   parseCombo,
@@ -724,6 +726,72 @@ describe('ouYaCovers 呕哑包含判定（玊）', () => {
     const gap = res.ok ? res.combo : null;
     expect(ouYaCovers(parse([4, 5, 6])!, gap!)).toBe(true); // 顺子456 含4、6
     expect(ouYaCovers(parse([4])!, gap!)).toBe(false); // 缺6
+  });
+});
+
+describe('isExactFollow 恰好接上判定（吐饼 R.F）', () => {
+  it('单/对：恰好差一级才算；A↔2 自然衔接（2 压 A 算、2 压其他不算）', () => {
+    const single5 = parse([5])!;
+    expect(isExactFollow(parse([6])!, single5)).toBe(true);
+    expect(isExactFollow(parse([7])!, single5)).toBe(false); // 跨级（7 也压不了 5）
+    expect(isExactFollow(parse([15])!, parse([14])!)).toBe(true); // 单2 压单A
+    expect(isExactFollow(parse([15])!, single5)).toBe(false); // 2 压非 A：压一切不算恰好
+    expect(isExactFollow(parse([15])!, parse([15])!)).toBe(false); // 2 压不了 2
+    const pair4 = parse([4, 4])!;
+    expect(isExactFollow(parse([5, 5])!, pair4)).toBe(true);
+    expect(isExactFollow(parse([15, 15])!, parse([14, 14])!)).toBe(true); // 对2 压对A
+    expect(isExactFollow(parse([15, 15])!, parse([7, 7])!)).toBe(false); // 对2 压其他对子不算
+    expect(isExactFollow(parse([6])!, pair4)).toBe(false); // 牌型不同
+  });
+
+  it('炸弹：同张数恰好 ±1 才算；张数更多/压非炸弹/跨级不算', () => {
+    const b4 = parse([4, 4, 4])!;
+    expect(isExactFollow(parse([5, 5, 5])!, b4)).toBe(true);
+    expect(isExactFollow(parse([6, 6, 6])!, b4)).toBe(false); // 跨级
+    expect(isExactFollow(parse([5, 5, 5, 5])!, b4)).toBe(false); // 张数更多
+    expect(isExactFollow(parse([5, 5, 5])!, parse([6])!)).toBe(false); // 炸压单：不算恰好
+    expect(isExactFollow(parse([14, 14, 14])!, parse([13, 13, 13])!)).toBe(true); // 3×A 压 3×K
+  });
+
+  it('倒序：镜像 −1；A 响应 2 算恰好、3 压其他不算', () => {
+    expect(isExactFollow(parse([4])!, parse([5])!, true)).toBe(true); // 4 压 5
+    expect(isExactFollow(parse([6])!, parse([5])!, true)).toBe(false);
+    expect(isExactFollow(parse([14])!, parse([15])!, true)).toBe(true); // 倒序 A 响应 2
+    expect(isExactFollow(parse([3])!, parse([9])!, true)).toBe(false); // 3 压一切不算恰好
+    expect(isExactFollow(parse([3])!, parse([4])!, true)).toBe(true); // 3 压 4（自然 −1）
+    expect(isExactFollow(parse([4, 4])!, parse([5, 5])!, true)).toBe(true);
+    expect(isExactFollow(parse([4, 4, 4])!, parse([5, 5, 5])!, true)).toBe(true);
+    expect(isExactFollow(parse([3, 3, 3])!, parse([6, 6, 6])!, true)).toBe(false); // 3 炸压一切不算
+  });
+
+  it('顺子/连对：起点恰好差一级（窗口内跨级接牌不算）', () => {
+    const s345 = parse([3, 4, 5])!;
+    expect(isExactFollow(parse([4, 5, 6])!, s345)).toBe(true);
+    expect(isExactFollow(parse([5, 6, 7])!, s345)).toBe(false); // 合法接牌但起点 +2 不算恰好
+    const cp3344 = parse([3, 3, 4, 4])!;
+    expect(isExactFollow(parse([4, 4, 5, 5])!, cp3344)).toBe(true);
+    expect(isExactFollow(parse([5, 5, 6, 6])!, cp3344)).toBe(false);
+  });
+
+  it('王按所当点数；单王/对王/gap 桌面无恰好', () => {
+    expect(isExactFollow(parse([5, 16])!, parse([4, 4])!)).toBe(true); // 5+鬼 = 对5 接对4
+    const solo = parseCombo([mk(16)], cfg, false, true)!; // 单王
+    expect(isExactFollow(parse([9])!, solo)).toBe(false);
+    expect(isExactFollow(parse([9, 9, 9])!, solo)).toBe(false); // 炸弹压王也不算恰好
+    const pair = parseCombo([mk(16), mk(17)], cfg, false, true)!; // 对王
+    expect(isExactFollow(parse([9, 9])!, pair)).toBe(false);
+    const straight = parse([3, 4, 5])!;
+    const res = validateFlipResponse(straight, null, straight.cards[1]!.id, [mk(4), mk(6)], cfg);
+    const gap = res.ok ? res.combo! : null;
+    expect(isExactFollow(parse([4, 5, 6])!, gap!)).toBe(false); // gap 桌面只有炸弹能压、无恰好
+  });
+
+  it('exactFollows：手牌枚举恰好子集（不含 2 压非 A）', () => {
+    const table = parse([5])!;
+    const hand = [mk(6), mk(6), mk(15), mk(3), mk(7)];
+    const list = exactFollows(hand, table, cfg);
+    expect(list).toHaveLength(1); // 单6（同点数候选互斥去重）；单2（压非A）与单7（不合法）都不算
+    expect(list.every((c) => c.rank === 6)).toBe(true);
   });
 });
 

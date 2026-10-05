@@ -13,6 +13,8 @@ export interface SnapshotPlayer {
   /** 已淘汰（座位保留但跳过） */
   eliminated: boolean;
   roleState: unknown;
+  /** 吐饼（R.F）：倒置成饼的张数（公开张数；牌面不可见、永久留桌） */
+  pancakeCount: number;
 }
 
 /** 快照中的询问元信息（完整载荷经 game:skill-ask 定向发给被问者） */
@@ -48,6 +50,8 @@ export interface GameSnapshot {
   turnPlayerId: string | null;
   roundLeaderId: string;
   winnerId: string | null;
+  /** 吐饼（R.F）：查看者本手吃过饼且不能过（只能打 2/炸弹；客户端禁用「过」并提示） */
+  pancakeNoPass: boolean;
   scoreDeltas: Record<string, number> | null;
   /** 跨局累计分 */
   totals: Record<string, number>;

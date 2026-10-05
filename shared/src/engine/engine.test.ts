@@ -46,10 +46,11 @@ function aiTurn(engine: GameEngine, playerId: string, rnd: () => number): Action
   return engine.playCards(playerId, pick.cards.map((c) => c.id));
 }
 
-/** 牌守恒：单个快照内手牌 + 桌面 + 牌堆 + 弃牌堆 */
+/** 牌守恒：单个快照内手牌 + 桌面 + 牌堆 + 弃牌堆 + 饼（吐饼） */
 function totalCards(snap: ReturnType<GameEngine['snapshotFor']>): number {
   const handCards = snap.players.reduce((x, p) => x + p.handCount, 0);
-  return handCards + (snap.table ? snap.table.cards.length : 0) + snap.deckCount + snap.discardCount;
+  const pancakeCards = snap.players.reduce((x, p) => x + p.pancakeCount, 0);
+  return handCards + (snap.table ? snap.table.cards.length : 0) + snap.deckCount + snap.discardCount + pancakeCards;
 }
 
 describe('GameEngine 游戏循环', () => {

@@ -73,6 +73,7 @@ export default function GameTable() {
     combo: ReturnType<typeof parseCombo>;
     hint: string | null;
     ouYa?: boolean;
+    pancake?: boolean;
   } => {
     const selected = myHand.filter((c) => selectedCardIds.includes(c.id));
     if (flippedCardId != null && snap?.table) {
@@ -98,16 +99,28 @@ export default function GameTable() {
     if (warn && !finish && myRole?.ouYa && snap?.table && ouYaCovers(combo, snap.table)) {
       return { selected, combo, hint: STR.game.ouYaHint, ouYa: true };
     }
+    // 吐饼（R.F）：无牌权响应时只能打 2/3 或炸弹——恰好接上的牌请走吃饼询问（金色 = 技能提示）
+    const rfRank = rev ? 3 : 15;
+    if (
+      myRole?.pancake &&
+      snap?.table &&
+      tablePlayerId !== myId &&
+      combo.type !== 'bomb' &&
+      !((combo.type === 'single' || combo.type === 'pair') && combo.rank === rfRank)
+    ) {
+      return { selected, combo, hint: STR.game.rfRestrict.replace('{rank}', rev ? '3' : '2'), pancake: true };
+    }
     // 压不过但端庄可翻面 → 附翻面提示（防止没点桌面牌直接出导致「用不出」）
     const tip = warn && canFlip ? STR.game.flipSuggest : '';
     return { selected, combo, hint: warn ? STR.game.beatWarn.replace('{hint}', warn) + tip : null };
-  }, [myHand, selectedCardIds, flippedCardId, snap?.table, snap?.prevTable, rev, myRole, canFlip]);
+  }, [myHand, selectedCardIds, flippedCardId, snap?.table, snap?.prevTable, rev, myRole, canFlip, tablePlayerId]);
 
   // 答疑改点：桌面牌型标签已按新点数重写（金色主显），小标展示原牌型（按实体牌重解析）
   const originalTableLabel =
     snap?.tableRankNote && snap?.table ? (parseCombo(snap.table.cards, defaultRules, rev)?.label ?? '') : '';
 
   const isLeader = snap?.table === null;
+  const noPass = snap?.pancakeNoPass === true; // 吐饼（R.F）：吃过饼后轮到自己不能过
   const turnPlayer = snap?.turnPlayerId ? players.find((p) => p.id === snap.turnPlayerId) : null;
   const tableOwner = snap?.table ? players.find((p) => p.id === tablePlayerId) : null;
 
@@ -288,6 +301,11 @@ export default function GameTable() {
           <span className="my-handcount">
             ×{me?.handCount ?? 0}/{myRole?.doubleSupply ? defaultRules.hand.limit * 2 : defaultRules.hand.limit}
           </span>
+          {(me?.pancakeCount ?? 0) > 0 && (
+            <span className="my-pancake" title="饼：倒置的牌，任何人不可看牌面、不可使用">
+              {STR.game.pancakeBadge.replace('{n}', String(me?.pancakeCount ?? 0))}
+            </span>
+          )}
           {myPlay && (
             <span className="my-play">
               <ComboBadge combo={myPlay} small />
@@ -327,7 +345,7 @@ export default function GameTable() {
             <>
               <ComboBadge combo={preview.combo} small />
               {preview.hint && (
-                <span className={preview.ouYa ? 'preview-ouya' : 'preview-warn'}>{preview.hint}</span>
+                <span className={preview.ouYa || preview.pancake ? 'preview-ouya' : 'preview-warn'}>{preview.hint}</span>
               )}
             </>
           ) : preview.hint ? (
@@ -383,10 +401,16 @@ export default function GameTable() {
           </button>
           <button
             className={`btn btn-big ${passArmed ? 'btn-warn' : 'btn-secondary'}`}
-            disabled={!myTurn || finished || isLeader}
+            disabled={!myTurn || finished || isLeader || noPass}
             onClick={onPassClick}
           >
-            {isLeader ? STR.game.cannotPassLeader : passArmed ? STR.game.passConfirm : STR.game.pass}
+            {noPass
+              ? STR.game.rfNoPass.replace('{rank}', rev ? '3' : '2')
+              : isLeader
+                ? STR.game.cannotPassLeader
+                : passArmed
+                  ? STR.game.passConfirm
+                  : STR.game.pass}
           </button>
         </div>
 

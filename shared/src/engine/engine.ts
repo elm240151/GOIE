@@ -7,7 +7,7 @@
 // - 技能询问：钩子可返回 ask 挂起动作，服务端询问玩家后 resolveAsk 重跑提问钩子（钩子须纯：返回 ask 前不得改状态）
 import { RANK_2, RANK_3, RANK_A, isJoker, isRank, pointValue, type Card, type Rank } from '../cards';
 import { type RuleConfig } from '../config';
-import { canBeat, listPlayable, ouYaCovers, parseCombo, relabelCombo, validateFlipResponse, type Combo } from './combos';
+import { canBeat, exactFollows, isExactFollow, listPlayable, ouYaCovers, parseCombo, relabelCombo, validateFlipResponse, type Combo } from './combos';
 import { buildDeck, shuffle } from './deck';
 import { type GameEvent, type GameEventData } from './events';
 import { type Rng } from './rng';
@@ -63,7 +63,8 @@ interface PendingAsk {
   ask: SkillAsk;
   /** 被询问的玩家 */
   playerId: string;
-  kind: 'hook' | 'cutIn';
+  /** 内部调度标签：'hook' = 重跑提问钩子；'cutIn' = 插队；'pancake' = 吐饼多阶段 */
+  kind: 'hook' | 'cutIn' | 'pancake';
   entry: HookEntry | null;
   hookName: keyof RoleHooks | null;
   args: unknown[];
@@ -139,6 +140,17 @@ export class GameEngine {
   private orderFlippers = new Set<string>();
   /** 亢奋（惰戈，RoleDef.exciteOnPlay）：点数和 ≥20 的手牌打出那一刻归属改写的角色 */
   private exciteOwners = new Set<string>();
+  /** 吐饼（R.F）：各玩家倒置成饼的牌——牌背朝上永久留桌，公开张数、牌面对所有人（含自己）不可见；
+   *  不参与弃牌/摸回，任何技能不可拿回或弃置；饼数 ≥ 手牌数立即获胜（胜利判定在每次吃饼结算后） */
+  private pancakes = new Map<string, Card[]>();
+  /** 吐饼（R.F）：吃饼后的轮末起牌权（无人再接由其起牌；有人接上/新一轮开始即清除） */
+  private provisionalLeadId: string | null = null;
+  /** 吐饼（R.F）：本手已吃饼的玩家——响应轮转到他时不能过（只能打 2/炸弹，没有则自动过）；换手/换轮清除 */
+  private pancakeNoPassId: string | null = null;
+  /** 吐饼（R.F）多阶段：0 = 确认询问挂起；1 = 已同意、待自选一组恰好牌亮出；2 = 已亮牌摸牌、待自选倒置成饼 */
+  private pancakeStage = 0;
+  /** 吐饼（R.F）：本手吃饼应倒置的张数（= 实际摸到的张数 min(N, 牌堆)，阶段 2 校验用） */
+  private pancakeFlipCount = 0;
 
   constructor(cfg: RuleConfig, players: EnginePlayer[], opts: EngineOptions) {
     if (players.length < cfg.players.min || players.length > cfg.players.max)
@@ -235,6 +247,21 @@ export class GameEngine {
       cards.length === hand.length &&
       (combo.type === 'single' || combo.type === 'pair') &&
       combo.rank === (rev ? RANK_3 : RANK_2);
+    // 吐饼（R.F）无牌权限制：响应他人时只能直接打 2（正序单2/对2、倒序镜像单3/对3）或炸弹，
+    // 其余恰好接上的普通牌只能靠吃饼；有牌权（领出/桌面归属自己）不受限
+    if (
+      baseLegal &&
+      role &&
+      this.roles.get(role.roleId)?.pancake &&
+      this.tableCombo &&
+      this.tableOwnerId !== playerId &&
+      combo.type !== 'bomb' &&
+      !((combo.type === 'single' || combo.type === 'pair') && combo.rank === (rev ? RANK_3 : RANK_2))
+    ) {
+      return fail(
+        rev ? '【吐饼】无牌权时只能打出 3 或炸弹（其余恰好接上的牌请用吃饼）' : '【吐饼】无牌权时只能打出 2 或炸弹（其余恰好接上的牌请用吃饼）'
+      );
+    }
     return this.runBeforePlayHooks(playerId, combo, (baseLegal || ouYaLegal) && !finishSpecial, 0, false, finishSpecial);
   }
 
@@ -275,6 +302,12 @@ export class GameEngine {
     if (this.pendingAsk) return fail('等待技能响应');
     if (playerId !== this.turnPlayerId) return fail('不是你的回合');
     if (this.tableCombo === null) return fail('新一轮起牌者必须出牌');
+    // 吐饼（R.F）：吃过饼后同一手轮到自己不能再过——只能打 2（倒序 3）/炸弹；两者都没有时 beginTurn 已自动过
+    if (this.pancakeNoPassId === playerId && this.restrictedFollows(playerId).length > 0) {
+      return fail(
+        this.orderReversed() ? '【吐饼】吃过饼后不能过牌（只能打出 3 或炸弹）' : '【吐饼】吃过饼后不能过牌（只能打出 2 或炸弹）'
+      );
+    }
     this.forcedPass.delete(playerId);
     if (!this.cfg.follow.voluntaryPassAllowed && this.legalResponses(playerId).length > 0) {
       return fail('有牌能管，必须出牌');
@@ -340,10 +373,11 @@ export class GameEngine {
     if (p.playerId !== playerId) return fail('不是你的技能询问');
     if (p.ask.askId !== answer.askId) return fail('询问已失效');
     this.pendingAsk = null;
-    // suspend() 会把 PendingAsk.kind 设为 'hook'/'cutIn'（内部调度标签），此处须看 ask.kind
+    // suspend() 会把 PendingAsk.kind 设为 'hook'/'cutIn'/'pancake'（内部调度标签），此处须看 ask.kind
     if (p.ask.kind === 'selfFollow') {
       return this.resolveSelfFollow(playerId, answer);
     }
+    if (p.kind === 'pancake') return this.resolvePancake(playerId, answer);
     if (p.kind === 'cutIn') {
       if (answer.choice !== 'yes' || !answer.cardIds?.length) {
         this.advanceTurn();
@@ -429,6 +463,8 @@ export class GameEngine {
         connected: true,
         eliminated: this.eliminated.has(p.id),
         roleState: this.roleStates.get(p.id),
+        /** 吐饼（R.F）：倒置成饼的张数（公开张数、牌面对所有人不可见） */
+        pancakeCount: this.pancakes.get(p.id)?.length ?? 0,
       })),
       deckCount: this.deck.length,
       discardCount: this.discarded.length,
@@ -444,6 +480,11 @@ export class GameEngine {
       tableRankNote: this.tableRankNote,
       /** 红楼梦（地坛）：被诅咒（含下一轮生效中）的玩家，界面展示标记 */
       cursedPlayerIds: [...new Set([...this.activeBan, ...this.pendingBan.keys()])],
+      /** 吐饼（R.F）：本手吃过饼、轮到自己且不能过（只能打 2/炸弹——客户端禁用「过」并提示） */
+      pancakeNoPass:
+        viewerId === this.turnPlayerId &&
+        this.pancakeNoPassId === viewerId &&
+        this.restrictedFollows(viewerId).length > 0,
       turnPlayerId: this.turnPlayerId,
       roundLeaderId: this.roundLeaderId,
       winnerId: this.winnerId,
@@ -512,6 +553,8 @@ export class GameEngine {
       this.prevTableCombo = null;
       this.passCount = 0;
       this.roundLastPlayerId = null;
+      this.provisionalLeadId = null;
+      this.pancakeNoPassId = null;
       this.roundLeaderId = leaderId;
       this.aftermathMode = 'normal';
       this.cutInVictimId = null;
@@ -576,8 +619,10 @@ export class GameEngine {
         if (this.phase !== 'playing') return;
       }
     }
+    // 吐饼（R.F）：吃过饼后轮到自己且没有 2/炸弹可打 → 自动过（有的话出牌，过牌会被拒）
+    const pancakeForcedPass = this.pancakeNoPassId === id && this.restrictedFollows(id).length === 0;
     // 强制过（技能效果）；红楼梦（地坛）禁出玩家同样轮到他自动过
-    if (this.forcedPass.has(id) || this.activeBan.has(id)) {
+    if (this.forcedPass.has(id) || this.activeBan.has(id) || pancakeForcedPass) {
       this.forcedPass.delete(id);
       this.emit({ type: 'passed', playerId: id });
       this.passCount++;
@@ -601,9 +646,11 @@ export class GameEngine {
     this.beginTurn();
   }
 
-  /** 一轮结束：出牌者摸牌 → 继续起牌 */
+  /** 一轮结束：出牌者摸牌 → 继续起牌。吐饼（R.F）：吃饼者获得轮末起牌权（暂存），
+   *  有人再接上时 commit 路径已清除暂存、按正常最后出牌者结算 */
   private endRound(): void {
-    const lastId = this.roundLastPlayerId!;
+    const lastId = this.provisionalLeadId ?? this.roundLastPlayerId!;
+    this.provisionalLeadId = null;
     this.runRoundEndHooks(lastId, 0);
   }
 
@@ -679,6 +726,8 @@ export class GameEngine {
     this.tableOwnerId = playerId;
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
+    this.provisionalLeadId = null; // 吐饼（R.F）：有人打出新牌，吃饼暂存的起牌权作废、牌权正常更迭
+    this.pancakeNoPassId = null;
     this.lastPlayWasCutIn = false;
     this.emit({ type: 'cards:played', playerId, combo });
     if (effOwner) this.attributeTable(effOwner); // 归属惰戈：轮转从其下家、判定对其生效（发出 table:attributed）
@@ -721,6 +770,8 @@ export class GameEngine {
     this.tableOwnerId = playerId;
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
+    this.provisionalLeadId = null; // 吐饼（R.F）：同上，翻面接也是打出新牌
+    this.pancakeNoPassId = null;
     this.lastPlayWasCutIn = false;
     this.emit({ type: 'cards:played', playerId, combo });
     if (effOwner) this.attributeTable(effOwner); // 亢奋：翻面接归属惰戈
@@ -788,9 +839,8 @@ export class GameEngine {
       .reduce((s, c) => s + c.rank, 0);
   }
 
-  /** 出牌后的收尾：夺权 → 出完即胜/留2判负 → 插队/无名加牌后续 → 插队问询/轮到下家 */
+  /** 出牌后的收尾：夺权 → 出完即胜/留2判负 → 吐饼问询（最先）→ 插队/无名加牌后续 → 插队问询/轮到下家 */
   private afterPlayCommitted(playerId: string): ActionResult {
-    const ownerId = this.roundLastPlayerId!;
     // 夺权（巨石驱逐成功）：桌面作废，由技能所有者起牌
     for (const p of this.players) {
       const mods = this.pendingMods.get(p.id);
@@ -809,11 +859,22 @@ export class GameEngine {
       }
     }
     // 出完即胜（被淘汰者不算）：谁打完谁赢——归属改写（再问）不改胜利判定，按物理出牌者判；
-    // 留 X 禁止收尾已在出牌校验层拦截（单 2/对 2 打完手牌不可出），走到这里即为正常出完
+    // 留 X 禁止收尾已在出牌校验层拦截（单 2/对 2 打完手牌不可出），走到这里即为正常出完。
+    // 别人打光手牌先于吃饼询问（R费拦不住）
     if (!this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0) {
       this.finishGame(playerId);
       return this.ok();
     }
+    // 吐饼（R.F）：每次打出后最先问（先于狂吠/插队）；物理出牌者 ≠ R费（归属改写不改物理出牌者）
+    const offer = this.offerPancake(playerId);
+    if (offer) return offer;
+    return this.afterPlayTail();
+  }
+
+  /** 出牌后的收尾尾部（吐饼询问恢复后从这里继续）：插队后续 → 无名加牌 → 狂吠问询 → 插队问询/轮到下家 */
+  private afterPlayTail(): ActionResult {
+    if (this.phase !== 'playing') return this.ok();
+    const ownerId = this.roundLastPlayerId!;
     // 插队后续（无名）：受害者摸 X 张，轮转从无名的下家继续（插队跳过了中间的人）
     if (this.aftermathMode === 'cutIn') {
       this.aftermathMode = 'normal';
@@ -862,6 +923,235 @@ export class GameEngine {
       return this.suspendedOk();
     }
     return this.offerCutIn();
+  }
+
+  // ---------- 吐饼（兰登·费夫 R.F）：特殊响应、不算出牌（2026-10-05 用户定稿） ----------
+
+  /**
+   * 蛋神（首席）压一切类打出：Q 压非 J 的单牌桌面没有「恰好」可接（与 2 压非 A 同源——
+   * 自然接 J 的 Q 之后 K 仍可恰好接上）。按物理出牌者 + 上一手被压牌判定。
+   */
+  private tableIsSkywalkerQSpecial(): boolean {
+    const t = this.tableCombo;
+    if (!t || t.type !== 'single' || t.rank !== 12) return false; // 12 = Q
+    const last = this.players.find((p) => p.id === this.roundLastPlayerId);
+    if (!last || last.roleId !== 'skywalker') return false;
+    return !(this.prevTableCombo && this.prevTableCombo.type === 'single' && this.prevTableCombo.rank === 11);
+  }
+
+  /**
+   * 吐饼（R.F）无牌权时可直接打出的响应组合：2（正序单2/对2、倒序镜像单3/对3）或炸弹。
+   * 响应限制（抽你）同样适用：非指定响应者视为无牌可打。
+   */
+  private restrictedFollows(playerId: string): Combo[] {
+    if (this.tableCombo && this.tableResponderRestrict && playerId !== this.tableResponderRestrict) return [];
+    const rev = this.orderReversed();
+    const rk = rev ? RANK_3 : RANK_2;
+    return listPlayable(
+      this.hands.get(playerId)!,
+      this.tableCombo,
+      this.cfg,
+      rev,
+      this.soloJokerAllowed(playerId)
+    ).filter((c) => c.type === 'bomb' || ((c.type === 'single' || c.type === 'pair') && c.rank === rk));
+  }
+
+  /** 吐饼问询：每次打出后最先问（先于狂吠/插队）。无 R费/无恰好接牌/特殊桌面/限制中 → 不挂起 */
+  private offerPancake(physicalPlayerId: string): ActionResult | null {
+    if (!this.tableCombo || this.pancakeStage !== 0) return null;
+    if (this.tableIsSkywalkerQSpecial()) return null; // 首席 Q 压一切：没有「恰好」可接
+    const rf = this.players.find(
+      (p) =>
+        this.roles.get(p.roleId)?.pancake &&
+        !this.eliminated.has(p.id) &&
+        !this.activeBan.has(p.id) &&
+        p.id !== physicalPlayerId &&
+        // 抽你限制适用：吃饼算响应，非指定响应者不能吃饼
+        !(this.tableResponderRestrict && p.id !== this.tableResponderRestrict)
+    );
+    if (!rf) return null;
+    const combos = exactFollows(
+      this.hands.get(rf.id)!,
+      this.tableCombo,
+      this.cfg,
+      this.orderReversed(),
+      this.soloJokerAllowed(rf.id)
+    );
+    if (combos.length === 0) return null;
+    this.suspend(
+      rf.id,
+      null,
+      null,
+      [],
+      () => {},
+      {
+        kind: 'confirm',
+        prompt: '【吐饼】恰好接得上，要前插吃饼吗？（吃饼 = 特殊响应、不算出牌：亮一组恰好接上的牌 → 从牌堆摸 N 张 → 倒置 N 张成饼；弃权则本手不再问）',
+      },
+      'pancake'
+    );
+    return this.suspendedOk();
+  }
+
+  /** 吐饼答案（多阶段）：确认 → 自选亮一组恰好牌 → 摸 N 张 → 自选 N 张倒置成饼 → 立即检查获胜 */
+  private resolvePancake(playerId: string, answer: AskAnswer): ActionResult {
+    const rf = playerId;
+    // 吃饼询问只在有桌面时挂起（挂起期间无任何动作，桌面不会消失）
+    const table = this.tableCombo!;
+    const n = table.cards.length;
+    if (this.pancakeStage === 0) {
+      // 确认询问：弃权/超时 → 放弃本手（之后有人再出牌照常再问）
+      if (answer.choice !== 'yes') {
+        this.pancakeStage = 0;
+        this.requeue(this.afterPlayTail());
+        return this.ok();
+      }
+      this.pancakeStage = 1;
+      return this.reaskPancakeCombo(rf);
+    }
+    if (this.pancakeStage === 1) {
+      // 自选一组恰好接上的牌公开亮出（牌留在手中，不进饼）；非法选牌重新询问
+      const hand = this.hands.get(rf)!;
+      const cards: Card[] = [];
+      for (const id of answer.cardIds ?? []) {
+        const c = hand.find((x) => x.id === id);
+        if (!c) return this.reaskPancakeCombo(rf, '手牌中没有这张牌');
+        cards.push(c);
+      }
+      if (cards.length === 0) {
+        // 超时/弃选：吃饼作废（尚未亮牌摸牌，无副作用）
+        this.pancakeStage = 0;
+        this.requeue(this.afterPlayTail());
+        return this.ok();
+      }
+      const rev = this.orderReversed();
+      const combo = parseCombo(cards, this.cfg, rev, this.soloJokerAllowed(rf));
+      if (!combo || !canBeat(combo, table, this.cfg, rev) || !isExactFollow(combo, table, rev)) {
+        return this.reaskPancakeCombo(rf, '必须选择恰好接上桌面的一组牌');
+      }
+      this.emit({ type: 'cards:revealed', playerId: rf, cards: combo.cards, purpose: '吐饼亮牌' });
+      // 从牌堆摸 N 张（N = 桌面那手牌的张数；牌堆不足摸 min(N, 牌堆)；超手牌上限照常淘汰，淘汰即败）
+      const drawn = this.rawDraw(rf, n);
+      if (drawn > 0) this.emit({ type: 'cards:drawn', playerId: rf, count: drawn });
+      if (this.phase !== 'playing' || this.eliminated.has(rf)) {
+        this.pancakeStage = 0;
+        this.requeue(this.afterPlayTail());
+        return this.ok();
+      }
+      this.pancakeFlipCount = drawn;
+      if (drawn === 0) return this.finishPancake(rf, []); // 没摸到牌：无饼可倒，直接结算
+      this.pancakeStage = 2;
+      this.suspend(
+        rf,
+        null,
+        null,
+        [],
+        () => {},
+        {
+          kind: 'pickCards',
+          cards: [...this.hands.get(rf)!],
+          min: drawn,
+          max: drawn,
+          prompt: `【吐饼】选择 ${drawn} 张牌倒置成饼（牌背朝上、公开张数、永久留桌，牌面对所有人不可见）`,
+        },
+        'pancake'
+      );
+      return this.ok();
+    }
+    // 阶段 2：自选 N 张倒置成饼；超时/弃选 → 自动倒置前 N 张（已摸的牌不可退回，确定化兜底）
+    const hand = this.hands.get(rf)!;
+    const want = Math.min(this.pancakeFlipCount, hand.length);
+    let cards: Card[] = [];
+    for (const id of answer.cardIds ?? []) {
+      const c = hand.find((x) => x.id === id);
+      if (!c) return this.reaskPancakeFlip(rf, '手牌中没有这张牌');
+      cards.push(c);
+    }
+    if (cards.length === 0) {
+      cards = hand.slice(0, want); // 超时自动兜底：倒置手牌前 N 张
+    } else if (cards.length !== want) {
+      return this.reaskPancakeFlip(rf, `必须选择 ${want} 张牌倒置`);
+    }
+    return this.finishPancake(rf, cards);
+  }
+
+  /** 倒置成饼 → 牌权暂存 → 饼数 ≥ 手牌数立即获胜 → 恢复收尾尾部 */
+  private finishPancake(rf: string, cards: Card[]): ActionResult {
+    this.pancakeStage = 0;
+    if (cards.length > 0) {
+      this.removeCards(rf, cards);
+      this.pancakes.set(rf, [...(this.pancakes.get(rf) ?? []), ...cards]);
+      this.emit({ type: 'pancake:flipped', playerId: rf, count: cards.length });
+      this.emit({
+        type: 'skill:triggered',
+        playerId: rf,
+        roleId: 'rf',
+        skillId: 'tu-bing',
+        text: `【吐饼】${this.players.find((p) => p.id === rf)?.name ?? rf} 倒置 ${cards.length} 张成饼（共 ${this.pancakes.get(rf)!.length} 张）`,
+      });
+    }
+    // 轮末牌权暂存给吃饼者（桌面归属不变）；吃过饼后本手轮到他不能再过
+    this.provisionalLeadId = rf;
+    this.pancakeNoPassId = rf;
+    this.passCount = 0;
+    const pancakeCount = this.pancakes.get(rf)?.length ?? 0;
+    if (pancakeCount >= (this.hands.get(rf)?.length ?? 0)) {
+      this.finishGame(rf);
+      return this.ok();
+    }
+    this.requeue(this.afterPlayTail());
+    return this.ok();
+  }
+
+  /** 非法亮牌：播报原因并重新询问（不消耗吃饼机会） */
+  private reaskPancakeCombo(playerId: string, reason?: string): ActionResult {
+    if (reason) this.emit({ type: 'game:error', playerId, reason });
+    this.pancakeStage = 1;
+    const cards = exactFollows(
+      this.hands.get(playerId)!,
+      this.tableCombo!,
+      this.cfg,
+      this.orderReversed(),
+      this.soloJokerAllowed(playerId)
+    ).flatMap((c) => c.cards);
+    this.suspend(
+      playerId,
+      null,
+      null,
+      [],
+      () => {},
+      {
+        kind: 'pickCards',
+        cards,
+        min: this.tableCombo!.cards.length,
+        max: this.tableCombo!.cards.length,
+        prompt: '【吐饼】自选一组恰好接上桌面的牌公开亮出（亮出的牌留在手中）',
+      },
+      'pancake'
+    );
+    return this.ok();
+  }
+
+  /** 非法倒置：播报原因并重新询问 */
+  private reaskPancakeFlip(playerId: string, reason: string): ActionResult {
+    this.emit({ type: 'game:error', playerId, reason });
+    this.pancakeStage = 2;
+    this.suspend(
+      playerId,
+      null,
+      null,
+      [],
+      () => {},
+      {
+        kind: 'pickCards',
+        cards: [...this.hands.get(playerId)!],
+        min: this.pancakeFlipCount,
+        max: this.pancakeFlipCount,
+        prompt: `【吐饼】选择 ${this.pancakeFlipCount} 张牌倒置成饼（牌背朝上、公开张数、永久留桌，牌面对所有人不可见）`,
+      },
+      'pancake'
+    );
+    return this.ok();
   }
 
   // ---------- 狂吠（修勾）：压自己打出的牌 ----------
@@ -932,6 +1222,8 @@ export class GameEngine {
     this.tableOwnerId = playerId;
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
+    this.provisionalLeadId = null; // 吐饼（R.F）：狂吠连压同样打出新牌
+    this.pancakeNoPassId = null;
     this.lastPlayWasCutIn = false;
     this.emit({ type: 'cards:played', playerId, combo });
     if (effOwner) this.attributeTable(effOwner); // 亢奋：狂吠连压归属惰戈
@@ -1000,6 +1292,8 @@ export class GameEngine {
     this.tableOwnerId = playerId;
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
+    this.provisionalLeadId = null; // 吐饼（R.F）：插队打出新牌
+    this.pancakeNoPassId = null;
     this.lastPlayWasCutIn = true;
     this.emit({ type: 'cards:played', playerId, combo });
     if (effOwner) this.attributeTable(effOwner); // 亢奋：插队归属惰戈（受害者仍是旧桌面所有者，已在上面捕获）
@@ -1461,12 +1755,21 @@ export class GameEngine {
     hookName: keyof RoleHooks | null,
     args: unknown[],
     resume: (outcome: HookOutcome) => void,
-    ask: SkillAsk
+    ask: SkillAsk,
+    internalKind?: 'hook' | 'cutIn' | 'pancake'
   ): void {
     ask.askId = ask.askId ?? this.newAskId();
     ask.timeoutMs = ask.timeoutMs ?? this.cfg.timeout.skillAskMs;
     // 被询问者缺省为技能所有者（playerId）；「依次自选」类技能经 ask.askPlayerId 依次问其他人
-    this.pendingAsk = { ask, playerId: ask.askPlayerId ?? playerId, kind: entry ? 'hook' : 'cutIn', entry, hookName, args, resume };
+    this.pendingAsk = {
+      ask,
+      playerId: ask.askPlayerId ?? playerId,
+      kind: internalKind ?? (entry ? 'hook' : 'cutIn'),
+      entry,
+      hookName,
+      args,
+      resume,
+    };
   }
 
   private newAskId(): string {
@@ -1562,16 +1865,23 @@ export class GameEngine {
   private legalResponses(playerId: string): Combo[] {
     // 响应限制（抽你）：非指定玩家视为无牌可管（允许过）
     if (this.tableResponderRestrict && playerId !== this.tableResponderRestrict) return [];
-    return this.playableNotVetoed(
-      playerId,
-      listPlayable(
-        this.hands.get(playerId)!,
-        this.tableCombo,
-        this.cfg,
-        this.orderReversed(),
-        this.soloJokerAllowed(playerId)
-      )
+    let combos = listPlayable(
+      this.hands.get(playerId)!,
+      this.tableCombo,
+      this.cfg,
+      this.orderReversed(),
+      this.soloJokerAllowed(playerId)
     );
+    // 吐饼（R.F）无牌权限制：响应他人时只有 2/炸弹可直接打出（有牌能管必须出牌判断同口径）
+    const role = this.roles.get(this.players.find((p) => p.id === playerId)!.roleId);
+    if (role?.pancake && this.tableCombo && this.tableOwnerId !== playerId) {
+      const rev = this.orderReversed();
+      const rk = rev ? RANK_3 : RANK_2;
+      combos = combos.filter(
+        (c) => c.type === 'bomb' || ((c.type === 'single' || c.type === 'pair') && c.rank === rk)
+      );
+    }
+    return this.playableNotVetoed(playerId, combos);
   }
 
   /** 过滤被 beforePlay 干跑否决的组合（干跑：ask 不挂起、modify 不生效、播报不落） */

@@ -305,6 +305,42 @@ export function canBeat(combo: Combo, table: Combo | null, cfg: RuleConfig, rev 
   return true;
 }
 
+// ---------- 吐饼（兰登·费夫 R.F） ----------
+
+/**
+ * 恰好接上（吐饼 R.F）：能压过桌面这一手、且点数恰好差一级的牌型——正序 +1、倒序 −1。
+ * A↔2 自然衔接（单2/对2 压单A/对A、倒序 A 响应 2 算恰好）；2 压其他牌（压一切类）不算恰好，
+ * 只能直接打出；炸弹同张数恰好 ±1 才算（张数更多/压非炸弹/跨级不算）；顺子/连对起点恰好差一级；
+ * 单王/对王/翻面接（gap）桌面无「恰好」；王当百搭按所当点数（combo.rank 已含）。
+ */
+export function isExactFollow(combo: Combo, table: Combo, rev = false): boolean {
+  if (combo.type !== table.type || combo.length !== table.length) return false;
+  switch (combo.type) {
+    case 'single':
+    case 'pair':
+    case 'bomb':
+    case 'straight':
+    case 'consecutivePairs':
+      return combo.rank === table.rank + (rev ? -1 : 1);
+    default:
+      return false; // singleJoker / jokerPair / gap：无「恰好」接法
+  }
+}
+
+/**
+ * 手牌中能恰好接上桌面的组合（吐饼可选集：canBeat 通过 + isExactFollow）。
+ * 不含 2 压非 A 等压一切类接法（可正常打出但不算恰好）。
+ */
+export function exactFollows(
+  hand: readonly Card[],
+  table: Combo,
+  cfg: RuleConfig,
+  rev = false,
+  allowSoloJoker = false
+): Combo[] {
+  return listPlayable(hand, table, cfg, rev, allowSoloJoker).filter((c) => isExactFollow(c, table, rev));
+}
+
 // ---------- 呕哑（玊） ----------
 
 /**

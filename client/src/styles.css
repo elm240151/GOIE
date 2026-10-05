@@ -447,6 +447,20 @@ body {
   font-size: 10px;
   animation: curse-blink 1.6s ease-in-out infinite;
 }
+.seat-pancake {
+  color: #d9a441;
+  border: 1px dashed currentColor;
+  border-radius: 4px;
+  padding: 0 3px;
+  font-size: 10px;
+}
+.my-pancake {
+  color: #d9a441;
+  border: 1px dashed currentColor;
+  border-radius: 4px;
+  padding: 0 4px;
+  font-size: 12px;
+}
 @keyframes curse-blink {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.45; }
