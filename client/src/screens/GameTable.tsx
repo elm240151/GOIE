@@ -1,6 +1,6 @@
 // 游戏桌：对手座位 + 中央牌区 + 手牌扇形点选 + 实时牌型预览 + 终局弹窗。
-import { useEffect, useMemo, useState } from 'react';
-import { defaultRules, getRole, ouYaCovers, parseCombo, rankLabel, validateFlipResponse, type Card as CardT, type Rank } from '@gdys/shared';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { defaultRules, getRole, isJoker, ouYaCovers, parseCombo, rankLabel, validateFlipResponse, type Card as CardT, type Combo, type Rank } from '@gdys/shared';
 import { handLimitOf, useStore } from '../store';
 import { STR, TURN_SECONDS } from '../strings';
 import { beatReason, finishHint, invalidReason } from '../beatHint';
@@ -13,6 +13,14 @@ import RevealPanel from '../components/RevealPanel';
 import RoundHistory from '../components/RoundHistory';
 import SkillAskModal from '../components/SkillAskModal';
 import Toast from '../components/Toast';
+
+/** 按解析顺序还原一手牌的实体牌面（王标出所当点数，与 ComboBadge 同口径）——中央暂存区用真实牌面展示 */
+function comboFaces(combo: Combo): { card: CardT; asRank?: Rank }[] {
+  return combo.resolved.map((r) => {
+    const c = combo.cards.find((x) => x.id === r.cardId)!;
+    return isJoker(c) ? { card: c, asRank: r.rank as Rank } : { card: c };
+  });
+}
 
 export default function GameTable() {
   const room = useStore((s) => s.room);
@@ -83,6 +91,14 @@ export default function GameTable() {
   // 中央暂存区（线下打牌感）：本回合除当前这一手外所有打过的牌 + 判定牌；
   // 回合结束统一弃置（roundPlayLog/judgedCards 随 round:ended 清空）
   const pileEntries = snap?.table ? roundPlayLog.slice(0, -1) : roundPlayLog;
+
+  // 暂存区新增牌时滚到最底（新打的牌在摊开区的末尾，超高一屏时可滚动）
+  const pileRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = pileRef.current;
+    if (!el) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: 'smooth' });
+  }, [pileEntries.length, judgedCards.length]);
 
   // 实时预览：所选牌 → parseCombo（与服务端同一套解析器；倒序随快照；单王按角色解锁）；
   // 端庄（轴承）翻面选中时走翻面接牌校验（与服务端同一套 validateFlipResponse）
@@ -285,24 +301,33 @@ export default function GameTable() {
                 </div>
               )}
             </div>
-            {/* 中央暂存区（线下打牌感）：本回合打过的其余手牌 + 判定牌，回合结束统一弃置 */}
+            {/* 中央暂存区（线下打牌感）：本回合打过的其余手牌以真实牌面摊在场上 + 判定牌，回合结束统一弃置 */}
             {(pileEntries.length > 0 || judgedCards.length > 0) && (
-              <div className="table-pile" title={STR.game.pileTitle}>
+              <div className="table-pile" ref={pileRef} title={STR.game.pileTitle}>
                 {pileEntries.map((entry) => {
                   const owner = players.find((p) => p.id === entry.playerId);
                   return (
                     <div key={entry.combo.cards[0]!.id} className="table-pile-item">
                       <span className="table-pile-name">{owner?.name ?? STR.game.opponentFallback}</span>
-                      <ComboBadge combo={entry.combo} small />
+                      <div className="table-pile-cards">
+                        {comboFaces(entry.combo).map((f) => (
+                          <Card key={f.card.id} card={f.card} asRank={f.asRank} />
+                        ))}
+                      </div>
+                      <span className="table-pile-label">{entry.combo.label}</span>
                     </div>
                   );
                 })}
-                {judgedCards.map((c) => (
-                  <div key={c.id} className="table-pile-judged" title={STR.game.judgedTitle}>
+                {judgedCards.length > 0 && (
+                  <div className="table-pile-judged" title={STR.game.judgedTitle}>
                     <span className="table-pile-name">{STR.game.judgedLabel}</span>
-                    <Card card={c} />
+                    <div className="table-pile-cards">
+                      {judgedCards.map((c) => (
+                        <Card key={c.id} card={c} />
+                      ))}
+                    </div>
                   </div>
-                ))}
+                )}
               </div>
             )}
             {canFlip && (
