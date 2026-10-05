@@ -10,7 +10,7 @@ import ComboBadge from '../components/ComboBadge';
 import Hand from '../components/Hand';
 import PlayerSeat from '../components/PlayerSeat';
 import RevealPanel from '../components/RevealPanel';
-import RoundInfo from '../components/RoundInfo';
+import RoundHistory from '../components/RoundHistory';
 import SkillAskModal from '../components/SkillAskModal';
 import Toast from '../components/Toast';
 
@@ -152,6 +152,9 @@ export default function GameTable() {
   const activeSkillIds = useMemo(() => new Set(skillActions.map((a) => a.skillId)), [skillActions]);
   const [expandedSkill, setExpandedSkill] = useState<string | null>(null);
 
+  // 查看别人技能的弹窗（点对手座位打开）
+  const [roleViewPlayer, setRoleViewPlayer] = useState<string | null>(null);
+
   // 整理手牌模式：点第一张选中，点第二张交换
   const [organizeSel, setOrganizeSel] = useState<number | null>(null);
   const onOrganizeTap = (cardId: number) => {
@@ -208,23 +211,22 @@ export default function GameTable() {
         </span>
       </header>
 
-      {/* 侧栏（≥1000px 桌面端右侧；移动端 display:contents 保持原位零变化） */}
-      <aside className="side-col">
-        <RoundInfo />
-        <div className="side-seats">
-          {opponents.map((p) => (
-            <PlayerSeat
-              key={p.id}
-              player={p}
-              isMe={false}
-              variant="row"
-              turnLeft={snap?.turnPlayerId === p.id ? turnLeft : null}
-            />
-          ))}
-        </div>
-      </aside>
+      {/* 对手座位（点击可查看其角色技能） */}
+      <div className="game-opponents">
+        {opponents.map((p) => (
+          <PlayerSeat
+            key={p.id}
+            player={p}
+            isMe={false}
+            turnLeft={snap?.turnPlayerId === p.id ? turnLeft : null}
+            onView={() => setRoleViewPlayer(p.id)}
+          />
+        ))}
+      </div>
 
       <div className="game-table">
+        {/* 本回合出牌记录条：每一手牌按时间序展示，回合结束统一弃置 */}
+        <RoundHistory />
         {/* 中央牌堆：卡背叠（5 张封顶）+ 张数；顶部牌背随张数变化脉冲（摸牌反馈） */}
         {!finished && (
           <div className="deck-zone" title={STR.game.deckLeft.replace('{n}', String(snap?.deckCount ?? 0))}>
@@ -456,6 +458,8 @@ export default function GameTable() {
 
       <PeekModal />
 
+      <RoleViewModal playerId={roleViewPlayer} onClose={() => setRoleViewPlayer(null)} />
+
       {!connected && (
         <div className="reconnect-overlay">
           <div className="reconnect-box">{STR.game.reconnect}</div>
@@ -498,6 +502,35 @@ function PeekModal() {
           ))}
         </div>
         <button type="button" className="btn btn-primary" onClick={closePeek}>
+          {STR.game.peekClose}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** 别人的角色技能（点对手座位打开）：角色名 + 技能名/说明（锁定技标注） */
+function RoleViewModal({ playerId, onClose }: { playerId: string | null; onClose: () => void }) {
+  const snap = useStore((s) => s.snap);
+  if (!playerId) return null;
+  const player = snap?.players.find((p) => p.id === playerId);
+  const role = getRole(player?.roleId ?? '');
+  if (!player || !role) return null;
+  return (
+    <div className="modal-overlay overlay-in" onClick={onClose}>
+      <div className="modal role-view-modal modal-in" onClick={(ev) => ev.stopPropagation()}>
+        <h2 className="role-view-title">
+          {STR.game.roleTitle.replace('{name}', player.name).replace('{role}', role.name)}
+        </h2>
+        {role.skills.map((s) => (
+          <div key={s.id} className="role-skill-block">
+            <div className="role-skill">
+              【{s.name}】{s.locked ? STR.room.lockedSkill : ''}
+            </div>
+            <div className="role-desc">{s.description}</div>
+          </div>
+        ))}
+        <button type="button" className="btn btn-primary" onClick={onClose}>
           {STR.game.peekClose}
         </button>
       </div>

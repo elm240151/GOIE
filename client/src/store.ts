@@ -106,6 +106,8 @@ interface AppStore {
   passedAt: Record<string, number>;
   /** 本轮每人最近一次打出的牌（打出者面前保持可见，轮末清除进弃牌堆） */
   roundPlays: Record<string, Combo>;
+  /** 本轮全部出牌按时间序（出牌记录条；轮末统一弃置时清空） */
+  roundPlayLog: { playerId: string; combo: Combo }[];
   /** 明置桌旁的边牌（再问补打等，随当前一手牌一起弃置） */
   tableSideCards: Card[];
   /** 服务端发给我的技能询问（完整载荷，弹窗用） */
@@ -241,6 +243,7 @@ export const useStore = create<AppStore>((set, get) => ({
   tablePlayerId: null,
   passedAt: {},
   roundPlays: {},
+  roundPlayLog: [],
   tableSideCards: [],
   skillAsk: null,
   revealed: null,
@@ -352,6 +355,7 @@ export const useStore = create<AppStore>((set, get) => ({
       revealed: null,
       organize: false,
       roundPlays: {},
+      roundPlayLog: [],
       enteredCardIds: [],
       turnSeq: 0,
       flippedCardId: null,
@@ -479,6 +483,7 @@ export const useStore = create<AppStore>((set, get) => ({
         tablePlayerId: null,
         passedAt: {},
         roundPlays: {},
+        roundPlayLog: [],
         tableSideCards: [],
         drawnAt: {},
         curseActiveIds: [],
@@ -497,6 +502,7 @@ export const useStore = create<AppStore>((set, get) => ({
         skillAsk: null,
         revealed: null,
         roundPlays: {},
+        roundPlayLog: [],
         tableSideCards: [],
         selectedCardIds: [],
         organize: false,
@@ -596,18 +602,24 @@ export const useStore = create<AppStore>((set, get) => ({
           passedAt: {},
           tableSideCards: [],
           roundPlays: { ...s.roundPlays, [e.playerId as string]: e.combo as Combo },
+          roundPlayLog: [...s.roundPlayLog, { playerId: e.playerId as string, combo: e.combo as Combo }],
         }));
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
         break;
       case 'table:attributed': {
-        // 桌面一手牌归属改写（再问/亢奋）：展示移到新归属者名下
+        // 桌面一手牌归属改写（再问/亢奋）：展示移到新归属者名下；记录条末条同步改归属（同手牌不新增）
         const from = e.fromPlayerId as string;
         const to = e.playerId as string;
         set((s) => {
           const plays = { ...s.roundPlays };
           delete plays[from];
           plays[to] = e.combo as Combo;
-          return { tablePlayerId: to, roundPlays: plays };
+          const log = [...s.roundPlayLog];
+          const last = log[log.length - 1];
+          if (last && last.combo.cards[0]!.id === (e.combo as Combo).cards[0]!.id) {
+            log[log.length - 1] = { playerId: to, combo: last.combo };
+          }
+          return { tablePlayerId: to, roundPlays: plays, roundPlayLog: log };
         });
         break;
       }
@@ -621,8 +633,8 @@ export const useStore = create<AppStore>((set, get) => ({
       }
       case 'round:ended': {
         cancelDrawnToast(); // 轮末摸牌由 roundEndToast 播报（避免「摸了 N 张」重复）
-        // 本轮牌全部进弃牌堆：清空打出者面前的展示
-        set({ tablePlayerId: null, passedAt: {}, roundPlays: {}, tableSideCards: [] });
+        // 本轮牌全部进弃牌堆：清空打出者面前的展示与出牌记录
+        set({ tablePlayerId: null, passedAt: {}, roundPlays: {}, roundPlayLog: [], tableSideCards: [] });
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
         const last = room?.players.find((p) => p.id === e.lastPlayerId);
         if (e.ledBy && e.ledBy !== e.lastPlayerId) {
@@ -726,6 +738,7 @@ export const useStore = create<AppStore>((set, get) => ({
         set({
           revealed: null,
           roundPlays: {},
+          roundPlayLog: [],
           banner: winner
             ? { kind: 'win', text: STR.game.winnerTitle.replace('{name}', winner.name) }
             : { kind: 'draw', text: STR.game.drawTitle },

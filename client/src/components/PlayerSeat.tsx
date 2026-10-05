@@ -1,9 +1,10 @@
 // 座位：头像+名字、手牌数/上限、角色名、起牌标、询问中、诅咒两级标、掉线标、
-// 回合高亮+倒计时、本轮打出的牌（常驻至轮末）、过牌气泡；title 展示上/下家方位（倒序互换）。
+// 回合高亮+倒计时、本轮打出的牌（常驻至轮末）、过牌气泡；title 展示上/下家方位（倒序互换）；
+// 可点击（onView）弹角色技能查看（「别人的技能也能看到」）。
 import { useEffect, useMemo, useState } from 'react';
 import { getRole, type GameSnapshot } from '@gdys/shared';
 import { handLimitOf, useStore } from '../store';
-import { STR, TURN_SECONDS } from '../strings';
+import { STR } from '../strings';
 import ComboBadge from './ComboBadge';
 
 interface Props {
@@ -11,11 +12,11 @@ interface Props {
   isMe: boolean;
   /** 剩余秒数（仅轮到该座位时显示） */
   turnLeft?: number | null;
-  /** 桌面端侧栏横排形态（≥1000px 生效；移动端无样式差异） */
-  variant?: 'card' | 'row';
+  /** 点击座位查看该玩家的角色技能（缺省不可点） */
+  onView?: () => void;
 }
 
-export default function PlayerSeat({ player, isMe, turnLeft, variant = 'card' }: Props) {
+export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
   const snap = useStore((s) => s.snap);
   const passedAt = useStore((s) => s.passedAt);
   const roundPlays = useStore((s) => s.roundPlays);
@@ -81,11 +82,13 @@ export default function PlayerSeat({ player, isMe, turnLeft, variant = 'card' }:
   const curseActive = !player.eliminated && curseActiveIds.includes(player.id);
   const cursePending =
     !player.eliminated && !curseActive && (snap?.cursedPlayerIds.includes(player.id) ?? false);
+  const title = onView ? [directionTitle, STR.game.viewSkills].filter(Boolean).join('｜') : directionTitle;
 
   return (
     <div
-      className={`seat ${isTurn ? 'seat-turn' : ''} ${isMe ? 'seat-me' : ''} ${player.eliminated ? 'seat-eliminated' : ''} ${elimPop ? 'seat-shake' : ''} ${variant === 'row' ? 'seat-row' : ''}`}
-      title={directionTitle}
+      className={`seat ${isTurn ? 'seat-turn' : ''} ${isMe ? 'seat-me' : ''} ${player.eliminated ? 'seat-eliminated' : ''} ${elimPop ? 'seat-shake' : ''} ${onView ? 'seat-clickable' : ''}`}
+      title={title}
+      onClick={onView}
     >
       <div className="seat-avatar">
         {player.eliminated ? '✕' : player.name.slice(0, 1)}
@@ -121,8 +124,6 @@ export default function PlayerSeat({ player, isMe, turnLeft, variant = 'card' }:
         )}
         {player.eliminated && <span className="seat-offline">{STR.game.eliminated}</span>}
         {!player.connected && !player.eliminated && <span className="seat-offline">{STR.room.offlineBadge}</span>}
-        {/* 方位标：桌面侧栏行内展示（移动端 title 提示、此处隐藏） */}
-        {directionTitle && <span className="seat-dir">{directionTitle}</span>}
       </div>
       {/* 牌背堆：直观显示手牌张数（最多叠 8 张，其余看 ×N） */}
       {!player.eliminated && player.handCount > 0 && (
