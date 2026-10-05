@@ -1,6 +1,7 @@
 // Socket.IO 单例：全站共享一个连接（dev 走 Vite 代理，prod 同源）。
 import { io, type Socket } from 'socket.io-client';
 import type { AckResult } from '@gdys/shared';
+import { STR } from './strings';
 
 let socket: Socket | null = null;
 
@@ -17,7 +18,7 @@ export function emitAck<T extends object = Record<string, unknown>>(ev: string, 
     getSocket()
       .timeout(8000)
       .emit(ev, payload, (err: unknown, res: AckResult<T>) => {
-        if (err) reject(new Error('请求超时'));
+        if (err) reject(new Error(STR.common.requestTimeout));
         else resolve(res);
       });
   });

@@ -51,7 +51,7 @@ export default function Room() {
               {p.isHost && <em className="tag">{STR.room.host}</em>}
               {p.id === myId && <em className="tag">{STR.room.you}</em>}
             </span>
-            <span className="room-seat-role">{roles.find((r) => r.id === p.roleId)?.name ?? '未选角色'}</span>
+            <span className="room-seat-role">{roles.find((r) => r.id === p.roleId)?.name ?? STR.room.noRole}</span>
             <span className={`room-seat-ready ${p.ready ? 'ready-on' : ''}`}>
               {p.ready ? STR.room.readyState : '—'}
               {!p.connected && <em className="tag">{STR.room.offlineBadge}</em>}

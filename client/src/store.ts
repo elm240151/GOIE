@@ -5,6 +5,7 @@ import {
   CLIENT_EVENTS,
   SERVER_EVENTS,
   cardColor,
+  defaultRules,
   getRole,
   isJoker,
   type Card,
@@ -119,6 +120,18 @@ interface AppStore {
   organize: boolean;
   /** 新摸入我手牌的牌 id（入场动画标记；只增不删，跨局清空——每局牌 id 重新编号） */
   enteredCardIds: number[];
+  /** 回合序号（turn:started 事件自增）：同一玩家连续两轮持牌权时驱动倒计时重置 */
+  turnSeq: number;
+  /** 最近谁摸了牌（值为摸牌时间戳，座位手牌数 pop 动画用） */
+  drawnAt: Record<string, number>;
+  /** 诅咒本回合生效的玩家 id（地坛）：其余被诅咒者是下一轮生效（半透明标） */
+  curseActiveIds: string[];
+  /** 诅咒基线所属的起牌者：turn:started 置空，下一次快照按当前 cursedPlayerIds 重取基线 */
+  curseBaselineLeader: string;
+  /** 顶部大事件横幅（终局/淘汰，2.6s 自消） */
+  banner: { kind: 'win' | 'draw' | 'eliminated'; text: string } | null;
+  /** 最近淘汰时间戳（座位抖动动画用） */
+  eliminatedAt: Record<string, number>;
   /** 端庄（轴承）翻面：选中的翻面牌 id（须是当前桌面一手牌中的牌；快照桌面变化自动清空） */
   flippedCardId: number | null;
   /** 窃笑（轴承）：私密查看到的手牌弹窗（服务端 skill:peek 定向发我） */
@@ -128,6 +141,7 @@ interface AppStore {
   init(): void;
   toast(kind: ToastItem['kind'], text: string): void;
   dismissToast(id: number): void;
+  dismissBanner(): void;
   setScreen(screen: Screen): void;
 
   // 大厅/房间
@@ -165,6 +179,14 @@ interface AppStore {
 
 let toastSeq = 0;
 
+/** 手牌上限（与引擎 checkHandLimit 同口径：贪婪 30 → 两倍 40 → 默认 20） */
+export function handLimitOf(roleId: string): number {
+  const role = getRole(roleId);
+  if (role?.greedy) return 30;
+  if (role?.doubleSupply) return defaultRules.hand.limit * 2;
+  return defaultRules.hand.limit;
+}
+
 /** 公开翻牌展示区的延迟清除定时器（留出逐张亮出的动画时间） */
 let revealClearTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -179,6 +201,17 @@ function cancelRevealClear() {
   if (revealClearTimer) {
     clearTimeout(revealClearTimer);
     revealClearTimer = null;
+  }
+}
+
+/** 别人摸牌 toast 的延迟缓冲：轮末摸牌的「摸了 N 张」与 round:ended 的「继续出」重复，
+ *  延迟 80ms 播出，round:ended 到达时撤销（事件批量顺序：cards:drawn 在前、round:ended 在后） */
+let pendingDrawnToast: { playerId: string; timer: ReturnType<typeof setTimeout> } | null = null;
+
+function cancelDrawnToast() {
+  if (pendingDrawnToast) {
+    clearTimeout(pendingDrawnToast.timer);
+    pendingDrawnToast = null;
   }
 }
 
@@ -215,6 +248,12 @@ export const useStore = create<AppStore>((set, get) => ({
   handOrderFor: '',
   organize: false,
   enteredCardIds: [],
+  turnSeq: 0,
+  drawnAt: {},
+  curseActiveIds: [],
+  curseBaselineLeader: '',
+  banner: null,
+  eliminatedAt: {},
   flippedCardId: null,
   peekedHand: null,
 
@@ -262,6 +301,9 @@ export const useStore = create<AppStore>((set, get) => ({
   },
   dismissToast(id) {
     set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }));
+  },
+  dismissBanner() {
+    set({ banner: null });
   },
   setScreen(screen) {
     set({ screen });
@@ -311,6 +353,7 @@ export const useStore = create<AppStore>((set, get) => ({
       organize: false,
       roundPlays: {},
       enteredCardIds: [],
+      turnSeq: 0,
       flippedCardId: null,
       peekedHand: null,
       screen: 'lobby',
@@ -437,6 +480,11 @@ export const useStore = create<AppStore>((set, get) => ({
         passedAt: {},
         roundPlays: {},
         tableSideCards: [],
+        drawnAt: {},
+        curseActiveIds: [],
+        curseBaselineLeader: '',
+        banner: null,
+        eliminatedAt: {},
         flippedCardId: null,
         peekedHand: null,
       });
@@ -453,6 +501,12 @@ export const useStore = create<AppStore>((set, get) => ({
         selectedCardIds: [],
         organize: false,
         enteredCardIds: [],
+        turnSeq: 0,
+        drawnAt: {},
+        curseActiveIds: [],
+        curseBaselineLeader: '',
+        banner: null,
+        eliminatedAt: {},
         flippedCardId: null,
         peekedHand: null,
         tablePlayerId: null,
@@ -471,6 +525,8 @@ export const useStore = create<AppStore>((set, get) => ({
       revealed,
       snap: prevSnap,
       enteredCardIds,
+      curseActiveIds,
+      curseBaselineLeader,
     } = get();
     const myHand = snap.players.find((p) => p.id === myId)?.hand ?? [];
     const myHandIds = new Set(myHand.map((c) => c.id));
@@ -485,7 +541,7 @@ export const useStore = create<AppStore>((set, get) => ({
     if (prevHand) {
       const prevIds = new Set(prevHand.map((c) => c.id));
       const fresh = myHand.filter((c) => !prevIds.has(c.id)).map((c) => c.id);
-      if (fresh.length > 0) entered = [...entered, ...fresh];
+      if (fresh.length > 0) entered = [...entered, ...fresh].slice(-12);
     }
 
     // 手牌顺序：换房间重载持久化顺序；旧顺序里不在手中的剔除，新摸到的牌按默认排序追加在末尾
@@ -505,7 +561,7 @@ export const useStore = create<AppStore>((set, get) => ({
       if (fresh.length > 0) {
         revealedNext = {
           cards: [...(revealedNext?.cards ?? []), ...fresh],
-          purpose: revealedNext?.purpose ?? '翻牌',
+          purpose: revealedNext?.purpose ?? STR.game.defaultRevealPurpose,
         };
       }
     }
@@ -513,6 +569,9 @@ export const useStore = create<AppStore>((set, get) => ({
     // 询问已了结，或挂起的询问不再定向我（如隐匿答完→阿色抽你、观股依次自选轮到别人）
     // → 关闭我的弹窗；仍定向我时保留——服务端先发快照、后发定向 game:skill-ask，
     // 多阶段询问的下一步弹窗靠随后的事件更新（过早清空会闪关闪开）
+    // 诅咒生效时机（地坛）：turn:started 事件已把基线置空 → 新回合首快照按当前
+    // cursedPlayerIds 重取基线（= 本回合生效集）；同一回合内新增的被诅咒者下一轮生效
+    const curActive = curseBaselineLeader === snap.roundLeaderId ? curseActiveIds : snap.cursedPlayerIds;
     set({
       snap,
       tableSideCards: snap.tableSide,
@@ -523,6 +582,8 @@ export const useStore = create<AppStore>((set, get) => ({
       handOrder: order,
       handOrderFor: myId,
       enteredCardIds: entered,
+      curseActiveIds: curActive,
+      curseBaselineLeader: snap.roundLeaderId,
     });
   },
 
@@ -559,6 +620,7 @@ export const useStore = create<AppStore>((set, get) => ({
         break;
       }
       case 'round:ended': {
+        cancelDrawnToast(); // 轮末摸牌由 roundEndToast 播报（避免「摸了 N 张」重复）
         // 本轮牌全部进弃牌堆：清空打出者面前的展示
         set({ tablePlayerId: null, passedAt: {}, roundPlays: {}, tableSideCards: [] });
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
@@ -575,7 +637,7 @@ export const useStore = create<AppStore>((set, get) => ({
       case 'skill:triggered': {
         const role = getRole(e.roleId as string);
         const skillName = role?.skills.find((s) => s.id === e.skillId)?.name ?? (e.skillId as string);
-        toast('skill', `【${skillName}】${e.text as string}`);
+        toast('skill', STR.game.skillToast.replace('{skill}', skillName).replace('{text}', e.text as string));
         break;
       }
       case 'deck:recycled': {
@@ -597,6 +659,10 @@ export const useStore = create<AppStore>((set, get) => ({
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
         const name = room?.players.find((p) => p.id === e.playerId)?.name ?? (e.playerId as string);
         toast('info', STR.game.eliminatedToast.replace('{name}', name).replace('{reason}', String(e.reason)));
+        set((s) => ({
+          banner: { kind: 'eliminated', text: STR.game.eliminatedBanner.replace('{name}', name) },
+          eliminatedAt: { ...s.eliminatedAt, [e.playerId as string]: Date.now() },
+        }));
         break;
       }
       case 'cards:revealed': {
@@ -605,31 +671,65 @@ export const useStore = create<AppStore>((set, get) => ({
         const cards = (e.cards as Card[] | undefined) ?? [];
         if (cards.length > 0) {
           cancelRevealClear(); // 新翻牌流开始，作废上一次的延迟清除
-          set((s) => {
-            const purpose = (e.purpose as string | undefined) ?? s.revealed?.purpose ?? '翻牌';
-            const base = s.revealed && s.revealed.purpose !== purpose ? [] : (s.revealed?.cards ?? []);
-            const seen = new Set(base.map((c) => c.id));
-            const fresh = cards.filter((c) => !seen.has(c.id));
-            if (fresh.length === 0) return {};
-            return {
-              revealed: {
-                cards: [...base, ...fresh],
-                purpose,
-              },
-            };
-          });
+          const purpose =
+            (e.purpose as string | undefined) ?? get().revealed?.purpose ?? STR.game.defaultRevealPurpose;
+          const prev = get().revealed;
+          const isNewStream = !prev || prev.purpose !== purpose;
+          const base = isNewStream ? [] : (prev?.cards ?? []);
+          const seen = new Set(base.map((c) => c.id));
+          const fresh = cards.filter((c) => !seen.has(c.id));
+          if (fresh.length > 0) {
+            set({ revealed: { cards: [...base, ...fresh], purpose } });
+            // 新流开始才播报一次（同一用途的流式翻牌不刷屏）
+            if (isNewStream) {
+              const revealer = room?.players.find((p) => p.id === e.playerId)?.name ?? (e.playerId as string);
+              toast(
+                'info',
+                STR.game.revealedToast
+                  .replace('{name}', revealer)
+                  .replace('{n}', String(fresh.length))
+                  .replace('{purpose}', purpose)
+              );
+            }
+          }
         }
         break;
       }
       case 'turn:started':
+        set((s) => ({
+          turnSeq: s.turnSeq + 1,
+          curseBaselineLeader: '', // 诅咒基线失效 → 下一快照按新回合的 cursedPlayerIds 重取
+        }));
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
         break;
+      case 'cards:drawn': {
+        // 别人摸牌 toast（自己的摸牌由手牌动画反馈）；轮末摸牌会紧随 round:ended，
+        // 延迟 80ms 播出并在 round:ended 撤销，避免与「无人能管…继续出」重复
+        set((s) => ({ drawnAt: { ...s.drawnAt, [e.playerId as string]: Date.now() } }));
+        if ((e.playerId as string) === get().myId) break;
+        const drawnName = room?.players.find((p) => p.id === e.playerId)?.name ?? (e.playerId as string);
+        cancelDrawnToast();
+        pendingDrawnToast = {
+          playerId: e.playerId as string,
+          timer: setTimeout(() => {
+            pendingDrawnToast = null;
+            get().toast('info', STR.game.drawnToast.replace('{name}', drawnName).replace('{n}', String(e.count)));
+          }, 80),
+        };
+        break;
+      }
       case 'game:ended': {
         cancelRevealClear();
-        set({ revealed: null, roundPlays: {} });
+        cancelDrawnToast();
+        // 胜负走顶部横幅 + 终局弹窗，不再发重复 info toast
         const winner = room?.players.find((p) => p.id === e.winnerId);
-        if (winner) toast('info', `${winner.name} 获胜！`);
-        else toast('info', '流局：无人能出牌');
+        set({
+          revealed: null,
+          roundPlays: {},
+          banner: winner
+            ? { kind: 'win', text: STR.game.winnerTitle.replace('{name}', winner.name) }
+            : { kind: 'draw', text: STR.game.drawTitle },
+        });
         break;
       }
       default:

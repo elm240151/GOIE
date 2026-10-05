@@ -1,5 +1,6 @@
 // 单张牌面。王：双角标「王」+ 中央星徽与大小徽章，颜色用共享 cardColor（大王红、小王黑）。
 import { cardColor, isJoker, JOKER_BIG, rankLabel, SUITS, type Card as CardT, type Rank } from '@gdys/shared';
+import { STR } from '../strings';
 
 interface Props {
   card: CardT;
@@ -30,19 +31,19 @@ export default function Card({ card, asRank, selected, onClick, disabled, faceDo
     <button type="button" className={cls} onClick={onClick} disabled={disabled || !onClick}>
       {joker ? (
         <>
-          <span className="card-corner">王</span>
-          <span className="card-corner card-corner-br">王</span>
+          <span className="card-corner">{STR.game.cardJokerLabel}</span>
+          <span className="card-corner card-corner-br">{STR.game.cardJokerLabel}</span>
           <span className="card-center joker-center">
             <span className="joker-star">✦</span>
-            <span className="joker-tag">{card.rank === JOKER_BIG ? '大' : '小'}</span>
+            <span className="joker-tag">{card.rank === JOKER_BIG ? STR.game.cardJokerBig : STR.game.cardJokerSmall}</span>
           </span>
-          {asRank !== undefined && <em className="card-as-rank">当{label}</em>}
+          {asRank !== undefined && <em className="card-as-rank">{STR.game.cardAsRank.replace('{label}', label)}</em>}
         </>
       ) : (
         <>
           <span className="card-corner">{label}</span>
           <span className="card-center">{SUITS[card.suit]}</span>
-          {asRank !== undefined && <em className="card-as-rank">当{label}</em>}
+          {asRank !== undefined && <em className="card-as-rank">{STR.game.cardAsRank.replace('{label}', label)}</em>}
         </>
       )}
     </button>

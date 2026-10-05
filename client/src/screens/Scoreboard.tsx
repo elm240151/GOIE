@@ -21,7 +21,7 @@ export default function Scoreboard() {
         <h1 className="sb-title">{STR.scoreboard.title}</h1>
       </header>
       {records === null ? (
-        <p className="sb-empty">…</p>
+        <p className="sb-empty">{STR.common.loading}</p>
       ) : records.length === 0 ? (
         <p className="sb-empty">{STR.scoreboard.empty}</p>
       ) : (
@@ -33,9 +33,11 @@ export default function Scoreboard() {
               <li key={i} className="sb-record">
                 <div className="sb-head">
                   <span className="sb-time">
-                    {`${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(
-                      d.getMinutes()
-                    ).padStart(2, '0')}`}
+                    {STR.scoreboard.timeFormat
+                      .replace('{m}', String(d.getMonth() + 1))
+                      .replace('{d}', String(d.getDate()))
+                      .replace('{h}', String(d.getHours()).padStart(2, '0'))
+                      .replace('{min}', String(d.getMinutes()).padStart(2, '0'))}
                   </span>
                   <span className="sb-room">{STR.scoreboard.room} {r.roomId}</span>
                   <span className={winner ? 'sb-winner' : 'sb-draw'}>

@@ -1,13 +1,16 @@
 // 游戏桌：对手座位 + 中央牌区 + 手牌扇形点选 + 实时牌型预览 + 终局弹窗。
 import { useEffect, useMemo, useState } from 'react';
-import { defaultRules, getRole, ouYaCovers, parseCombo, rankLabel, validateFlipResponse, type Card as CardT } from '@gdys/shared';
-import { useStore } from '../store';
+import { defaultRules, getRole, ouYaCovers, parseCombo, rankLabel, validateFlipResponse, type Card as CardT, type Rank } from '@gdys/shared';
+import { handLimitOf, useStore } from '../store';
 import { STR, TURN_SECONDS } from '../strings';
 import { beatReason, finishHint, invalidReason } from '../beatHint';
+import Banner from '../components/Banner';
 import Card from '../components/Card';
 import ComboBadge from '../components/ComboBadge';
 import Hand from '../components/Hand';
 import PlayerSeat from '../components/PlayerSeat';
+import RevealPanel from '../components/RevealPanel';
+import RoundInfo from '../components/RoundInfo';
 import SkillAskModal from '../components/SkillAskModal';
 import Toast from '../components/Toast';
 
@@ -37,22 +40,35 @@ export default function GameTable() {
   const enteredCardIds = useStore((s) => s.enteredCardIds);
   const flippedCardId = useStore((s) => s.flippedCardId);
   const toggleFlipSelect = useStore((s) => s.toggleFlipSelect);
-  const peekedHand = useStore((s) => s.peekedHand);
-  const closePeek = useStore((s) => s.closePeek);
+  const turnSeq = useStore((s) => s.turnSeq);
 
-  // 回合倒计时（以快照的 turnPlayerId 变化为基准）
+  // 回合倒计时（以 turnSeq 为基准：同一玩家连续两轮持牌权也会重置；无轮次/终局清零）
   const [deadline, setDeadline] = useState(0);
   const [now, setNow] = useState(Date.now());
+
+  // 我被淘汰：底部操作区抖动 1.2s
+  const myElimTs = useStore((s) => (myId ? s.eliminatedAt[myId] : undefined));
+  const [myElimPop, setMyElimPop] = useState(false);
   useEffect(() => {
-    if (snap?.turnPlayerId) {
+    if (!myElimTs) return;
+    setMyElimPop(true);
+    const t = setTimeout(() => setMyElimPop(false), 1200);
+    return () => clearTimeout(t);
+  }, [myElimTs]);
+  useEffect(() => {
+    if (snap?.phase === 'playing' && snap?.turnPlayerId) {
       setDeadline(Date.now() + TURN_SECONDS * 1000);
       setNow(Date.now());
+    } else {
+      setDeadline(0);
     }
-  }, [snap?.turnPlayerId, snap?.phase]);
+  }, [snap?.turnPlayerId, snap?.phase, turnSeq]);
+  // 只在有倒计时时运行 interval（无轮次零定时器零重渲染）
   useEffect(() => {
+    if (!deadline) return;
     const t = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(t);
-  }, []);
+  }, [deadline]);
   const turnLeft = deadline > 0 ? Math.max(0, Math.ceil((deadline - now) / 1000)) : null;
 
   const players = snap?.players ?? [];
@@ -180,6 +196,7 @@ export default function GameTable() {
   return (
     <div className="screen game">
       <Toast />
+      <Banner />
 
       <header className="game-top">
         <button className="btn btn-ghost" onClick={leaveRoom}>
@@ -191,16 +208,21 @@ export default function GameTable() {
         </span>
       </header>
 
-      <div className="game-opponents">
-        {opponents.map((p) => (
-          <PlayerSeat
-            key={p.id}
-            player={p}
-            isMe={false}
-            turnLeft={snap?.turnPlayerId === p.id ? turnLeft : null}
-          />
-        ))}
-      </div>
+      {/* 侧栏（≥1000px 桌面端右侧；移动端 display:contents 保持原位零变化） */}
+      <aside className="side-col">
+        <RoundInfo />
+        <div className="side-seats">
+          {opponents.map((p) => (
+            <PlayerSeat
+              key={p.id}
+              player={p}
+              isMe={false}
+              variant="row"
+              turnLeft={snap?.turnPlayerId === p.id ? turnLeft : null}
+            />
+          ))}
+        </div>
+      </aside>
 
       <div className="game-table">
         {/* 中央牌堆：卡背叠（5 张封顶）+ 张数；顶部牌背随张数变化脉冲（摸牌反馈） */}
@@ -218,24 +240,43 @@ export default function GameTable() {
                 <span className="deck-back deck-back-empty" />
               )}
             </div>
-            <em className="deck-count">{STR.game.deckLeft.replace('{n}', String(snap?.deckCount ?? 0))}</em>
+            <em className="deck-count deck-count-pop" key={snap?.deckCount ?? 0}>
+              {STR.game.deckLeft.replace('{n}', String(snap?.deckCount ?? 0))}
+            </em>
           </div>
         )}
 
         {snap?.table ? (
           <>
-            <div className="table-owner">{tableOwner ? `${tableOwner.name} 出了` : '上一手'}</div>
+            <div className="table-owner">
+              {tableOwner ? STR.game.tableOwner.replace('{name}', tableOwner.name) : STR.game.prevTable}
+            </div>
             <div className="table-row">
-              <ComboBadge
-                combo={snap.table}
-                retagged={!!snap.tableRankNote}
-                onCardClick={canFlip ? toggleFlipSelect : undefined}
-                flippedCardId={canFlip ? flippedCardId : null}
-              />
+              {/* key=首张牌 id：每手新牌重播入场弹跳（改判/归属改写不重播） */}
+              <div className="combo-enter" key={snap.table.cards[0]!.id}>
+                <ComboBadge
+                  combo={snap.table}
+                  retagged={!!snap.tableRankNote}
+                  onCardClick={canFlip ? toggleFlipSelect : undefined}
+                  flippedCardId={canFlip ? flippedCardId : null}
+                />
+              </div>
               {snap.tableRankNote && (
-                <span className="retag-badge" title={STR.game.retagTitle}>
+                <span
+                  className="retag-badge"
+                  title={STR.game.retagTitleNote
+                    .replace('{rank}', rankLabel(snap.tableRankNote.rank as Rank))
+                    .replace('{label}', originalTableLabel)}
+                >
                   {STR.game.retagFrom.replace('{label}', originalTableLabel)}
                 </span>
+              )}
+              {/* 上一手：被压的那手（弱化小徽章，起牌时服务端已清空） */}
+              {snap.prevTable && (
+                <div className="table-prev">
+                  <span className="table-prev-label">{STR.game.prevTable}</span>
+                  <ComboBadge combo={snap.prevTable} small />
+                </div>
               )}
               {tableSideCards.length > 0 && (
                 <div className="table-side">
@@ -260,7 +301,7 @@ export default function GameTable() {
           <div className="table-empty">{finished ? '' : STR.game.tableEmpty}</div>
         )}
         {!finished && rev && (
-          <div className="order-badge" title="海棠洄游：整条牌序反转中">{STR.game.orderReversed}</div>
+          <div className="order-badge" title={STR.game.orderBadgeTitle}>{STR.game.orderReversed}</div>
         )}
         <div className={`table-turn ${myTurn ? 'table-turn-me' : ''}`}>
           {finished
@@ -272,42 +313,26 @@ export default function GameTable() {
                 : STR.game.waiting}
         </div>
 
-        {/* 公开判定/展示牌：所有玩家可见，逐张亮出（张数封顶，避免亮全手牌时挤爆桌面） */}
-        {revealed && revealed.cards.length > 0 && (
-          <div className="reveal-panel">
-            <span className="reveal-label">
-              {STR.game.revealPanel.replace('{purpose}', revealed.purpose)}
-              {revealed.cards.length > 12 && (
-                <em className="reveal-more">（共 {revealed.cards.length} 张）</em>
-              )}
-            </span>
-            <div className="reveal-cards">
-              {revealed.cards.slice(0, 12).map((c, i) => (
-                <div key={c.id} className="reveal-slot" style={{ animationDelay: `${Math.min(i, 6) * 0.4}s` }}>
-                  <Card card={c} />
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* 公开判定/展示牌：所有玩家可见，逐张亮出（张数封顶，避免亮全手牌时挤爆桌面）；退场淡出 */}
+        <RevealPanel revealed={revealed} />
       </div>
 
       <div className="game-bottom">
-        <div className="my-bar">
+        <div className={`my-bar ${myElimPop ? 'my-bar-shake' : ''}`}>
           <span className="my-name">
             {me?.name}
             <em className="tag">{getRole(me?.roleId ?? '')?.name ?? ''}</em>
           </span>
           <span className="my-handcount">
-            ×{me?.handCount ?? 0}/{myRole?.greedy ? 30 : myRole?.doubleSupply ? defaultRules.hand.limit * 2 : defaultRules.hand.limit}
+            ×{me?.handCount ?? 0}/{handLimitOf(me?.roleId ?? '')}
           </span>
           {(me?.pancakeCount ?? 0) > 0 && (
-            <span className="my-pancake" title="饼：倒置的牌，任何人不可看牌面、不可使用">
+            <span className="my-pancake" title={STR.game.pancakeTitle}>
               {STR.game.pancakeBadge.replace('{n}', String(me?.pancakeCount ?? 0))}
             </span>
           )}
           {myPlay && (
-            <span className="my-play">
+            <span className="my-play combo-enter" key={myPlay.cards[0]!.id}>
               <ComboBadge combo={myPlay} small />
             </span>
           )}
@@ -351,7 +376,7 @@ export default function GameTable() {
           ) : preview.hint ? (
             <span className="preview-error">{preview.hint}</span>
           ) : (
-            <span className="preview-empty">{myTurn ? '点选手牌（王可补缺）' : ''}</span>
+            <span className="preview-empty">{myTurn ? STR.game.handPickHint : ''}</span>
           )}
         </div>
 
@@ -429,7 +454,7 @@ export default function GameTable() {
 
       {finished && room && <FinishedModal />}
 
-      {peekedHand && <PeekModal />}
+      <PeekModal />
 
       {!connected && (
         <div className="reconnect-overlay">
@@ -440,18 +465,35 @@ export default function GameTable() {
   );
 }
 
-/** 窃笑（轴承）：私密查看目标手牌的弹窗（服务端定向发我，其余人不可见） */
+/** 窃笑（轴承）：私密查看目标手牌的弹窗（服务端定向发我，其余人不可见）；退场淡出 0.25s */
 function PeekModal() {
-  const peekedHand = useStore((s) => s.peekedHand)!;
+  const peekedHand = useStore((s) => s.peekedHand);
   const snap = useStore((s) => s.snap);
   const closePeek = useStore((s) => s.closePeek);
-  const targetName = snap?.players.find((p) => p.id === peekedHand.targetId)?.name ?? '对方';
+  const [last, setLast] = useState(peekedHand);
+  const [closing, setClosing] = useState(false);
+  useEffect(() => {
+    if (peekedHand) {
+      setLast(peekedHand);
+      setClosing(false);
+      return;
+    }
+    if (!last) return;
+    setClosing(true);
+    const t = setTimeout(() => {
+      setLast(null);
+      setClosing(false);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [peekedHand]);
+  if (!last) return null;
+  const targetName = snap?.players.find((p) => p.id === last.targetId)?.name ?? STR.game.opponentFallback;
   return (
-    <div className="modal-overlay" onClick={closePeek}>
-      <div className="modal peek-modal" onClick={(ev) => ev.stopPropagation()}>
+    <div className={`modal-overlay overlay-in ${closing ? 'overlay-closing' : ''}`} onClick={closePeek}>
+      <div className={`modal peek-modal modal-in ${closing ? 'modal-closing' : ''}`} onClick={(ev) => ev.stopPropagation()}>
         <h2 className="peek-title">{STR.game.peekTitle.replace('{name}', targetName)}</h2>
         <div className="peek-cards">
-          {peekedHand.cards.map((c) => (
+          {last.cards.map((c) => (
             <Card key={c.id} card={c} />
           ))}
         </div>
@@ -475,8 +517,8 @@ function FinishedModal() {
   const total = room.players.length;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal finish-modal">
+    <div className="modal-overlay overlay-in">
+      <div className="modal finish-modal modal-in">
         <h2 className={winner ? 'finish-win' : 'finish-draw'}>
           {winner ? STR.game.winnerTitle.replace('{name}', winner.name) : STR.game.drawTitle}
         </h2>

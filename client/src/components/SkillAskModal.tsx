@@ -1,5 +1,6 @@
 // 技能询问弹窗：按询问类型渲染（确认/选花色/选项/选牌/选目标/插队），带倒计时。
 // 询问完整载荷由服务端定向发送（game:skill-ask），超时服务端自动按弃权处理。
+// 退场两阶段：store 清空后先淡出 0.25s 再卸载（新询问到达立即恢复；快照驱动关闭逻辑在 store）。
 import { useEffect, useMemo, useState } from 'react';
 import type { Card as CardT, SkillAsk } from '@gdys/shared';
 import { useStore } from '../store';
@@ -64,6 +65,24 @@ export default function SkillAskModal() {
   const answerSkill = useStore((s) => s.answerSkill);
   const left = useAskCountdown(ask);
 
+  // 退场两阶段：淡出期间继续渲染最后一份询问（last），0.25s 后卸载
+  const [last, setLast] = useState<SkillAsk | null>(ask);
+  const [closing, setClosing] = useState(false);
+  useEffect(() => {
+    if (ask) {
+      setLast(ask);
+      setClosing(false);
+      return;
+    }
+    if (!last) return;
+    setClosing(true);
+    const t = setTimeout(() => {
+      setLast(null);
+      setClosing(false);
+    }, 250);
+    return () => clearTimeout(t);
+  }, [ask]);
+
   const myHand = useMemo(
     () => snap?.players.find((p) => p.id === myId)?.hand ?? [],
     [snap, myId],
@@ -76,21 +95,21 @@ export default function SkillAskModal() {
     setPicked([]);
   }, [askKey]);
 
-  if (!ask || askKey === '') return null;
+  if (!last || last.askId === '') return null;
 
-  const min = ask.min ?? 1;
-  const max = ask.max ?? myHand.length;
+  const min = last.min ?? 1;
+  const max = last.max ?? myHand.length;
 
   const toggle = (id: number) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
   const answer = (payload: { choice?: string; cardIds?: number[]; targetPlayerId?: string }) =>
-    void answerSkill({ askId: askKey, ...payload });
+    void answerSkill({ askId: last.askId, ...payload });
 
   let body: React.ReactNode;
   let canSubmit = false;
 
-  switch (ask.kind) {
+  switch (last.kind) {
     case 'confirm':
       body = null;
       canSubmit = true;
@@ -99,7 +118,7 @@ export default function SkillAskModal() {
     case 'choice':
       body = (
         <div className="ask-options">
-          {(ask.options ?? []).map((o) => (
+          {(last.options ?? []).map((o) => (
             <button key={o} className="btn btn-primary ask-option" onClick={() => answer({ choice: o })}>
               {o}
             </button>
@@ -108,19 +127,19 @@ export default function SkillAskModal() {
       );
       break;
     case 'pickCards': {
-      const cards = ask.cards ?? myHand;
-      body = <PickGrid cards={cards} picked={picked} onToggle={toggle} hidden={ask.hidden} />;
+      const cards = last.cards ?? myHand;
+      body = <PickGrid cards={cards} picked={picked} onToggle={toggle} hidden={last.hidden} />;
       canSubmit = picked.length >= min && picked.length <= max;
       break;
     }
     case 'pickTarget':
       body = (
         <div className="ask-options">
-          {(ask.targetCandidates ?? []).map((pid) => {
+          {(last.targetCandidates ?? []).map((pid) => {
             const p = snap?.players.find((x) => x.id === pid);
             return (
               <button key={pid} className="btn btn-primary ask-option" onClick={() => answer({ targetPlayerId: pid })}>
-                {p ? `${p.name}（${p.handCount} 张）` : pid}
+                {p ? STR.game.pickTargetLabel.replace('{name}', p.name).replace('{n}', String(p.handCount)) : pid}
               </button>
             );
           })}
@@ -140,22 +159,22 @@ export default function SkillAskModal() {
 
   // pickCards 也可弃权（再问补打「打不出」、观股大跌放弃等）；suit/choice 同样可弃权（巨石花色判定、答疑点数、骚骚换 1/2 张——服务端均支持 decline）
   const showDecline =
-    ask.kind === 'confirm' || ask.kind === 'cutIn' || ask.kind === 'selfFollow' || ask.kind === 'pickCards' ||
-    ask.kind === 'suit' || ask.kind === 'choice';
+    last.kind === 'confirm' || last.kind === 'cutIn' || last.kind === 'selfFollow' || last.kind === 'pickCards' ||
+    last.kind === 'suit' || last.kind === 'choice';
 
   return (
-    <div className="modal-overlay">
-      <div className="modal ask-modal">
+    <div className={`modal-overlay overlay-in ${closing ? 'overlay-closing' : ''}`}>
+      <div className={`modal ask-modal modal-in ${closing ? 'modal-closing' : ''}`}>
         <div className="ask-head">
           <span className="ask-title">⚡ {STR.game.skillAsk}</span>
           {left !== null && <span className={`ask-countdown ${left <= 5 ? 'ask-urgent' : ''}`}>{left}s</span>}
         </div>
-        <p className="ask-prompt">{ask.prompt}</p>
-        {ask.kind === 'cutIn' && <p className="ask-hint">{STR.game.cutInHint}</p>}
-        {ask.kind === 'selfFollow' && <p className="ask-hint">{STR.game.selfFollowHint}</p>}
-        {ask.kind === 'pickCards' && (
+        <p className="ask-prompt">{last.prompt}</p>
+        {last.kind === 'cutIn' && <p className="ask-hint">{STR.game.cutInHint}</p>}
+        {last.kind === 'selfFollow' && <p className="ask-hint">{STR.game.selfFollowHint}</p>}
+        {last.kind === 'pickCards' && (
           <p className="ask-hint">
-            {(ask.hidden ? STR.game.pickHiddenHint : STR.game.pickHint)
+            {(last.hidden ? STR.game.pickHiddenHint : STR.game.pickHint)
               .replace('{n}', String(picked.length))
               .replace('{min}', String(min))
               .replace('{max}', String(max))}
@@ -168,22 +187,22 @@ export default function SkillAskModal() {
               {STR.game.decline}
             </button>
           )}
-          {ask.kind === 'confirm' && (
+          {last.kind === 'confirm' && (
             <button className="btn btn-primary" onClick={() => answer({ choice: 'yes' })}>
               {STR.game.confirm}
             </button>
           )}
-          {ask.kind === 'cutIn' && (
+          {last.kind === 'cutIn' && (
             <button className="btn btn-primary" disabled={!canSubmit} onClick={() => answer({ choice: 'yes', cardIds: picked })}>
               {STR.game.confirm}
             </button>
           )}
-          {ask.kind === 'selfFollow' && (
+          {last.kind === 'selfFollow' && (
             <button className="btn btn-primary" disabled={!canSubmit} onClick={() => answer({ choice: 'yes', cardIds: picked })}>
               {STR.game.confirm}
             </button>
           )}
-          {ask.kind === 'pickCards' && (
+          {last.kind === 'pickCards' && (
             <button className="btn btn-primary" disabled={!canSubmit} onClick={() => answer({ cardIds: picked })}>
               {STR.game.submit}
             </button>

@@ -2,6 +2,7 @@
 // 端庄（轴承）翻面模式：onCardClick 存在时每张牌可点选翻面，选中的牌显示「背」。
 import type { Combo } from '@gdys/shared';
 import { cardColor, isJoker, rankLabel, SUITS } from '@gdys/shared';
+import { STR } from '../strings';
 
 const TYPE_CLASS: Record<Combo['type'], string> = {
   single: 'combo-single',
@@ -39,9 +40,9 @@ export default function ComboBadge({ combo, small, retagged, onCardClick, flippe
           const flipped = !!onCardClick && c.id === flippedCardId;
           const mini = (
             <>
-              {flipped ? '背' : c.asRank !== undefined ? rankLabel(c.asRank) : rankLabel(c.rank)}
+              {flipped ? STR.game.comboBack : c.asRank !== undefined ? rankLabel(c.asRank) : rankLabel(c.rank)}
               {!flipped && !isJoker(c) && <i className="combo-suit">{SUITS[c.suit]}</i>}
-              {!flipped && c.asRank !== undefined && <i className="combo-wild-mark">鬼</i>}
+              {!flipped && c.asRank !== undefined && <i className="combo-wild-mark">{STR.game.comboWild}</i>}
             </>
           );
           const colorCls = cardColor(c) === 'red' ? 'mini-red' : 'mini-black';

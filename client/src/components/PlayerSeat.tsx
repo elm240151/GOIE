@@ -1,7 +1,8 @@
-// 座位：头像+名字、手牌数、角色名、掉线标、回合高亮+倒计时、本轮打出的牌（常驻至轮末）、过牌气泡。
-import { useEffect, useState } from 'react';
+// 座位：头像+名字、手牌数/上限、角色名、起牌标、询问中、诅咒两级标、掉线标、
+// 回合高亮+倒计时、本轮打出的牌（常驻至轮末）、过牌气泡；title 展示上/下家方位（倒序互换）。
+import { useEffect, useMemo, useState } from 'react';
 import { getRole, type GameSnapshot } from '@gdys/shared';
-import { useStore } from '../store';
+import { handLimitOf, useStore } from '../store';
 import { STR, TURN_SECONDS } from '../strings';
 import ComboBadge from './ComboBadge';
 
@@ -10,30 +11,82 @@ interface Props {
   isMe: boolean;
   /** 剩余秒数（仅轮到该座位时显示） */
   turnLeft?: number | null;
+  /** 桌面端侧栏横排形态（≥1000px 生效；移动端无样式差异） */
+  variant?: 'card' | 'row';
 }
 
-export default function PlayerSeat({ player, isMe, turnLeft }: Props) {
+export default function PlayerSeat({ player, isMe, turnLeft, variant = 'card' }: Props) {
   const snap = useStore((s) => s.snap);
   const passedAt = useStore((s) => s.passedAt);
   const roundPlays = useStore((s) => s.roundPlays);
+  const myId = useStore((s) => s.myId);
+  const curseActiveIds = useStore((s) => s.curseActiveIds);
   const isTurn = snap?.turnPlayerId === player.id && snap?.phase === 'playing';
   const role = getRole(player.roleId);
-  const [now, setNow] = useState(Date.now());
 
-  // 过牌气泡 2.5s 后消失
+  // 过牌气泡两阶段：入场弹起 → 2.2s 淡出 → 2.6s 卸载
   const passedTs = passedAt[player.id];
+  const [passedPhase, setPassedPhase] = useState<'in' | 'out' | 'gone'>('gone');
   useEffect(() => {
     if (!passedTs) return;
-    const t = setTimeout(() => setNow(Date.now()), 2600);
-    return () => clearTimeout(t);
+    setPassedPhase('in');
+    const t1 = setTimeout(() => setPassedPhase('out'), 2200);
+    const t2 = setTimeout(() => setPassedPhase('gone'), 2600);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
   }, [passedTs]);
-  const showPassed = passedTs !== undefined && now - passedTs < 2500;
+
+  // 摸牌反馈：手牌数 pop + 牌背堆微弹 0.8s
+  const drawnTs = useStore((s) => s.drawnAt[player.id]);
+  const [drawnPop, setDrawnPop] = useState(false);
+  useEffect(() => {
+    if (!drawnTs) return;
+    setDrawnPop(true);
+    const t = setTimeout(() => setDrawnPop(false), 800);
+    return () => clearTimeout(t);
+  }, [drawnTs]);
+
+  // 淘汰：座位抖动 + 红闪 1.2s（随后常驻灰态）
+  const eliminatedTs = useStore((s) => s.eliminatedAt[player.id]);
+  const [elimPop, setElimPop] = useState(false);
+  useEffect(() => {
+    if (!eliminatedTs) return;
+    setElimPop(true);
+    const t = setTimeout(() => setElimPop(false), 1200);
+    return () => clearTimeout(t);
+  }, [eliminatedTs]);
 
   // 本轮打出的牌：在打出者面前保持到轮末（轮末进弃牌堆）
   const roundPlay = roundPlays[player.id];
 
+  // 方位（按席位序 ±1 计上家/下家，倒序互换；2 人局互为上下家，其余「对面」）
+  const directionTitle = useMemo(() => {
+    if (!snap) return undefined;
+    const list = snap.players;
+    if (list.length < 3) return STR.game.seatAdjacent;
+    const mi = list.findIndex((p) => p.id === myId);
+    const pi = list.findIndex((p) => p.id === player.id);
+    if (mi < 0 || pi < 0) return undefined;
+    const d = (pi - mi + list.length) % list.length;
+    if (d === 1) return snap.orderReversed ? STR.game.seatPrev : STR.game.seatNext;
+    if (d === list.length - 1) return snap.orderReversed ? STR.game.seatNext : STR.game.seatPrev;
+    return STR.game.seatAcross;
+  }, [snap, myId, player.id]);
+
+  const isLeader = snap?.roundLeaderId === player.id && snap?.phase === 'playing' && !player.eliminated;
+  const isAsked = snap?.pendingAsk?.playerId === player.id;
+  // 诅咒两级标：本回合生效实标、下一轮生效半透明（基线区分逻辑见 store.applySnapshot）
+  const curseActive = !player.eliminated && curseActiveIds.includes(player.id);
+  const cursePending =
+    !player.eliminated && !curseActive && (snap?.cursedPlayerIds.includes(player.id) ?? false);
+
   return (
-    <div className={`seat ${isTurn ? 'seat-turn' : ''} ${isMe ? 'seat-me' : ''} ${player.eliminated ? 'seat-eliminated' : ''}`}>
+    <div
+      className={`seat ${isTurn ? 'seat-turn' : ''} ${isMe ? 'seat-me' : ''} ${player.eliminated ? 'seat-eliminated' : ''} ${elimPop ? 'seat-shake' : ''} ${variant === 'row' ? 'seat-row' : ''}`}
+      title={directionTitle}
+    >
       <div className="seat-avatar">
         {player.eliminated ? '✕' : player.name.slice(0, 1)}
         {isTurn && turnLeft !== null && turnLeft !== undefined && (
@@ -45,33 +98,53 @@ export default function PlayerSeat({ player, isMe, turnLeft }: Props) {
         {isMe && <em className="seat-you">{STR.room.you}</em>}
       </div>
       <div className="seat-meta">
-        <span className="seat-role">{role?.name ?? '?'}</span>
-        <span className="seat-handcount">×{player.handCount}</span>
+        <span className="seat-role">{role?.name ?? STR.game.seatRoleUnknown}</span>
+        <span className={`seat-handcount ${drawnPop ? 'seat-handcount-pop' : ''}`}>
+          ×{player.handCount}/{handLimitOf(player.roleId)}
+        </span>
+        {isLeader && <span className="seat-leader">{STR.game.seatLeader}</span>}
+        {isAsked && <span className="seat-asking">{STR.game.seatAsking}</span>}
+        {curseActive && (
+          <span className="seat-curse" title={STR.game.curseActiveTitle}>
+            {STR.game.curseBadge}
+          </span>
+        )}
+        {cursePending && (
+          <span className="seat-curse seat-curse-pending" title={STR.game.cursePendingTitle}>
+            {STR.game.curseBadge}
+          </span>
+        )}
         {player.pancakeCount > 0 && (
-          <span className="seat-pancake" title="饼：倒置的牌，任何人不可看牌面、不可使用">
+          <span className="seat-pancake" title={STR.game.pancakeTitle}>
             {STR.game.pancakeBadge.replace('{n}', String(player.pancakeCount))}
           </span>
         )}
-        {snap?.cursedPlayerIds.includes(player.id) && <span className="seat-curse">{STR.game.curseBadge}</span>}
         {player.eliminated && <span className="seat-offline">{STR.game.eliminated}</span>}
         {!player.connected && !player.eliminated && <span className="seat-offline">{STR.room.offlineBadge}</span>}
+        {/* 方位标：桌面侧栏行内展示（移动端 title 提示、此处隐藏） */}
+        {directionTitle && <span className="seat-dir">{directionTitle}</span>}
       </div>
       {/* 牌背堆：直观显示手牌张数（最多叠 8 张，其余看 ×N） */}
       {!player.eliminated && player.handCount > 0 && (
-        <div className="seat-cards" title={`${player.name} 手牌 ${player.handCount} 张`}>
+        <div
+          className={`seat-cards ${drawnPop ? 'seat-cards-pop' : ''}`}
+          title={STR.game.seatHandTitle.replace('{name}', player.name).replace('{n}', String(player.handCount))}
+        >
           {Array.from({ length: Math.min(player.handCount, 8) }, (_, i) => (
             <span key={i} className="seat-cardback" />
           ))}
         </div>
       )}
-      {/* 本轮打出的牌：常驻显示到轮末 */}
+      {/* 本轮打出的牌：常驻显示到轮末；key=首张牌 id，每次打出重播入场弹跳 */}
       {roundPlay && (
-        <div className="seat-play">
+        <div className="seat-play combo-enter" key={roundPlay.cards[0]!.id}>
           <ComboBadge combo={roundPlay} small />
         </div>
       )}
       <div className="seat-bubble">
-        {showPassed && <span className="seat-passed">{STR.game.passed}</span>}
+        {passedPhase !== 'gone' && (
+          <span className={`seat-passed ${passedPhase === 'out' ? 'seat-passed-out' : ''}`}>{STR.game.passed}</span>
+        )}
       </div>
     </div>
   );
