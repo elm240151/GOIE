@@ -9,8 +9,8 @@ export function registerRole(def: RoleDef): void {
   if (!/^[a-z0-9-]+$/.test(def.id ?? '')) errs.push('id 必须是小写字母、数字、连字符');
   if (roles.has(def.id)) errs.push(`id 重复: ${def.id}`);
   if (!def.name?.trim()) errs.push('缺少角色名');
-  if (!Array.isArray(def.skills) || def.skills.length < 1 || def.skills.length > 2)
-    errs.push('技能数需为 1-2 个');
+  if (!Array.isArray(def.skills) || def.skills.length < 1 || def.skills.length > 4)
+    errs.push('技能数需为 1-4 个');
   for (const s of def.skills ?? []) {
     if (!/^[a-z0-9-]+$/.test(s?.id ?? '')) errs.push(`技能 id 非法: ${s?.id}`);
     if (!s?.name?.trim()) errs.push(`技能 ${s?.id} 缺少技能名`);

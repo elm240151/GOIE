@@ -6,8 +6,8 @@
 |---|---|---|
 | combos.test.ts | shared/src/engine/ | 牌型解析 + 管牌矩阵 + 端庄翻面接牌校验 validateFlipResponse（纯函数，服务端判定与客户端预览共用） |
 | engine.test.ts | shared/src/engine/ | 引擎状态机 + 不变量 + 死锁/流局 + 淘汰/手牌上限/挂起恢复/插队/翻牌守恒/翻牌公开 |
-| roles.test.ts | shared/src/roles/ | loader 期望列表（18 角色 id）+ 注册表校验 |
-| `<角色>.test.ts` ×18 | shared/src/roles/ | 每个角色一个文件：精确效果 + ask 多阶段 + 技能优先 |
+| roles.test.ts | shared/src/roles/ | loader 期望列表（19 角色 id）+ 注册表校验 |
+| `<角色>.test.ts` ×19 | shared/src/roles/ | 每个角色一个文件：精确效果 + ask 多阶段 + 技能优先 |
 | room.test.ts | server/src/ | 房间/鉴权/rematch/记分 + 技能询问收发/超时自动弃权/重连重发 + 引擎异常安全网（engineFactory + handsOverride 确定性注入） |
 | scripts/smoke.ts | 项目根 | 双真实 socket 客户端端到端 |
 

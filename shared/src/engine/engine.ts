@@ -113,6 +113,8 @@ export class GameEngine {
   private activeBan = new Set<string>();
   /** 红楼梦（地坛）：本轮判定成功、下一轮生效的诅咒（被诅咒者 → 取而代之的诅咒者） */
   private pendingBan = new Map<string, string>();
+  /** 见习（保国）：本回合罚站不得出牌的玩家——出牌被拒、不能被技能选为目标；自己的技能仍可用（回合结束清除） */
+  private roundBanned = new Set<string>();
   private pendingEvents: GameEvent[] = [];
   private seq = 0;
   private startRoundDepth = 0;
@@ -227,6 +229,7 @@ export class GameEngine {
     if (this.pendingAsk) return fail('等待技能响应');
     if (playerId !== this.turnPlayerId) return fail('不是你的回合');
     if (this.activeBan.has(playerId)) return fail('【红楼梦】本回合不得出牌');
+    if (this.roundBanned.has(playerId)) return fail('【见习】本回合罚站，不得出牌');
     // 响应限制（抽你）：当前桌面一手牌只能由指定玩家响应
     if (this.tableCombo && this.tableResponderRestrict && playerId !== this.tableResponderRestrict) {
       const d = this.players.find((p) => p.id === this.tableResponderRestrict);
@@ -343,6 +346,8 @@ export class GameEngine {
     const action = role?.skillActions?.find((a) => a.skillId === req.skillId);
     if (!role || !action) return fail('技能不存在');
     if (action.when === 'following' && !this.tableCombo) return fail('现在不能发动该技能');
+    // 见习/反力矩（保国）：只有拥有牌权（本回合起牌者）时才能发动
+    if (action.onlyWhenLeader && this.roundLeaderId !== playerId) return fail('只有拥有牌权（起牌回合）时才能发动');
     const hook = role.hooks?.onSkillAction;
     if (!hook) return fail('技能无法发动');
     const entry: HookEntry = { playerId, role, priority: role.priority ?? 0, hook };
@@ -487,6 +492,8 @@ export class GameEngine {
       tableRankNote: this.tableRankNote,
       /** 红楼梦（地坛）：被诅咒（含下一轮生效中）的玩家，界面展示标记 */
       cursedPlayerIds: [...new Set([...this.activeBan, ...this.pendingBan.keys()])],
+      /** 见习（保国）：本回合罚站不得出牌的玩家，界面展示标记 */
+      roundBannedIds: [...this.roundBanned],
       /** 吐饼（R.F）：本手吃过饼、轮到自己且不能过（只能打 2/炸弹——客户端禁用「过」并提示） */
       pancakeNoPass:
         viewerId === this.turnPlayerId &&
@@ -565,6 +572,7 @@ export class GameEngine {
       this.roundLeaderId = leaderId;
       this.aftermathMode = 'normal';
       this.cutInVictimId = null;
+      this.roundBanned.clear(); // 见习（保国）罚站：只持续本回合，新一轮开始解除
       this.orderFlipCount = 0; // 洄游：每轮恢复正序（隐匿在轮末结算读的是本轮的计数，清零发生在结算之后）
       // 先设 turnPlayerId：死锁守卫干跑 beforePlay 时技能能识别"自己起牌"
       this.turnPlayerId = leaderId;
@@ -930,6 +938,7 @@ export class GameEngine {
       this.tableCombo &&
       !this.eliminated.has(selfId) &&
       !this.activeBan.has(selfId) &&
+      !this.roundBanned.has(selfId) &&
       this.roles.get(this.players.find((p) => p.id === selfId)!.roleId)?.canSelfFollow &&
       listPlayable(
         this.hands.get(selfId)!,
@@ -1265,6 +1274,7 @@ export class GameEngine {
         this.roles.get(p.roleId)?.canCutIn &&
         !this.eliminated.has(p.id) &&
         !this.activeBan.has(p.id) &&
+        !this.roundBanned.has(p.id) &&
         p.id !== this.roundLastPlayerId &&
         // 响应限制（抽你）：非指定玩家不得插队响应
         !(this.tableResponderRestrict && p.id !== this.tableResponderRestrict)
@@ -1726,6 +1736,8 @@ export class GameEngine {
         engine.emit({ type: 'cards:revealed', playerId, cards, purpose });
       },
       playForcedCombo: (combo) => {
+        // 见习（保国）罚站：技能可用但不得打出（茄汤成炸等强制出牌在罚站中落空）
+        if (engine.roundBanned.has(playerId)) return;
         // 校验后走正常出牌提交流程（含 afterPlay/打断/获胜判定/插队问询）
         // 张数下限放宽为 1（茄汤一元炸/二元炸），上限不变
         const hand = engine.hands.get(playerId) ?? [];
@@ -1752,6 +1764,12 @@ export class GameEngine {
       retagTable: (rank) => engine.retagTable(rank),
       curseNextRound: (targetId) => engine.curseNextRound(playerId, targetId),
       peekHand: (targetId) => engine.peekHand(playerId, targetId),
+      banPlayThisRound: (targetId) => {
+        // 见习（保国）：目标本回合罚站（不得出牌、不被技能选为目标；自己的技能仍可用）
+        if (!engine.eliminated.has(targetId)) engine.roundBanned.add(targetId);
+      },
+      isBannedThisRound: (id) => engine.roundBanned.has(id),
+      discardCount: () => engine.discarded.length,
     };
   }
 
@@ -1825,6 +1843,10 @@ export class GameEngine {
   ): void {
     ask.askId = ask.askId ?? this.newAskId();
     ask.timeoutMs = ask.timeoutMs ?? this.cfg.timeout.skillAskMs;
+    // 见习（保国）罚站：被罚站的玩家不能被任何技能选为目标（2026-10-05 用户确认：不得被技能响应）
+    if (ask.targetCandidates) {
+      ask.targetCandidates = ask.targetCandidates.filter((id) => !this.roundBanned.has(id));
+    }
     // 被询问者缺省为技能所有者（playerId）；「依次自选」类技能经 ask.askPlayerId 依次问其他人
     this.pendingAsk = {
       ask,
@@ -1928,6 +1950,8 @@ export class GameEngine {
 
   /** 可合法响应的组合：基础可管且未被 beforePlay 干跑否决（技能否决后允许过） */
   private legalResponses(playerId: string): Combo[] {
+    // 见习（保国）罚站：不得出牌 → 视为无牌可管（允许过）
+    if (this.roundBanned.has(playerId)) return [];
     // 响应限制（抽你）：非指定玩家视为无牌可管（允许过）
     if (this.tableResponderRestrict && playerId !== this.tableResponderRestrict) return [];
     let combos = listPlayable(

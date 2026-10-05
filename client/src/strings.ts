@@ -73,6 +73,8 @@ export const STR = {
     seatAdjacent: '上/下家',
     curseActiveTitle: '红楼梦：本回合不得出牌',
     cursePendingTitle: '红楼梦：下一轮不得出牌',
+    jianxiTitle: '见习罚站：本回合不得出牌、不被技能响应',
+    jianxiBadge: '见习',
     retagTitleNote: '修勾答疑：按 {rank} 点判定（原 {label}）',
     seatHandTitle: '{name} 手牌 {n} 张',
     pickTargetLabel: '{name}（{n} 张）',

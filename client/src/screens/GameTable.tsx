@@ -166,10 +166,12 @@ export default function GameTable() {
   // 主动技按钮（角色声明 skillActions，通用渲染）
   const skillActions = useMemo(() => {
     if (!me || finished) return [];
-    return (getRole(me.roleId)?.skillActions ?? []).filter((a) =>
-      a.when === 'myTurn' ? myTurn : myTurn && snap?.table !== null
-    );
-  }, [me, finished, myTurn, snap?.table]);
+    return (getRole(me.roleId)?.skillActions ?? []).filter((a) => {
+      // 见习/反力矩（保国）：仅拥有牌权（起牌回合）时显示
+      if (a.onlyWhenLeader && snap?.roundLeaderId !== me.id) return false;
+      return a.when === 'myTurn' ? myTurn : myTurn && snap?.table !== null;
+    });
+  }, [me, finished, myTurn, snap?.table, snap?.roundLeaderId]);
 
   // 我的技能说明（点开可读；当前可发动的高亮）
   const activeSkillIds = useMemo(() => new Set(skillActions.map((a) => a.skillId)), [skillActions]);

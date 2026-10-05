@@ -1,6 +1,6 @@
 # 角色开发规范（★ 未来工作核心文件）
 
-**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。18 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
+**加一个角色 = 在 `shared/src/roles/` 放一个文件（`export default RoleDef`），零其他改动。** node/client 两个 loader 自动发现，注册表校验唯一性。19 个已实现角色就是最好的模板（见文末表）。**只有前 8 席角色名字带「第 X 席」前缀并填 `seatOrder`（1=首席…8=末席）；之后的角色名字不带席位前缀、不填 seatOrder**（按注册序排在已编号角色之后，阿色即如此）。带席位前缀的角色记得填 `seatOrder`（1=首席…），选角列表按席位序展示。
 
 ## RoleDef 接口（shared/src/roles/types.ts）
 
@@ -9,13 +9,13 @@ interface RoleDef {
   id: string;                 // kebab-case 唯一（注册表校验，重复报错）
   seatOrder?: number;         // 席位顺序：选角列表展示排序（1=首席…8=末席）；只有前 8 席填，之后的角色不填（排在已编号角色之后）
   name: string;               // 中文角色名，如 '首席 杰杰一世'
-  skills: SkillDef[];         // 技能列表（1-2 个）：{ id, name, description, locked? }
+  skills: SkillDef[];         // 技能列表（1-4 个）：{ id, name, description, locked? }
   maxPerRoom?: number;        // 同一房间最多几人选，默认 1
   priority?: number;          // 钩子执行顺序：大者先，同优先级按座位序（确定性）
   hooks?: Partial<RoleHooks>; // 用到哪些钩子写哪些
-  deathrattleHooks?: (keyof RoleHooks)[]; // 亡语（2026-10-05 用户定稿）：出牌者打光手牌后仍可触发的钩子白名单。未标注的 afterPlay/onPlayInterrupt 钩子在打光那一刻被引擎跳过（游戏立即结束）。目前只有楠王旺旺与雪灾巨石标注 ['onPlayInterrupt']；除非用户明确说是亡语，否则不要标注
+  deathrattleHooks?: (keyof RoleHooks)[]; // 亡语（2026-10-05 用户定稿）：出牌者打光手牌后仍可触发的钩子白名单。未标注的 afterPlay/onPlayInterrupt 钩子在打光那一刻被引擎跳过（游戏立即结束）。目前标注 ['onPlayInterrupt'] 的有楠王旺旺、雪灾巨石、保国（五连鞭+压腿）；除非用户明确说是亡语，否则不要标注
   setup?(ctx: RoleSetupContext): unknown; // 角色私有状态：JSON 安全，随快照同步
-  skillActions?: SkillActionDef[]; // 客户端技能按钮：{ skillId, when:'myTurn'|'following', label }，通用渲染
+  skillActions?: SkillActionDef[]; // 客户端技能按钮：{ skillId, when:'myTurn'|'following', onlyWhenLeader?, label }，通用渲染。onlyWhenLeader（保国见习/反力矩）：只有拥有牌权（本回合起牌者）时按钮可用、引擎同样校验
   canCutIn?: boolean;         // 可插队响应（无名）——引擎提供插队机制，角色只挂标志
   canSelfFollow?: boolean;    // 出牌后立刻压自己打出的牌，可连压到放弃/压不了（修勾狂吠）——引擎在出牌后询问（selfFollow ask），角色只挂标志；留 X 禁止收尾与插队同一套过滤
   flipsOrderOnPlay?: boolean; // 每次出牌（含插队，按物理出牌者计）切换一次牌序正↔倒（海棠洄游）；每轮开始恢复正序。挂上后引擎自动：本手按切换前顺序判定（先判后切）、切换后把桌面牌型按新牌序重新解析（倒序 rank = 最高点数，保证跨序比较用同一约定）、快照携带 orderReversed
@@ -40,7 +40,7 @@ interface RoleDef {
 | `afterPlay(ctx, played)` | 出牌后 | 任意 modify |
 | `onPlayInterrupt(ctx, played)` | 出牌提交后、**获胜判定前**（驱逐类优先于获胜，如巨石；**亡语**——有人打完手牌仍可在此拦截阻止立即获胜，如楠王旺旺：判定成功给压牌者摸牌 → 手牌非空 → 获胜自然取消） | 可返回 ask 挂起 |
 
-**亡语门控（2026-10-05 用户定稿，★ 写「打完牌后」类钩子必读）**：只有角色标注 `deathrattleHooks?: (keyof RoleHooks)[]` 的钩子可以在「有人打完最后一张牌」后触发；**未标注的钩子在打光那一刻引擎直接跳过（游戏立即结束）**——询问/改判/加牌/播报一律不触发。引擎在 runAfterPlayHooks/runInterruptHooks 对出牌者手牌为 0（未淘汰）时做此门控。目前标注亡语的只有楠王旺旺与雪灾巨石（均为 `deathrattleHooks: ['onPlayInterrupt']`）；楠王回味（afterPlay）、修勾答疑、橐驼地坛、惰戈法音、阿色再问（其钩子内部原本就有手牌守卫，与全局规则一致）均不标注。**新角色的 afterPlay/onPlayInterrupt 钩子：除非用户明确说是亡语，否则不要标注——打光即结束。**
+**亡语门控（2026-10-05 用户定稿，★ 写「打完牌后」类钩子必读）**：只有角色标注 `deathrattleHooks?: (keyof RoleHooks)[]` 的钩子可以在「有人打完最后一张牌」后触发；**未标注的钩子在打光那一刻引擎直接跳过（游戏立即结束）**——询问/改判/加牌/播报一律不触发。引擎在 runAfterPlayHooks/runInterruptHooks 对出牌者手牌为 0（未淘汰）时做此门控。目前标注亡语的有楠王旺旺、雪灾巨石、保国（五连鞭+压腿）（均为 `deathrattleHooks: ['onPlayInterrupt']`）；楠王回味（afterPlay）、修勾答疑、橐驼地坛、惰戈法音、阿色再问（其钩子内部原本就有手牌守卫，与全局规则一致）均不标注。**新角色的 afterPlay/onPlayInterrupt 钩子：除非用户明确说是亡语，否则不要标注——打光即结束。** 同场多个亡语 onPlayInterrupt 按 priority 降序执行（用户定稿：旺旺 100 → 保国 90 → 巨石 0）。
 | `onPass(ctx)` | 过牌 | 任意 modify |
 | `onDraw(ctx, n)` | 摸牌（n=本次摸牌数） | `drawBonus` |
 | `onRoundEnd(ctx, lastPlayerId)` | 一轮结束（lastPlayerId=最后出牌者，牌权所在） | 可返回 ask 挂起（黑脸/观股）；`suppressDraw` 替代摸牌 |
@@ -136,6 +136,7 @@ interface ActionMods {
   - `playSideCard(playerId, cardId)`（**明置桌旁**，阿色再问补打：从手牌移除一张明置到桌旁，公开进快照 `tableSide`，随当前一手牌一起弃置；压牌者作答时用它，`handOf` 校验 + 自己校验合规性）
   - `discardFromHand(playerId, cardIds)`（**静默弃置手牌**，海棠隐匿重铸：从手牌移除进弃牌堆，不发事件——快照 discardCount 与 announce 播报覆盖 UI；角色自行保证合法）
   - `curseNextRound(playerId)`（**下回合禁出**，橐驼地坛：目标陷入红楼梦——本回合标记（快照 `cursedPlayerIds` 立即可见），**回合结束时生效**：下一整回合（轮）内不能起牌/响应/插队/狂吠/补打（轮到自动过、照常摸牌、仍可被技能询问作答），再下一回合开始时解除；若目标在本回合获得牌权（轮末最后出牌者），**由诅咒施加者取而代之**：施加者摸牌 + 起新回合，目标不摸（round:ended 事件带 `ledBy`））
+  - `banPlayThisRound(playerId)` / `isBannedThisRound(id)`（**本回合罚站**，保国见习：目标当回合不得出牌（playCards 校验拒绝）、不被任何技能选为目标——引擎在 suspend 处对所有 ask 的 `targetCandidates` 统一过滤罚站者（快照 `roundBannedIds`）；罚站者自己的技能仍可用（useSkillAction 不拦）；轮末（新回合开始）自动解除。与地坛诅咒是两条平行机制：罚站只限本回合、诅咒限下一整回合）
 
 未来需要新的改牌能力 = 在 ActionMods / facade 加一个字段，不动引擎核心。
 
@@ -177,7 +178,7 @@ const zecheng: RoleDef = {
 export default zecheng;
 ```
 
-## 已有 18 个角色（模板）
+## 已有 19 个角色（模板）
 
 | 文件 | 角色 | 技能 | 用到的机制 |
 |---|---|---|---|
@@ -199,6 +200,7 @@ export default zecheng;
 | su.ts | 玊 | 两倍 + 呕哑 | 纯标志角色（无钩子、无 setup）：doubleSupply 引擎级发牌/摸牌/上限 ×2（rawDraw 内统一翻倍，拿回/别人给牌不翻倍）+ ouYa 引擎级校验放行（ouYaCovers 按实体点数判定，无视管牌规则；客户端预览同函数复用显金色提示） |
 | rf.ts | R.F | 吐饼 | pancake 引擎级吃饼询问（PendingAsk kind 'pancake'，resolvePancake 两阶段 pickCards：亮牌 → 倒饼，decline/超时干净作废、倒置阶段自动倒前 N 张）：每次出牌后最先询问（先于狂吠/插队）、特殊响应不算出牌（不触发洄游/归属改写）、恰好接上（同型同长 rank ±1、倒序 −1）判定走引擎 canExactFollow；吃饼后限制（无牌权时只能打 2/倒序 3 或炸弹、无则自动过）、轮末起牌权走 provisionalLeadId；饼数 ≥ 手牌数立即获胜（他人获胜先判）；首席 Q 特判排除 |
 | amo.ts | 阿摩 | 贪婪 + 耀武 | 纯标志角色（无钩子、无 setup）：greedy 引擎级发牌 ×2/上限 30/出牌后摸 1（afterPlayCommitted、归属改写与再问补打不算、打完先判获胜）+ yaoWu 引擎级耀武判定（checkYaoWu 纯函数王补缺，发牌/摸牌/收牌/别人给牌四个检查点立即获胜）；牌堆耗尽洗回弃牌堆（recycleDiscard）为全局规则、所有摸牌生效 |
+| bao-guo.ts | 保国 | 见习 + 反力矩 + 五连鞭 + 压腿（四技能） | onSkillAction 主动技见习（onlyWhenLeader；pickTarget→私摸 2 张暗交 1，每局限 X+2 次弃权不消耗、不能连续两回合同一人）+ banPlayThisRound 罚站（目标不得出牌、不被技能选为目标、自己的技能照常可用，轮末解除）+ onTurnStart 被动反力矩（牌权被抢 confirm→pickTarget→双方暗选各 1 张 revealTop 公开拼点：保国 +2、平局算输，赢则两张拼点牌都归对方+自弃 1 张、输则全得，手牌 ≥3 才能发动）+ onPlayInterrupt 亡语五连鞭（打出一手 ≥5 张含自己/插队/狂吠每一手/翻面接/茄汤强制、吃饼不算：出牌者摸 1）+ onPlayInterrupt 亡语压腿（仅他人炸弹：双方各 revealTop 1 公开拼点，败方摸 |点差|、两张拼点牌一律弃置、牌堆+弃牌堆都空不询问；拼点通用 contestPoint 王=14/A=1/2=2/其余牌面，priority 90：旺旺 100 → 五连鞭 → 压腿 → 巨石 0） |
 
 ## 新增角色的流程（每个角色照此执行）
 

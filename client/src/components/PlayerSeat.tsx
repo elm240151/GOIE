@@ -112,6 +112,11 @@ export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
             {STR.game.curseBadge}
           </span>
         )}
+        {!player.eliminated && (snap?.roundBannedIds.includes(player.id) ?? false) && (
+          <span className="seat-curse seat-jianxi" title={STR.game.jianxiTitle}>
+            {STR.game.jianxiBadge}
+          </span>
+        )}
         {player.pancakeCount > 0 && (
           <span className="seat-pancake" title={STR.game.pancakeTitle}>
             {STR.game.pancakeBadge.replace('{n}', String(player.pancakeCount))}
