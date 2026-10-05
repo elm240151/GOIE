@@ -299,7 +299,7 @@ export default function GameTable() {
             <em className="tag">{getRole(me?.roleId ?? '')?.name ?? ''}</em>
           </span>
           <span className="my-handcount">
-            ×{me?.handCount ?? 0}/{myRole?.doubleSupply ? defaultRules.hand.limit * 2 : defaultRules.hand.limit}
+            ×{me?.handCount ?? 0}/{myRole?.greedy ? 30 : myRole?.doubleSupply ? defaultRules.hand.limit * 2 : defaultRules.hand.limit}
           </span>
           {(me?.pancakeCount ?? 0) > 0 && (
             <span className="my-pancake" title="饼：倒置的牌，任何人不可看牌面、不可使用">
