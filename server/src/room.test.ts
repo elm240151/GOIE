@@ -788,6 +788,27 @@ describe('技能询问（修勾）', () => {
     expect(after.turnPlayerId).toBe(s.ids[1]); // 轮到下家
     expect(after.table?.rank).toBe(9); // 桌面保持修勾的单9
   });
+
+  it('狂吠：非法选牌（对3压单9）→ 拒绝只发给本人并重新询问，对方收不到', () => {
+    const s = mkDoggieSetup([6, 7, 13, 26], [0, 1, 2, 3, 4]); // 修勾 [9♠10♠3♥3♣]；下家 [3♠4♠5♠6♠7♠]
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[0]!.id, [6]); // 修勾起单9 → 狂吠询问
+    const ask1 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask1.kind).toBe('selfFollow');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask1.askId!, choice: 'yes', cardIds: [13, 26] }); // 对3：合法牌型但压不过单9
+    // 定向报错：只发给修勾本人（此前被静默丢弃，弹窗看似「点不了」）
+    expect(lastEmit<string>(s.sockets[0]!, SERVER_EVENTS.error)).toBe('压不过自己的牌');
+    expect(s.sockets[1]!.emit.mock.calls.every((c: unknown[]) => c[0] !== SERVER_EVENTS.error)).toBe(true);
+    expect(emittedEvents(s.sockets[1]!).some((e) => e.type === 'game:error')).toBe(false);
+    // 弹窗重新询问（新 askId），可继续正常选牌
+    const ask2 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask2.kind).toBe('selfFollow');
+    expect(ask2.askId).not.toBe(ask1.askId);
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask2.askId!, choice: 'yes', cardIds: [7] }); // 压 10♠
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.table?.rank).toBe(10);
+    expect(after.turnPlayerId).toBe(s.ids[1]); // 剩余对3压不过单10 → 轮到下家
+  });
 });
 
 /** 固定手牌 n 人局（橐驼专用）：房主 = 橐驼，其余 = 阿毛/首席蛋神（无被动干扰）。

@@ -419,6 +419,11 @@ export class Room {
         this.sendTo(e.targetId, SERVER_EVENTS.event, e);
         continue;
       }
+      // 引擎的定向拒绝（狂吠选牌不合法、插队被否决等）：只发给当事人（客户端走 error toast），不广播
+      if (e.type === 'game:error') {
+        this.sendTo(e.playerId, SERVER_EVENTS.error, e.reason);
+        continue;
+      }
       this.broadcast(SERVER_EVENTS.event, e);
     }
   }

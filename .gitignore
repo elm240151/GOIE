@@ -5,3 +5,7 @@ server/data/
 .DS_Store
 
 .claude/
+
+# 浏览器测试（scripts/browser-doggie-test.ts）的临时产物
+.tmp-cdp-profile/
+tmp-scores-browser-test.json

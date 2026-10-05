@@ -797,6 +797,12 @@ body {
   font-weight: 700;
   color: var(--gold-deep);
 }
+/* 答疑改点：最新一手牌型标签主显新点数（金色发光，与 ComboBadge retagged 同款） */
+.table-pile-label-retagged {
+  color: var(--gold);
+  font-size: 12px;
+  text-shadow: 0 0 8px var(--gold-40);
+}
 /* 判定牌暂存：虚线金框，与打出的手牌区分 */
 .table-pile-judged {
   border: 1px dashed var(--gold-dark);

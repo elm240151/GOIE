@@ -14,6 +14,7 @@ interface Props {
 export default function RoundHistory({ variant = 'strip' }: Props) {
   const log = useStore((s) => s.roundPlayLog);
   const players = useStore((s) => s.snap?.players) ?? [];
+  const snap = useStore((s) => s.snap);
   const ref = useRef<HTMLDivElement>(null);
   const side = variant === 'side';
 
@@ -31,13 +32,15 @@ export default function RoundHistory({ variant = 'strip' }: Props) {
       {log.map((entry, i) => {
         const name = players.find((p) => p.id === entry.playerId)?.name ?? STR.game.opponentFallback;
         const latest = i === log.length - 1;
+        // 答疑改点：最新一手按改点后的桌面快照展示（金色高亮），与中央暂存区口径一致
+        const retagged = latest && !!snap?.tableRankNote;
         return (
           <div
             key={entry.combo.cards[0]!.id}
             className={`round-history-item ${latest ? 'round-history-latest' : ''}`}
           >
             <span className="round-history-name">{name}</span>
-            <ComboBadge combo={entry.combo} small />
+            <ComboBadge combo={retagged && snap?.table ? snap.table : entry.combo} small retagged={retagged} />
           </div>
         );
       })}

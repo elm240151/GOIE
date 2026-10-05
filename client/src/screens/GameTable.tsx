@@ -279,6 +279,8 @@ export default function GameTable() {
               <div className="table-pile" ref={pileRef} title={STR.game.pileTitle}>
                 {pileEntries.map((entry, i) => {
                   const latest = i === pileEntries.length - 1;
+                  // 答疑改点：最新一手主显改点后的新点数 label（金色），原牌型由旁边小标展示
+                  const latestRetagged = latest && !!snap.tableRankNote;
                   return (
                     <div
                       key={entry.combo.cards[0]!.id}
@@ -302,7 +304,9 @@ export default function GameTable() {
                           </span>
                         )}
                       </div>
-                      <span className="table-pile-label">{entry.combo.label}</span>
+                      <span className={`table-pile-label${latestRetagged ? ' table-pile-label-retagged' : ''}`}>
+                        {latestRetagged ? (snap?.table?.label ?? entry.combo.label) : entry.combo.label}
+                      </span>
                       {latest && snap.tableRankNote && (
                         <span
                           className="retag-badge"
