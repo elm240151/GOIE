@@ -233,6 +233,12 @@ export interface RoleDef {
   /** 钩子执行优先级（大者先执行，同优先级按座位序） */
   priority?: number;
   hooks?: Partial<RoleHooks>;
+  /**
+   * 亡语钩子（2026-10-05 用户定稿）：出牌者打完最后一张牌后（出完即胜判定前）仍可触发的钩子。
+   * 只有标注在这里的钩子能在那时运行（有机会加牌/淘汰阻止获胜）；未标注的技能
+   * 在打完牌的那一刻游戏就结束了——非亡语技能不在打完牌后触发。
+   */
+  deathrattleHooks?: (keyof RoleHooks)[];
   setup?(ctx: RoleSetupContext): unknown;
   /** 客户端技能按钮（通用渲染） */
   skillActions?: SkillActionDef[];

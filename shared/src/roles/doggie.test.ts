@@ -77,23 +77,24 @@ describe('修勾（答疑）', () => {
 
   it('顺子改点选项收缩到合法起点（改完仍是真实牌型）', () => {
     // 3 张顺 345：正序起点范围 3~Q（K/A 起的三连顺不存在）
-    const h1 = { p0: [...byRank(3, 1), ...byRank(4, 1), ...byRank(5, 1)], p1: [...byRank(10, 5)] };
+    // p0 补 3 张 J 兜底：答疑非亡语，打光手牌不触发（2026-10-05 亡语定稿）
+    const h1 = { p0: [...byRank(3, 1), ...byRank(4, 1), ...byRank(5, 1), ...byRank(11, 3)], p1: [...byRank(10, 5)] };
     const e1 = mkEngine(h1, { p0: doggie });
     const r = e1.playCards('p0', [h1.p0[0]!.id, h1.p0[1]!.id, h1.p0[2]!.id]);
     expect(r.ok && r.suspended).toBe(true);
     const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
     expect((ask?.options ?? []).filter((o) => o !== '放弃')).toEqual(['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q']);
     // 5 张顺 34567：上限进一步收缩到 10（10JQKA）
-    const h2 = { p0: [...byRank(3, 1), ...byRank(4, 1), ...byRank(5, 1), ...byRank(6, 1), ...byRank(7, 1)], p1: [...byRank(10, 5)] };
+    const h2 = { p0: [...byRank(3, 1), ...byRank(4, 1), ...byRank(5, 1), ...byRank(6, 1), ...byRank(7, 1), ...byRank(11, 3)], p1: [...byRank(10, 5)] };
     const e2 = mkEngine(h2, { p0: doggie });
-    const r2 = e2.playCards('p0', h2.p0.map((c) => c.id));
+    const r2 = e2.playCards('p0', h2.p0.slice(0, 5).map((c) => c.id));
     const ask2 = r2.ok ? (r2.pendingAsk as SkillAsk) : null;
     expect((ask2?.options ?? []).filter((o) => o !== '放弃')).toEqual(['3', '4', '5', '6', '7', '8', '9', '10']);
   });
 
   it('连对改点选项：3~K（K 起 KKAA 合法）', () => {
     const hands = {
-      p0: [...byRank(3, 2), ...byRank(4, 2)], // 修勾：3344
+      p0: [...byRank(3, 2), ...byRank(4, 2), ...byRank(11, 3)], // 修勾：3344（补 3 张 J 兜底：答疑非亡语，打光不触发）
       p1: [...byRank(10, 5)],
     };
     const engine = mkEngine(hands, { p0: doggie });
@@ -101,6 +102,19 @@ describe('修勾（答疑）', () => {
     expect(r.ok && r.suspended).toBe(true);
     const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
     expect((ask?.options ?? []).filter((o) => o !== '放弃')).toEqual(['3', '4', '5', '6', '7', '8', '9', '10', 'J', 'Q', 'K']);
+  });
+
+  it('亡语定稿（2026-10-05）：答疑非亡语——打光最后手牌不触发，打完那一刻游戏就结束了', () => {
+    const hands = {
+      p0: [...byRank(3, 1), ...byRank(4, 1), ...byRank(5, 1)], // 修勾：345 = 全部手牌
+      p1: [...byRank(10, 5)],
+    };
+    const engine = mkEngine(hands, { p0: doggie });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id, hands.p0[2]!.id]); // 打光
+    expect(r.ok && !r.suspended).toBe(true); // 答疑不再询问
+    const snap = engine.snapshotFor('p0');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p0');
   });
 
   it('倒序顺子改点选项：3+长度−1 起（起点 = 最高点）', () => {

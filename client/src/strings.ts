@@ -59,8 +59,6 @@ export const STR = {
     orderReversed: '倒序',
     orderBadgeTitle: '海棠洄游：整条牌序反转中',
     reconnect: '连接已断开，正在重连…',
-    tableOwner: '{name} 出了',
-    prevTable: '上一手',
     defaultRevealPurpose: '翻牌',
     revealedMore: '（共 {n} 张）',
     pancakeTitle: '饼：倒置的牌，任何人不可看牌面、不可使用',

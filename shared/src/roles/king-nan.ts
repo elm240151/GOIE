@@ -35,6 +35,8 @@ const kingNan: RoleDef = {
   id: 'king-nan',
   // 亡语同场顺序（2026-10-03 用户确认）：旺旺先于巨石判定（priority 降序）
   priority: 100,
+  // 亡语（2026-10-05 用户定稿）：只有旺旺在压牌者打光手牌后仍可触发；回味（锁定技）非亡语，打光即结束
+  deathrattleHooks: ['onPlayInterrupt'],
   name: '楠王',
   skills: [
     {

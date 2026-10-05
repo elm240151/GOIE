@@ -16,6 +16,8 @@ interface YyXueState {
 const yyXue: RoleDef = {
   id: 'yy-xue',
   seatOrder: 5,
+  // 亡语（2026-10-05 用户定稿）：巨石在出牌者打光手牌后仍可判定驱逐（优先于其获胜）
+  deathrattleHooks: ['onPlayInterrupt'],
   name: '第五席 雪灾天使',
   skills: [
     {

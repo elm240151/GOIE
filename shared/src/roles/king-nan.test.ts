@@ -283,7 +283,7 @@ describe('楠王：旺旺（亡语）+ 回味', () => {
     expect(e2.snapshotFor('p0').players.find((p) => p.id === 'p1')!.handCount).toBe(10); // 8 − 1 + 3
   });
 
-  it('回味：起牌不触发；压牌获胜时被压者先加牌、楠王照常获胜', () => {
+  it('回味：起牌不触发；压牌获胜时回味（非亡语）不触发——打完牌那一刻游戏就结束了（2026-10-05 亡语定稿）', () => {
     const h1 = {
       p0: [deck[6]!, deck[8]!, deck[161]!], // 楠王
       p1: [deck[7]!, deck[22]!],
@@ -303,11 +303,11 @@ describe('楠王：旺旺（亡语）+ 回味', () => {
     const e2 = mkEngine(h2, { p0: kingNan }, 'p1');
     e2.playCards('p1', [h2.p1[0]!.id]); // ♥3
     const r = e2.playCards('p0', [h2.p0[0]!.id]); // ♥4 压（打光）
-    expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'hui-wei' && /摸 1 张/.test(e.text))).toBe(true); // 被压者先 +1
+    expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'hui-wei')).toBe(false); // 非亡语：打光不再触发
     const snap = e2.snapshotFor('p0');
     expect(snap.phase).toBe('finished');
     expect(snap.winnerId).toBe('p0'); // 楠王照常获胜
-    expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(8); // 8 − 1 + 1
+    expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(7); // 8 − 1，没有被回味摸牌
   });
 
   it('回味只对楠王压牌生效：修勾狂吠压自己的牌不触发（2026-10-05 用户实机 bug：每手狂吠都触发回味）', () => {

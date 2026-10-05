@@ -13,6 +13,7 @@ interface RoleDef {
   maxPerRoom?: number;        // 同一房间最多几人选，默认 1
   priority?: number;          // 钩子执行顺序：大者先，同优先级按座位序（确定性）
   hooks?: Partial<RoleHooks>; // 用到哪些钩子写哪些
+  deathrattleHooks?: (keyof RoleHooks)[]; // 亡语（2026-10-05 用户定稿）：出牌者打光手牌后仍可触发的钩子白名单。未标注的 afterPlay/onPlayInterrupt 钩子在打光那一刻被引擎跳过（游戏立即结束）。目前只有楠王旺旺与雪灾巨石标注 ['onPlayInterrupt']；除非用户明确说是亡语，否则不要标注
   setup?(ctx: RoleSetupContext): unknown; // 角色私有状态：JSON 安全，随快照同步
   skillActions?: SkillActionDef[]; // 客户端技能按钮：{ skillId, when:'myTurn'|'following', label }，通用渲染
   canCutIn?: boolean;         // 可插队响应（无名）——引擎提供插队机制，角色只挂标志
@@ -38,6 +39,8 @@ interface RoleDef {
 | `beforePlay(ctx, proposed)` | **引擎基础规则校验之后** | `allowAnyway` 放行 / `ok:false` 否决（技能优先） |
 | `afterPlay(ctx, played)` | 出牌后 | 任意 modify |
 | `onPlayInterrupt(ctx, played)` | 出牌提交后、**获胜判定前**（驱逐类优先于获胜，如巨石；**亡语**——有人打完手牌仍可在此拦截阻止立即获胜，如楠王旺旺：判定成功给压牌者摸牌 → 手牌非空 → 获胜自然取消） | 可返回 ask 挂起 |
+
+**亡语门控（2026-10-05 用户定稿，★ 写「打完牌后」类钩子必读）**：只有角色标注 `deathrattleHooks?: (keyof RoleHooks)[]` 的钩子可以在「有人打完最后一张牌」后触发；**未标注的钩子在打光那一刻引擎直接跳过（游戏立即结束）**——询问/改判/加牌/播报一律不触发。引擎在 runAfterPlayHooks/runInterruptHooks 对出牌者手牌为 0（未淘汰）时做此门控。目前标注亡语的只有楠王旺旺与雪灾巨石（均为 `deathrattleHooks: ['onPlayInterrupt']`）；楠王回味（afterPlay）、修勾答疑、橐驼地坛、惰戈法音、阿色再问（其钩子内部原本就有手牌守卫，与全局规则一致）均不标注。**新角色的 afterPlay/onPlayInterrupt 钩子：除非用户明确说是亡语，否则不要标注——打光即结束。**
 | `onPass(ctx)` | 过牌 | 任意 modify |
 | `onDraw(ctx, n)` | 摸牌（n=本次摸牌数） | `drawBonus` |
 | `onRoundEnd(ctx, lastPlayerId)` | 一轮结束（lastPlayerId=最后出牌者，牌权所在） | 可返回 ask 挂起（黑脸/观股）；`suppressDraw` 替代摸牌 |

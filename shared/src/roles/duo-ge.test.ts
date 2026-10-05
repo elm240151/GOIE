@@ -231,6 +231,19 @@ describe('惰戈（亢奋/法音）', () => {
     expect(snap.winnerId).toBe('p1'); // 谁打完谁赢：物理出牌者
   });
 
+  it('亡语定稿（2026-10-05）：法音非亡语——惰戈打光最后手牌不询问，打完那一刻游戏就结束了', () => {
+    const hands = {
+      p0: [pick(4, 0), pick(5, 1), pick(6, 2)], // 惰戈：♠4♥5♦6 = 456（3 花色）= 全部手牌
+      p1: byRank(10, 5),
+    };
+    const engine = mkEngine(hands, { p0: duoGe });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id, hands.p0[2]!.id]); // 打光
+    expect(r.ok && !r.suspended).toBe(true); // 法音不再询问
+    const snap = engine.snapshotFor('p0');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p0');
+  });
+
   it('亢奋：惰戈被淘汰（手牌超 20）后失效', () => {
     const hands = {
       p0: [...byRank(3, 4), ...byRank(4, 4), ...byRank(5, 4), ...byRank(6, 4), ...byRank(7, 4), ...byRank(8, 1)], // 21 张

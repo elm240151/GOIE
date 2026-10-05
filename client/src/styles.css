@@ -712,8 +712,9 @@ body {
   display: none;
 }
 
-/* 中央暂存区（线下打牌感）：本回合打过的其余手牌以真实牌面摊在场上（王标出所当点数）+ 判定牌，
-   回合结束统一弃置；为将来「看场上牌/替换弃置场上牌」的技能提供直观的场上区域 */
+/* 中央暂存区（线下打牌感）：本回合所有打过的牌以真实牌面摊在场上（王标出所当点数；含刚出的当前一手，
+   最新一手金框高亮）+ 判定牌；谁出的看出牌记录条；回合结束统一弃置；
+   为将来「看场上牌/替换弃置场上牌」的技能提供直观的场上区域 */
 .table-pile {
   display: flex;
   flex-wrap: wrap;
@@ -738,6 +739,11 @@ body {
   padding: 3px 5px;
   border-radius: 8px;
   animation: history-in 0.3s ease-out;
+}
+/* 最新一手（刚出的牌）：金框高亮与旧手牌区分；也是端庄翻面点选的目标 */
+.table-pile-item-latest {
+  border: 1px solid var(--gold-dark);
+  background: var(--gold-12);
 }
 .table-pile-name {
   font-size: 11px;
@@ -797,21 +803,16 @@ body {
   background: var(--gold-10);
 }
 
-.table-owner {
-  font-size: 13px;
-  color: var(--text-dim);
-}
-.table-row {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-/* 明置桌旁的边牌（再问补打）：随当前一手牌一起弃置 */
+/* 明置桌旁的边牌（再问补打）：随当前一手牌一起弃置；暂存区里以虚隔线与刚出的手牌区分 */
 .table-side {
   display: flex;
   gap: 4px;
+}
+.table-pile-item .table-side {
+  margin-left: 4px;
+  padding-left: 6px;
+  border-left: 1px dashed var(--ink-25);
+  align-items: center;
 }
 .table-side .card {
   --card-w: 40px;
@@ -1470,20 +1471,6 @@ body {
 /* 出牌按钮（可点）：金色微光呼吸（只动 box-shadow，不碰 transform） */
 .game-actions .btn-primary:not(:disabled) {
   animation: btn-glow 2.2s ease-in-out infinite;
-}
-/* 牌上桌/座位出牌徽章入场弹跳（容器挂 key=首张牌 id，每次打出重播） */
-.combo-enter {
-  animation: combo-pop 0.32s cubic-bezier(0.2, 0.8, 0.3, 1);
-}
-@keyframes combo-pop {
-  from {
-    transform: scale(0.72);
-    opacity: 0.35;
-  }
-  to {
-    transform: scale(1);
-    opacity: 1;
-  }
 }
 @keyframes btn-glow {
   0%, 100% { box-shadow: 0 0 0 0 var(--gold-35); }

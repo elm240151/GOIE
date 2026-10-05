@@ -88,9 +88,13 @@ export default function GameTable() {
   const myRole = getRole(me?.roleId ?? '');
   const finished = room?.phase === 'finished';
 
-  // 中央暂存区（线下打牌感）：本回合除当前这一手外所有打过的牌 + 判定牌；
-  // 回合结束统一弃置（roundPlayLog/judgedCards 随 round:ended 清空）
-  const pileEntries = snap?.table ? roundPlayLog.slice(0, -1) : roundPlayLog;
+  // 中央暂存区（线下打牌感）：本回合所有打过的牌（含刚出的当前一手）+ 判定牌；
+  // 回合结束统一弃置（roundPlayLog/judgedCards 随 round:ended 清空）；
+  // 重连首快照日志为空时补当前桌面一手（谁出的由出牌记录条展示，暂存区不标名字）
+  const pileEntries =
+    snap?.table && roundPlayLog.length === 0
+      ? [{ playerId: tablePlayerId ?? '', combo: snap.table }]
+      : roundPlayLog;
 
   // 暂存区新增牌时滚到最底（新打的牌在摊开区的末尾，超高一屏时可滚动）
   const pileRef = useRef<HTMLDivElement>(null);
@@ -158,7 +162,6 @@ export default function GameTable() {
   const isLeader = snap?.table === null;
   const noPass = snap?.pancakeNoPass === true; // 吐饼（R.F）：吃过饼后轮到自己不能过
   const turnPlayer = snap?.turnPlayerId ? players.find((p) => p.id === snap.turnPlayerId) : null;
-  const tableOwner = snap?.table ? players.find((p) => p.id === tablePlayerId) : null;
 
   // 主动技按钮（角色声明 skillActions，通用渲染）
   const skillActions = useMemo(() => {
@@ -270,51 +273,46 @@ export default function GameTable() {
 
         {snap?.table ? (
           <>
-            <div className="table-owner">
-              {tableOwner ? STR.game.tableOwner.replace('{name}', tableOwner.name) : STR.game.prevTable}
-            </div>
-            <div className="table-row">
-              {/* key=首张牌 id：每手新牌重播入场弹跳（改判/归属改写不重播） */}
-              <div className="combo-enter" key={snap.table.cards[0]!.id}>
-                <ComboBadge
-                  combo={snap.table}
-                  retagged={!!snap.tableRankNote}
-                  onCardClick={canFlip ? toggleFlipSelect : undefined}
-                  flippedCardId={canFlip ? flippedCardId : null}
-                />
-              </div>
-              {snap.tableRankNote && (
-                <span
-                  className="retag-badge"
-                  title={STR.game.retagTitleNote
-                    .replace('{rank}', rankLabel(snap.tableRankNote.rank as Rank))
-                    .replace('{label}', originalTableLabel)}
-                >
-                  {STR.game.retagFrom.replace('{label}', originalTableLabel)}
-                </span>
-              )}
-              {tableSideCards.length > 0 && (
-                <div className="table-side">
-                  {tableSideCards.map((c) => (
-                    <Card key={c.id} card={c} faceDown={(snap?.tableSideHidden ?? []).includes(c.id)} />
-                  ))}
-                </div>
-              )}
-            </div>
-            {/* 中央暂存区（线下打牌感）：本回合打过的其余手牌以真实牌面摊在场上 + 判定牌，回合结束统一弃置 */}
+            {/* 中央暂存区（线下打牌感）：本回合所有打过的牌以真实牌面摊在场上——含刚出的当前一手
+                （最新一手金框高亮，可点选翻面），谁出的看边上出牌记录条；回合结束统一弃置 */}
             {(pileEntries.length > 0 || judgedCards.length > 0) && (
               <div className="table-pile" ref={pileRef} title={STR.game.pileTitle}>
-                {pileEntries.map((entry) => {
-                  const owner = players.find((p) => p.id === entry.playerId);
+                {pileEntries.map((entry, i) => {
+                  const latest = i === pileEntries.length - 1;
                   return (
-                    <div key={entry.combo.cards[0]!.id} className="table-pile-item">
-                      <span className="table-pile-name">{owner?.name ?? STR.game.opponentFallback}</span>
+                    <div
+                      key={entry.combo.cards[0]!.id}
+                      className={latest ? 'table-pile-item table-pile-item-latest' : 'table-pile-item'}
+                    >
                       <div className="table-pile-cards">
                         {comboFaces(entry.combo).map((f) => (
-                          <Card key={f.card.id} card={f.card} asRank={f.asRank} />
+                          <Card
+                            key={f.card.id}
+                            card={f.card}
+                            asRank={f.asRank}
+                            onClick={latest && canFlip ? () => toggleFlipSelect(f.card.id) : undefined}
+                            faceDown={latest && flippedCardId === f.card.id}
+                          />
                         ))}
+                        {latest && tableSideCards.length > 0 && (
+                          <span className="table-side">
+                            {tableSideCards.map((c) => (
+                              <Card key={c.id} card={c} faceDown={(snap?.tableSideHidden ?? []).includes(c.id)} />
+                            ))}
+                          </span>
+                        )}
                       </div>
                       <span className="table-pile-label">{entry.combo.label}</span>
+                      {latest && snap.tableRankNote && (
+                        <span
+                          className="retag-badge"
+                          title={STR.game.retagTitleNote
+                            .replace('{rank}', rankLabel(snap.tableRankNote.rank as Rank))
+                            .replace('{label}', originalTableLabel)}
+                        >
+                          {STR.game.retagFrom.replace('{label}', originalTableLabel)}
+                        </span>
+                      )}
                     </div>
                   );
                 })}

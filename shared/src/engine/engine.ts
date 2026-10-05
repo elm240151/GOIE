@@ -786,9 +786,13 @@ export class GameEngine {
   }
 
   private runAfterPlayHooks(playerId: string, combo: Combo, index: number): ActionResult {
+    // 亡语门控（2026-10-05 用户定稿）：出牌者打完最后一张牌（出完即胜判定前），
+    // 只有标注亡语（RoleDef.deathrattleHooks）的钩子可以触发；未标注的跳过——游戏直接结束
+    const finishing = !this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0;
     const hooks = this.orderedHooks('afterPlay');
     for (let i = index; i < hooks.length; i++) {
       const entry = hooks[i]!;
+      if (finishing && !(entry.role.deathrattleHooks?.includes('afterPlay') ?? false)) continue;
       const r = this.runHook(entry, [combo]);
       if (!r.vetoed && r.result?.ask) {
         const resume = (outcome: HookOutcome): void => {
@@ -813,9 +817,13 @@ export class GameEngine {
   }
 
   private runInterruptHooks(playerId: string, combo: Combo, index: number): ActionResult {
+    // 亡语门控（2026-10-05 用户定稿）：同上——打断钩子也是「打完牌以后」触发，
+    // 出牌者打光手牌时只有标注亡语的打断技能（旺旺/巨石）可以询问
+    const finishing = !this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0;
     const hooks = this.orderedHooks('onPlayInterrupt');
     for (let i = index; i < hooks.length; i++) {
       const entry = hooks[i]!;
+      if (finishing && !(entry.role.deathrattleHooks?.includes('onPlayInterrupt') ?? false)) continue;
       const r = this.runHook(entry, [combo]);
       if (!r.vetoed && r.result?.ask) {
         const resume = (outcome: HookOutcome): void => {

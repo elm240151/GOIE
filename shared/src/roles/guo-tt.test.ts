@@ -294,7 +294,7 @@ describe('橐驼：地坛（红楼梦）+ 诅咒（单王）', () => {
     // 手牌只留大王（161）在 p2 → 牌堆顶 = 小王（160，♠♣）
     const hands = {
       p0: [deck[13]!, deck[14]!, deck[15]!, ...byId(16, 32)], // 橐驼：♥345 + ♥6..♥2 + ♣3..♣9（20 张）
-      p1: [deck[1]!, deck[2]!, deck[3]!], // ♠456
+      p1: [deck[1]!, deck[2]!, deck[3]!, deck[48]!, deck[49]!], // ♠456（补 2 张：地坛非亡语，打光不触发）
       p2: [deck[161]!], // 大王（顶到 160 小王）
     };
     expect(deckTopOf(hands).id).toBe(160); // 小王
@@ -309,6 +309,22 @@ describe('橐驼：地坛（红楼梦）+ 诅咒（单王）', () => {
     const snap = engine.snapshotFor('p0');
     expect(snap.cursedPlayerIds).toContain('p1');
     expect(snap.revealed).toHaveLength(0);
+  });
+
+  it('亡语定稿（2026-10-05）：地坛非亡语——压牌者打光手牌不询问，打完那一刻游戏就结束了', () => {
+    const hands = {
+      p0: [deck[13]!, deck[14]!, deck[15]!, ...byId(16, 32)], // 橐驼（多牌不淘汰）
+      p1: [deck[1]!, deck[2]!, deck[3]!], // ♠456 = 全部手牌
+      p2: [deck[161]!],
+    };
+    const engine = mkEngine(hands, { p0: guoTT }, 'p0');
+    expect(engine.playCards('p0', [13, 14, 15]).ok).toBe(true); // 自己出 ♥345 不触发
+    const r = engine.playCards('p1', [1, 2, 3]); // ♠456 压（打光）
+    expect(r.ok && !r.suspended).toBe(true); // 地坛不再询问
+    const snap = engine.snapshotFor('p0');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p1');
+    expect(snap.cursedPlayerIds).toHaveLength(0); // 未诅咒
   });
 
   it('诅咒对王（2026-10-03 用户确认）：一对王可收尾获胜', () => {
@@ -328,7 +344,7 @@ describe('橐驼：地坛（红楼梦）+ 诅咒（单王）', () => {
   it('诅咒对王：对方只能用炸弹压', () => {
     const hands = {
       p0: [deck[52]!, deck[53]!, deck[0]!], // 橐驼：对王 + ♠3
-      p1: [deck[13]!, deck[26]!, deck[39]!], // 三张 3（炸弹）
+      p1: [deck[13]!, deck[26]!, deck[39]!, deck[12]!, deck[25]!], // 三张 3（炸弹）+ 补 2 张 K：地坛非亡语，打光不触发
       p2: byRank(11, 5), // 五张 J
     };
     const engine = mkEngine(hands, { p0: guoTT }, 'p0');
