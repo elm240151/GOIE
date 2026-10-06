@@ -79,6 +79,37 @@ function plain(): RoleDef {
   return { id: 'plain', name: '路人', skills: [] };
 }
 
+/** 测试用窃牌角色：主动技从目标手中拿 1 张牌（模拟换牌/拼点类主动技的收牌路径） */
+function thief(): RoleDef {
+  return {
+    id: 'thief',
+    name: '窃贼',
+    skills: [{ id: 'steal', name: '窃取', description: '测试用：从目标手中拿 1 张牌' }],
+    skillActions: [{ skillId: 'steal', when: 'myTurn', label: '窃取' }],
+    hooks: {
+      onSkillAction(ctx, req) {
+        if (req.skillId !== 'steal') return;
+        const a = ctx.answer;
+        if (!a) {
+          const others = ctx.game
+            .players()
+            .filter((p) => p.id !== ctx.self.id && p.handCount > 0)
+            .map((p) => p.id);
+          return { ok: true, ask: { kind: 'pickTarget', prompt: '选择窃取目标', targetCandidates: others } };
+        }
+        if (a.targetPlayerId) {
+          const card = ctx.game.handOf(a.targetPlayerId)[0];
+          if (!card) return;
+          ctx.game.giveFrom(a.targetPlayerId, [card.id]);
+          ctx.game.giveTo(ctx.self.id, [card]);
+          return { ok: true, modify: { endTurn: true } };
+        }
+        return;
+      },
+    },
+  };
+}
+
 describe('兰登·费夫 R.F：吐饼', () => {
   it('无牌权限制：响应他人只能打 2 或炸弹，普通恰好牌被拒', () => {
     const hands = {
@@ -230,6 +261,76 @@ describe('兰登·费夫 R.F：吐饼', () => {
     expect(snap.phase).toBe('finished');
     expect(snap.winnerId).toBe('p1');
     expect(totalCards(engine)).toBe(162); // 饼参与守恒
+  });
+
+  it('他人技能致手牌减少也触发获胜：法音弃牌（2026-10-06 用户定稿：不看来因，除非有亡语）', () => {
+    const hands = {
+      p0: byRank(5, 5), // 起对5
+      p1: [pick(6, 0), pick(6, 1), pick(9, 0)], // R.F：对6 恰好接对5 + 单9
+      p2: [pick(6, 2), pick(6, 3), ...byRank(4, 3)], // 惰戈：对6（♣♦ 两花色触发法音）压对5 + 3 张杂牌
+    };
+    const engine = mkEngine(hands, { p1: rf, p2: duoGe });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id]);
+    const ask = askOf(r);
+    expect(ask?.kind).toBe('confirm');
+    // 亮对6 → 摸 2 → 倒置摸到的 2 张成饼 → 饼 2、手牌 3：吃饼时 2 < 3 不获胜
+    const a1 = engine.resolveAsk('p1', { askId: ask!.askId!, choice: 'yes' });
+    const pick1 = askOf(a1);
+    const a2 = engine.resolveAsk('p1', { askId: pick1!.askId!, cardIds: [hands.p1[0]!.id, hands.p1[1]!.id] });
+    const pick2 = askOf(a2);
+    expect(pick2?.cards?.length).toBe(5); // 3 + 摸 2
+    const a3 = engine.resolveAsk('p1', { askId: pick2!.askId!, cardIds: [pick2!.cards![3]!.id, pick2!.cards![4]!.id] });
+    expect(a3.ok).toBe(true);
+    expect(pancakeOf(engine, 'p1')).toBe(2);
+    expect(handOf(engine, 'p1')).toBe(3);
+    expect(engine.snapshotFor('p0').phase).toBe('playing'); // 吃饼时未获胜
+    // p1 自动过（无 2/炸弹）→ p2（惰戈）出对6♣♦ 压对5 → 法音选 R.F 弃 1 张 → 手牌 2 = 饼 2 → 立即获胜
+    expect(engine.snapshotFor('p0').turnPlayerId).toBe('p2');
+    const r2 = engine.playCards('p2', [hands.p2[0]!.id, hands.p2[1]!.id]);
+    const fask = askOf(r2);
+    expect(fask?.prompt).toContain('法音');
+    const fy = engine.resolveAsk('p2', { askId: fask!.askId!, choice: 'yes' });
+    const tpick = askOf(fy);
+    expect(tpick?.kind).toBe('pickTarget');
+    const tsel = engine.resolveAsk('p2', { askId: tpick!.askId!, targetPlayerId: 'p1' });
+    const dpick = askOf(tsel);
+    expect(dpick?.kind).toBe('pickCards');
+    const done = engine.resolveAsk('p1', { askId: dpick!.askId!, cardIds: [hands.p1[2]!.id] }); // 弃单9
+    expect(done.ok).toBe(true);
+    const snap = engine.snapshotFor('p1');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p1');
+    expect(totalCards(engine)).toBe(162);
+  });
+
+  it('主动技窃牌致手牌减少也触发获胜（2026-10-06 用户定稿：不看来因）', () => {
+    const hands = {
+      p0: byRank(5, 5), // 起对5
+      p1: [pick(6, 0), pick(6, 1), pick(9, 0)], // R.F：对6 恰好接对5 + 单9
+      p2: byRank(4, 5), // 窃贼
+    };
+    const engine = mkEngine(hands, { p1: rf, p2: thief() });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id]);
+    const ask = askOf(r);
+    const a1 = engine.resolveAsk('p1', { askId: ask!.askId!, choice: 'yes' });
+    const pick1 = askOf(a1);
+    const a2 = engine.resolveAsk('p1', { askId: pick1!.askId!, cardIds: [hands.p1[0]!.id, hands.p1[1]!.id] });
+    const pick2 = askOf(a2);
+    const a3 = engine.resolveAsk('p1', { askId: pick2!.askId!, cardIds: [pick2!.cards![3]!.id, pick2!.cards![4]!.id] });
+    expect(a3.ok).toBe(true);
+    expect(pancakeOf(engine, 'p1')).toBe(2);
+    expect(handOf(engine, 'p1')).toBe(3);
+    // p1 自动过 → p2 发动主动技窃取 R.F 一张牌 → 手牌 2 = 饼 2 → 立即获胜
+    expect(engine.snapshotFor('p0').turnPlayerId).toBe('p2');
+    const u = engine.useSkillAction('p2', { skillId: 'steal' });
+    const tpick = askOf(u);
+    expect(tpick?.kind).toBe('pickTarget');
+    const done = engine.resolveAsk('p2', { askId: tpick!.askId!, targetPlayerId: 'p1' });
+    expect(done.ok).toBe(true);
+    const snap = engine.snapshotFor('p1');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p1');
+    expect(totalCards(engine)).toBe(162);
   });
 
   it('吃饼摸牌超手牌上限 → 淘汰（不进入倒置阶段）', () => {

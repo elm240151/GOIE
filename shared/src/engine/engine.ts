@@ -330,6 +330,8 @@ export class GameEngine {
         if (this.phase !== 'playing') return this.ok();
       }
     }
+    // 吐饼（R.F）：过牌钩子结算后立即判定获胜（2026-10-06 用户定稿）
+    if (this.checkPancakeWin()) return this.ok();
     this.emit({ type: 'passed', playerId });
     this.passCount++;
     if (this.passCount >= this.activeCount() - 1) this.endRound();
@@ -634,6 +636,8 @@ export class GameEngine {
         if (this.phase !== 'playing') return;
       }
     }
+    // 吐饼（R.F）：回合开始钩子（反力矩被动等）结算后立即判定获胜（2026-10-06 用户定稿）
+    if (this.checkPancakeWin()) return;
     // 吐饼（R.F）：吃过饼后轮到自己且没有 2/炸弹可打 → 自动过（有的话出牌，过牌会被拒）
     const pancakeForcedPass = this.pancakeNoPassId === id && this.restrictedFollows(id).length === 0;
     // 强制过（技能效果）；红楼梦（地坛）禁出玩家同样轮到他自动过
@@ -888,12 +892,10 @@ export class GameEngine {
       this.finishGame(playerId);
       return this.ok();
     }
-    // 吐饼（R.F）：主动出牌后饼数 ≥ 手牌数 → 立即获胜（与吃饼结算同口径；2026-10-06 用户实机 bug）
-    const rfRole = this.roles.get(this.players.find((p) => p.id === playerId)?.roleId ?? '');
-    if (rfRole?.pancake && (this.pancakes.get(playerId)?.length ?? 0) >= this.hands.get(playerId)!.length) {
-      this.finishGame(playerId);
-      return this.ok();
-    }
+    // 吐饼（R.F）：饼数 ≥ 手牌数 → 立即获胜（2026-10-06 用户定稿：不看来因——自己出牌/法音弃牌等任何
+    // 致手牌减少的路径都触发；打断钩子含亡语已全部结算完，亡语先于获胜判定。全局扫描：他人技能致
+    // R.F 手牌减少同样在此获胜）。
+    if (this.checkPancakeWin()) return this.ok();
     // 贪婪（阿摩）：每次普通主动出牌后摸 1 张（从牌堆）。归属改写（亢奋：桌面视作惰戈打出）不摸；
     // 再问补打走 playSideCard 不经此流程；出完即胜已在上面先判（获胜不摸）。
     // 摸牌可能触发耀武立即获胜或超上限淘汰 → 终局则跳过后续询问。
@@ -1137,11 +1139,8 @@ export class GameEngine {
     this.provisionalLeadId = rf;
     this.pancakeNoPassId = rf;
     this.passCount = 0;
-    const pancakeCount = this.pancakes.get(rf)?.length ?? 0;
-    if (pancakeCount >= (this.hands.get(rf)?.length ?? 0)) {
-      this.finishGame(rf);
-      return this.ok();
-    }
+    // 吐饼（R.F）：饼数 ≥ 手牌数 → 立即获胜（统一判定，2026-10-06 用户定稿）
+    if (this.checkPancakeWin()) return this.ok();
     this.requeue(this.afterPlayTail());
     return this.ok();
   }
@@ -1373,6 +1372,8 @@ export class GameEngine {
         if (this.phase !== 'playing') return;
       }
     }
+    // 吐饼（R.F）：轮末钩子（隐匿等）结算后立即判定获胜（2026-10-06 用户定稿）
+    if (this.checkPancakeWin()) return;
     this.finishRoundEnd(lastId);
   }
 
@@ -1578,6 +1579,35 @@ export class GameEngine {
           roleId: p.roleId,
           skillId: 'yao-wu',
           text: `${p.name} 集齐 A~K 全部点数，直接宣布胜利！`,
+        });
+        this.finishGame(p.id);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  // ---------- 吐饼（R.F）：饼数 ≥ 手牌数 → 无条件立即获胜（2026-10-06 用户定稿） ----------
+
+  /**
+   * 手牌变化后统一判定吐饼获胜：饼数 ≥ 手牌数即宣布获胜，不看来因（自己出牌/别人弃牌/换牌/拼点……
+   * 一切致手牌减少的路径都触发）。出牌路径在 afterPlayCommitted 收尾处调用——打断钩子（含亡语）已
+   * 全部结算完，亡语先于获胜判定（除非有亡语，否则直接获胜）。其余结算点：吃饼倒置（finishPancake）、
+   * 主动技（finishSkillAction）、回合开始钩子（runTurnStartHooks）、轮末钩子（runRoundEndHooks）、过牌
+   * （pass）。满足即终局。
+   */
+  private checkPancakeWin(): boolean {
+    if (this.phase !== 'playing') return false;
+    for (const p of this.players) {
+      if (this.eliminated.has(p.id)) continue;
+      if (!this.roles.get(p.roleId)?.pancake) continue;
+      if ((this.pancakes.get(p.id)?.length ?? 0) >= (this.hands.get(p.id)?.length ?? 0)) {
+        this.emit({
+          type: 'skill:triggered',
+          playerId: p.id,
+          roleId: p.roleId,
+          skillId: 'tu-bing',
+          text: `【吐饼】${p.name} 饼数已达手牌数，直接宣布胜利！`,
         });
         this.finishGame(p.id);
         return true;
@@ -1875,6 +1905,8 @@ export class GameEngine {
   }
 
   private finishSkillAction(playerId: string): void {
+    // 吐饼（R.F）：主动技（换牌/拼点等）结算后立即判定获胜（2026-10-06 用户定稿）
+    if (this.checkPancakeWin()) return;
     const mods = this.pendingMods.get(playerId);
     if (mods?.endTurn) {
       delete mods.endTurn;
