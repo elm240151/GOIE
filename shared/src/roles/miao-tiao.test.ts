@@ -94,7 +94,7 @@ describe('苗条：苗条技 + 尖叫', () => {
     assertConserved(engine);
   });
 
-  it('尖叫范文 + 亡语：打光手牌时自动收回全部扣置牌，不获胜', () => {
+  it('尖叫范文 + 亡语：打光实体手牌不算空手（扣置也算手牌）——范文摸回 + 苗条技照常摸牌，不获胜', () => {
     const hands = {
       p0: [deck[4]!, deck[2]!, deck[16]!], // ♠7 + 扣置 ♠5 ♥6 → 手牌只剩 ♠7
       p1: [deck[5]!, deck[18]!], // ♠8 ♥8
@@ -105,19 +105,19 @@ describe('苗条：苗条技 + 尖叫', () => {
     expect(snap.players.find((p) => p.id === 'p0')!.heldCount).toBe(2);
     expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(1);
 
-    const r = engine.playCards('p0', [hands.p0[0]!.id]); // ♠7 打光手牌
+    const r = engine.playCards('p0', [hands.p0[0]!.id]); // ♠7 打光实体手牌（扣置 ♥6 仍在）
     expect(r.ok).toBe(true);
-    // 亡语门控：苗条技（非亡语）不触发
-    expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'miao-tiao')).toBe(false);
-    // 尖叫（亡语）：自动收回全部 → 手牌非空 → 不获胜
+    // 尖叫（亡语）：♠ 命中范文 → 摸回 ♠5（只摸回被扣花色对应的牌，不收回全部）
     expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'jian-jiao')).toBe(true);
+    // 空手口径 = 手牌+扣置全空：扣置仍在 → 不算打完 → 苗条技照常摸 1（旧方案「自动收回全部」已作废）
+    expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'miao-tiao')).toBe(true);
     snap = engine.snapshotFor('p0');
     expect(snap.phase).toBe('playing');
     expect(snap.winnerId).toBeNull();
-    expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(2);
-    expect(snap.players.find((p) => p.id === 'p0')!.heldCount).toBe(0);
+    expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(2); // ♠5 + 苗条技摸 1
+    expect(snap.players.find((p) => p.id === 'p0')!.heldCount).toBe(1); // ♥6 保留继续等
 
-    expect(engine.playCards('p1', [hands.p1[0]!.id]).ok).toBe(true); // 无扣置可触发
+    expect(engine.playCards('p1', [hands.p1[0]!.id]).ok).toBe(true); // ♠8：♠ 已无扣置 → 不触发
     assertConserved(engine);
   });
 

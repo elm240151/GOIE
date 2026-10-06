@@ -855,12 +855,13 @@ export class GameEngine {
   }
 
   private runAfterPlayHooks(playerId: string, combo: Combo, index: number): ActionResult {
-    // 亡语门控（2026-10-05 用户定稿 + 2026-10-06 追加）：出牌者打完最后一张牌（出完即胜判定前），
+    // 亡语门控（2026-10-05 用户定稿 + 2026-10-06 追加）：出牌者真正打完所有牌（手牌+扣置全空，
+    // 出完即胜判定前——扣置牌也算手牌，实体手牌打光但扣置仍在不算空手，2026-10-06 苗条修正），
     // 或吐饼获胜条件已满足（饼数 ≥ 手牌数，宣判前不再触发别人的技能），或已有玩家空手待判胜
     // （手牌+扣置全空，法音弃置等路径），只有标注亡语（RoleDef.deathrattleHooks）的钩子可以触发；
     // 未标注的跳过——游戏直接结束
     const finishing =
-      (!this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0) ||
+      (!this.eliminated.has(playerId) && this.handHeldTotal(playerId) === 0) ||
       this.pancakeWinCandidate() !== null ||
       this.emptyHandWinCandidate() !== null;
     const hooks = this.orderedHooks('afterPlay');
@@ -892,10 +893,11 @@ export class GameEngine {
 
   private runInterruptHooks(playerId: string, combo: Combo, index: number): ActionResult {
     // 亡语门控（2026-10-05 用户定稿 + 2026-10-06 追加）：同上——打断钩子也是「打完牌以后」触发，
-    // 出牌者打光手牌、吐饼获胜条件已满足（饼数 ≥ 手牌数）、或已有玩家空手待判胜（手牌+扣置全空）时，
-    // 只有标注亡语的打断技能（旺旺/巨石/五连鞭/压腿）可以询问，非亡语（答疑等）不再触发
+    // 出牌者真正打完所有牌（手牌+扣置全空）、吐饼获胜条件已满足（饼数 ≥ 手牌数）、或已有玩家
+    // 空手待判胜（手牌+扣置全空）时，只有标注亡语的打断技能（旺旺/巨石/五连鞭/压腿）可以询问，
+    // 非亡语（答疑等）不再触发
     const finishing =
-      (!this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0) ||
+      (!this.eliminated.has(playerId) && this.handHeldTotal(playerId) === 0) ||
       this.pancakeWinCandidate() !== null ||
       this.emptyHandWinCandidate() !== null;
     const hooks = this.orderedHooks('onPlayInterrupt');
@@ -954,7 +956,9 @@ export class GameEngine {
     // 出完即胜（被淘汰者不算）：谁打完谁赢——归属改写（再问）不改胜利判定，按物理出牌者判；
     // 留 X 禁止收尾已在出牌校验层拦截（单 2/对 2 打完手牌不可出），走到这里即为正常出完。
     // 别人打光手牌先于吃饼询问（R费拦不住）
-    if (!this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0) {
+    // 空手口径 = 手牌 + 扣置全空（扣置牌也算手牌——尖叫苗条：实体打光但扣置仍在时不算打完，
+    // 苗条技照常摸牌，2026-10-06 用户修正）
+    if (!this.eliminated.has(playerId) && this.handHeldTotal(playerId) === 0) {
       this.finishGame(playerId);
       return this.ok();
     }
@@ -1781,12 +1785,18 @@ export class GameEngine {
    *  2026-10-06 用户定稿：不看来因（同吐饼口径）——自己打光/法音弃置/给别人牌，一切致手牌与
    *  扣置归零的路径都触发。挂在结算点判定（亡语先结算：尖叫打光自动收回扣置牌在打断钩子里已
    *  先执行，手牌非空则不满足）；扣置牌也算手牌（苗条 0 手但有扣置 → 不判胜，可主动收回）。 */
+  /** 手牌 + 扣置牌总张数（扣置牌也算手牌——尖叫苗条；上限/空手判胜/出完即胜/亡语门控同口径） */
+  private handHeldTotal(playerId: string): number {
+    return (
+      (this.hands.get(playerId)?.length ?? 0) +
+      (this.held.get(playerId) ?? []).reduce((s, g) => s + g.cards.length, 0)
+    );
+  }
+
   private emptyHandWinCandidate(): EnginePlayer | null {
     for (const p of this.players) {
       if (this.eliminated.has(p.id)) continue;
-      const hand = this.hands.get(p.id)?.length ?? 0;
-      const held = (this.held.get(p.id) ?? []).reduce((s, g) => s + g.cards.length, 0);
-      if (hand + held === 0) return p;
+      if (this.handHeldTotal(p.id) === 0) return p;
     }
     return null;
   }
