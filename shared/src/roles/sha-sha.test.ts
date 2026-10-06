@@ -1,4 +1,4 @@
-// 角色测试：煞蔱 Sharry —— 技能【约等】（亡语）+【直播】。
+// 角色测试：煞蔱 Sharry —— 技能【约等】+【直播】（均非亡语，2026-10-06 用户裁定）。
 // 【约等】每回合一次：压别人的手牌时（触发 A），或拥有牌权时（触发 B，本回合相当于出了 0 张牌、
 //   不用摸牌），可收回刚打的那一手牌（桌面退回被压的一手），与一名随机角色均分手牌
 //   （她拿 ⌊X/2⌋、对方拿其余），从她下家继续接牌（桌面空则她重新起牌）。弃权不消耗。
@@ -189,5 +189,20 @@ describe('煞蔱：约等 + 直播', () => {
     expect(engine.snapshotFor('p0').phase).toBe('finished');
     // 障目只拦技能、不拦获胜判定：辛歼照常获胜（打光即胜时非亡语打断不再询问）
     expect(r.ok && r.events.some((e) => e.type === 'game:ended' && (e as { winnerId?: string }).winnerId === 'p1')).toBe(true);
+  });
+
+  it('约等非亡语（2026-10-06 用户裁定）：打光压出最后一手直接获胜、不再询问', () => {
+    const hands = {
+      p0: [deck[3]!], // 煞蔱：♠6 最后一手压牌
+      p1: [deck[2]!, deck[6]!], // ♠5 领出、♠9 留手（单张领出即打光会直接获胜）
+    };
+    const engine = mkEngine(hands, { p0: shaSha }, 'p1');
+    expect(engine.playCards('p1', [deck[2]!.id]).ok).toBe(true);
+    const r = engine.playCards('p0', [deck[3]!.id]);
+    expect(r.ok).toBe(true);
+    const s = engine.snapshotFor('p0');
+    expect(s.phase).toBe('finished');
+    expect(s.pendingAsk).toBeNull(); // 约等不再询问
+    expect(r.ok && r.events.some((e) => e.type === 'game:ended' && (e as { winnerId?: string }).winnerId === 'p0')).toBe(true);
   });
 });

@@ -1085,8 +1085,8 @@ export class GameEngine {
         return this.ok();
       }
     }
-    // 约等（煞蔱）：收回她刚打的一手牌并均分——桌面回退上一手、从她下家继续接牌（亡语：打光手牌仍可发动，
-    // 在获胜判定之前结算）
+    // 约等（煞蔱）：收回她刚打的一手牌并均分——桌面回退上一手、从她下家继续接牌（非亡语，2026-10-06
+    // 用户裁定：打光压出最后一手直接获胜、不再询问；正常路径在此获胜判定前消费）
     for (const p of this.players) {
       const mods = this.pendingMods.get(p.id);
       if (mods?.yueDeng) {
