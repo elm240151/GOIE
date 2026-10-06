@@ -167,7 +167,7 @@ export default function GameTable() {
   const skillActions = useMemo(() => {
     if (!me || finished) return [];
     return (getRole(me.roleId)?.skillActions ?? []).filter((a) => {
-      // 见习/反力矩（保国）：仅拥有牌权（起牌回合）时显示
+      // 见习/反力矩（陈正）：仅拥有牌权（起牌回合）时显示
       if (a.onlyWhenLeader && snap?.roundLeaderId !== me.id) return false;
       return a.when === 'myTurn' ? myTurn : myTurn && snap?.table !== null;
     });

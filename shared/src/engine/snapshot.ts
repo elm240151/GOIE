@@ -47,7 +47,7 @@ export interface GameSnapshot {
   tableRankNote: { rank: number } | null;
   /** 红楼梦（地坛）：被诅咒的玩家 id（含下一轮生效中；界面展示标记） */
   cursedPlayerIds: string[];
-  /** 见习（保国）：本回合罚站不得出牌的玩家 id（界面展示标记） */
+  /** 见习（陈正）：本回合罚站不得出牌的玩家 id（界面展示标记） */
   roundBannedIds: string[];
   turnPlayerId: string | null;
   roundLeaderId: string;

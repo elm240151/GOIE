@@ -1,7 +1,7 @@
-// 角色：保国（引路者·马场之王）—— 四技能测试：见习 / 反力矩 / 五连鞭 / 压腿。
+// 角色：陈正（引路者·马场之王）—— 四技能测试：见习 / 反力矩 / 五连鞭 / 压腿。
 // 测试环境说明：handsOverride 模式下牌堆不洗牌、翻牌从牌堆尾部取，牌堆顶可精确预测——
-// 默认牌堆顶两张 = 小王(d2)、大王(d2)（保国 16 vs 14 胜，差 2）；把大王(d2)放进手牌后
-// 牌堆顶 = 2♦(d2)、小王(d2)（保国 2+2=4 vs 14 负，差 10）。压腿的平局分支与反力矩共用
+// 默认牌堆顶两张 = 小王(d2)、大王(d2)（陈正 16 vs 14 胜，差 2）；把大王(d2)放进手牌后
+// 牌堆顶 = 2♦(d2)、小王(d2)（陈正 2+2=4 vs 14 负，差 10）。压腿的平局分支与反力矩共用
 // 「mine > theirs」判定、由反力矩平局用例覆盖（相邻两张牌无法构成压腿平局点差）。
 import { describe, expect, it } from 'vitest';
 import type { Card } from '../cards';
@@ -64,7 +64,7 @@ function jianXi(engine: GameEngine, target: string, giveId?: number): void {
   expect(done.ok).toBe(true);
 }
 
-/** 反力矩完整流程（选目标 → 保国暗选 → 对方暗选）→ 返回拼点结算结果（获胜时带弃牌询问） */
+/** 反力矩完整流程（选目标 → 陈正暗选 → 对方暗选）→ 返回拼点结算结果（获胜时带弃牌询问） */
 function fanLi(engine: GameEngine, target: string, myCardId: number, tCardId: number) {
   const r = engine.useSkillAction('p0', { skillId: 'fan-li-ju' });
   expect(r.ok).toBe(true);
@@ -106,11 +106,11 @@ const pickAll: RoleDef = {
   },
 };
 
-describe('保国（见习/反力矩/五连鞭/压腿）', () => {
+describe('陈正（见习/反力矩/五连鞭/压腿）', () => {
   it('见习：选目标→私摸2→暗交1→罚站（出牌被拒/可过/下轮解除/连续两回合限制/弃权不消耗）', () => {
     const hands = { p0: byRank(3, 5), p1: byRank(10, 5), p2: byRank(5, 5) };
     const engine = mkEngine(hands, { p0: baoGuo });
-    // 开局：保国起牌，无自动询问（见习是主动技）
+    // 开局：陈正起牌，无自动询问（见习是主动技）
     let snap = engine.snapshotFor('p0');
     expect(snap.turnPlayerId).toBe('p0');
     expect(snap.pendingAsk).toBeNull();
@@ -121,7 +121,7 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     const pickAsk = r.ok ? (r.pendingAsk as SkillAsk) : null;
     expect(pickAsk?.kind).toBe('pickTarget');
     expect(pickAsk?.targetCandidates).toEqual(['p1', 'p2']);
-    // 选 p1：保国私摸 2 张 → 选 1 张暗交
+    // 选 p1：陈正私摸 2 张 → 选 1 张暗交
     const g = engine.resolveAsk('p0', { askId: pickAsk!.askId!, targetPlayerId: 'p1' });
     expect(g.ok).toBe(true);
     const giveAsk = g.ok ? (g.pendingAsk as SkillAsk) : null;
@@ -136,14 +136,14 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     expect(snap.players[0]!.handCount).toBe(6); // 交 1 留 1
     expect(snap.players[1]!.handCount).toBe(6);
     expect(snap.roundBannedIds).toEqual(['p1']);
-    // 保国照常出牌；罚站者出牌被拒、可以过
+    // 陈正照常出牌；罚站者出牌被拒、可以过
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     const block = engine.playCards('p1', [hands.p1[0]!.id]);
     expect(block.ok).toBe(false);
     expect((block as { reason: string }).reason).toContain('罚站');
     expect(engine.pass('p1').ok).toBe(true);
     expect(engine.pass('p2').ok).toBe(true);
-    // 轮末：罚站解除，保国保住牌权
+    // 轮末：罚站解除，陈正保住牌权
     snap = engine.snapshotFor('p0');
     expect(snap.roundBannedIds).toEqual([]);
     expect(snap.turnPlayerId).toBe('p0');
@@ -217,7 +217,7 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     const engine = mkEngine(hands, { p0: baoGuo });
     const r = engine.useSkillAction('p0', { skillId: 'jian-xi' });
     const pickAsk = r.ok ? (r.pendingAsk as SkillAsk) : null;
-    // 19 + 2 = 21 > 20 → 保国淘汰
+    // 19 + 2 = 21 > 20 → 陈正淘汰
     const done = engine.resolveAsk('p0', { askId: pickAsk!.askId!, targetPlayerId: 'p1' });
     expect(done.ok).toBe(true);
     expect(done.ok && !done.pendingAsk).toBe(true);
@@ -229,7 +229,7 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     expect(total(engine)).toBe(162);
   });
 
-  it('反力矩：获胜——两张拼点牌交给对方 + 保国自弃 1 张（之后照常出牌）', () => {
+  it('反力矩：获胜——两张拼点牌交给对方 + 陈正自弃 1 张（之后照常出牌）', () => {
     const hands = {
       p0: [pick(13, 0), pick(5, 2), pick(3, 1), pick(9, 3)], // K♠ 5♣ 3♥ 9♦
       p1: [pick(3, 0), ...byRank(10, 4)],
@@ -256,7 +256,7 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     expect(total(engine)).toBe(162);
   });
 
-  it('反力矩：落败——保国获得两张拼点牌；平局算保国输', () => {
+  it('反力矩：落败——陈正获得两张拼点牌；平局算陈正输', () => {
     // 落败：3(+2)=5 vs K=13
     const handsA = {
       p0: [pick(3, 1), pick(5, 2), pick(9, 3), pick(10, 0)],
@@ -272,7 +272,7 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     expect(snapA.players[0]!.handCount).toBe(5); // 4 - 1 + 2
     expect(snapA.players[1]!.handCount).toBe(4);
     expect(total(engineA)).toBe(162);
-    // 平局：5(+2)=7 vs 7 → 算保国输
+    // 平局：5(+2)=7 vs 7 → 算陈正输
     const handsB = {
       p0: [pick(5, 2), pick(3, 1), pick(9, 3), pick(10, 0)],
       p1: [pick(7, 3), ...byRank(6, 4)],
@@ -368,7 +368,7 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     expect(pickAsk?.targetCandidates).toEqual(['p1', 'p2']);
     const s1 = engine2.resolveAsk('p0', { askId: pickAsk!.askId!, targetPlayerId: 'p1' });
     const selfAsk = s1.ok ? (s1.pendingAsk as SkillAsk) : null;
-    // 保国轮末补摸 1 张后 4 张手牌，暗选 K♠
+    // 陈正轮末补摸 1 张后 4 张手牌，暗选 K♠
     const s2 = engine2.resolveAsk('p0', { askId: selfAsk!.askId!, cardIds: [hands.p0[3]!.id] });
     const tAsk = s2.ok ? (s2.pendingAsk as SkillAsk) : null;
     expect(tAsk?.askPlayerId).toBe('p1');
@@ -383,8 +383,8 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     expect(total(engine2)).toBe(162);
   });
 
-  it('反力矩被动：保国保住牌权不询问；手牌不足 3 张不询问', () => {
-    // 保住牌权（轮末最后出牌者 = 保国）
+  it('反力矩被动：陈正保住牌权不询问；手牌不足 3 张不询问', () => {
+    // 保住牌权（轮末最后出牌者 = 陈正）
     const hands = {
       p0: [pick(3, 1), pick(5, 2), pick(9, 3), pick(13, 0)],
       p1: byRank(10, 5),
@@ -428,7 +428,7 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     expect(snap.winnerId).toBeNull();
     expect(snap.players[0]!.handCount).toBe(1); // hands 顺序 [p1, p0, p2]：players[0] = p1
     expect(snap.turnPlayerId).toBe('p0');
-    // 含自己（保国打光）：yes 摸 1 继续；decline 直接获胜
+    // 含自己（陈正打光）：yes 摸 1 继续；decline 直接获胜
     const engine2 = mkEngine({ p0: straight5, p1: byRank(10, 5), p2: byRank(11, 5) }, { p0: baoGuo });
     const r2 = engine2.playCards('p0', straight5.map((c) => c.id));
     const ask2 = r2.ok ? (r2.pendingAsk as SkillAsk) : null;
@@ -466,14 +466,14 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     expect(total(engine)).toBe(162);
   });
 
-  it('压腿：拼点获胜（保国 +2）对方摸 |点差| 张、两张拼点牌弃置', () => {
+  it('压腿：拼点获胜（陈正 +2）对方摸 |点差| 张、两张拼点牌弃置', () => {
     const hands = { p1: [...byRank(9, 4), pick(12, 1), pick(12, 2)], p0: byRank(10, 5), p2: byRank(6, 5) };
     const engine = mkEngine(hands, { p0: baoGuo }, 'p1');
     const r = engine.playCards('p1', byRank(9, 4).map((c) => c.id));
     const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
     const y = engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'yes' });
     expect(y.ok).toBe(true);
-    // 牌堆顶 = 小王、大王：保国 14+2=16 vs 14 → 胜，差 2
+    // 牌堆顶 = 小王、大王：陈正 14+2=16 vs 14 → 胜，差 2
     expect(y.ok && y.events.some((e) => e.type === 'cards:revealed' && (e as { purpose?: string }).purpose === '压腿拼点')).toBe(true);
     expect(y.ok && y.events.some((e) => e.type === 'skill:triggered' && /拼点获胜/.test(e.text) && /摸 2 张/.test(e.text))).toBe(true);
     const snap = engine.snapshotFor('p0');
@@ -483,7 +483,7 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     expect(total(engine)).toBe(162);
   });
 
-  it('压腿：拼点落败保国摸 |点差| 张', () => {
+  it('压腿：拼点落败陈正摸 |点差| 张', () => {
     const hands = {
       p1: [...byRank(9, 4), pick(12, 1), pick(12, 2)],
       p0: byRank(10, 5),
@@ -497,7 +497,7 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
     expect(y.ok && y.events.some((e) => e.type === 'skill:triggered' && /拼点落败/.test(e.text) && /摸 10 张/.test(e.text))).toBe(true);
     const snap = engine.snapshotFor('p0');
     expect(snap.discardCount).toBe(2);
-    expect(snap.players[1]!.handCount).toBe(15); // 保国（p0 = players[1]）：5 + 10
+    expect(snap.players[1]!.handCount).toBe(15); // 陈正（p0 = players[1]）：5 + 10
     expect(total(engine)).toBe(162);
   });
 
@@ -513,7 +513,7 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
   it('亡语同场顺序：旺旺 → 五连鞭 → 压腿 → 巨石（≥5 张炸弹压楠王）', () => {
     const hands = {
       p0: [pick(3, 1), pick(10, 0), pick(10, 1), pick(10, 2), pick(10, 3)], // 楠王
-      p1: byRank(11, 5), // 保国
+      p1: byRank(11, 5), // 陈正
       p2: byRank(9, 5), // 5 张炸弹
       p3: byRank(6, 5), // 巨石
     };
@@ -554,19 +554,19 @@ describe('保国（见习/反力矩/五连鞭/压腿）', () => {
 
   it('罚站：不能被技能选为目标（引擎候选过滤）+ 罚站者自己的技能仍可用', () => {
     const hands = {
-      p0: [pick(3, 1), pick(10, 0), pick(10, 1), pick(10, 2), pick(10, 3)], // 保国
+      p0: [pick(3, 1), pick(10, 0), pick(10, 1), pick(10, 2), pick(10, 3)], // 陈正
       p1: byRank(11, 5), // 全选者
       p2: byRank(6, 5), // 全选者（被见习）
       p3: byRank(7, 5),
     };
     const engine = mkEngine(hands, { p0: baoGuo, p1: pickAll, p2: pickAll });
     jianXi(engine, 'p2'); // p2 罚站
-    // 保国反力矩候选不含罚站者（角色层过滤）
+    // 陈正反力矩候选不含罚站者（角色层过滤）
     const rf = engine.useSkillAction('p0', { skillId: 'fan-li-ju' });
     const rfAsk = rf.ok ? (rf.pendingAsk as SkillAsk) : null;
     expect(rfAsk?.targetCandidates).toEqual(['p1', 'p3']);
     expect(engine.resolveAsk('p0', { askId: rfAsk!.askId!, choice: 'decline' }).ok).toBe(true);
-    // 保国照常出牌 → 轮到 p1：其候选含 p2 但被引擎过滤
+    // 陈正照常出牌 → 轮到 p1：其候选含 p2 但被引擎过滤
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     const q1 = engine.useSkillAction('p1', { skillId: 'quan-xuan' });
     expect(q1.ok).toBe(true);

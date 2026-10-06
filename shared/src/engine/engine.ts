@@ -113,7 +113,7 @@ export class GameEngine {
   private activeBan = new Set<string>();
   /** 红楼梦（地坛）：本轮判定成功、下一轮生效的诅咒（被诅咒者 → 取而代之的诅咒者） */
   private pendingBan = new Map<string, string>();
-  /** 见习（保国）：本回合罚站不得出牌的玩家——出牌被拒、不能被技能选为目标；自己的技能仍可用（回合结束清除） */
+  /** 见习（陈正）：本回合罚站不得出牌的玩家——出牌被拒、不能被技能选为目标；自己的技能仍可用（回合结束清除） */
   private roundBanned = new Set<string>();
   private pendingEvents: GameEvent[] = [];
   private seq = 0;
@@ -348,7 +348,7 @@ export class GameEngine {
     const action = role?.skillActions?.find((a) => a.skillId === req.skillId);
     if (!role || !action) return fail('技能不存在');
     if (action.when === 'following' && !this.tableCombo) return fail('现在不能发动该技能');
-    // 见习/反力矩（保国）：只有拥有牌权（本回合起牌者）时才能发动
+    // 见习/反力矩（陈正）：只有拥有牌权（本回合起牌者）时才能发动
     if (action.onlyWhenLeader && this.roundLeaderId !== playerId) return fail('只有拥有牌权（起牌回合）时才能发动');
     const hook = role.hooks?.onSkillAction;
     if (!hook) return fail('技能无法发动');
@@ -494,7 +494,7 @@ export class GameEngine {
       tableRankNote: this.tableRankNote,
       /** 红楼梦（地坛）：被诅咒（含下一轮生效中）的玩家，界面展示标记 */
       cursedPlayerIds: [...new Set([...this.activeBan, ...this.pendingBan.keys()])],
-      /** 见习（保国）：本回合罚站不得出牌的玩家，界面展示标记 */
+      /** 见习（陈正）：本回合罚站不得出牌的玩家，界面展示标记 */
       roundBannedIds: [...this.roundBanned],
       /** 吐饼（R.F）：本手吃过饼、轮到自己且不能过（只能打 2/炸弹——客户端禁用「过」并提示） */
       pancakeNoPass:
@@ -574,7 +574,7 @@ export class GameEngine {
       this.roundLeaderId = leaderId;
       this.aftermathMode = 'normal';
       this.cutInVictimId = null;
-      this.roundBanned.clear(); // 见习（保国）罚站：只持续本回合，新一轮开始解除
+      this.roundBanned.clear(); // 见习（陈正）罚站：只持续本回合，新一轮开始解除
       this.orderFlipCount = 0; // 洄游：每轮恢复正序（隐匿在轮末结算读的是本轮的计数，清零发生在结算之后）
       // 先设 turnPlayerId：死锁守卫干跑 beforePlay 时技能能识别"自己起牌"
       this.turnPlayerId = leaderId;
@@ -798,9 +798,12 @@ export class GameEngine {
   }
 
   private runAfterPlayHooks(playerId: string, combo: Combo, index: number): ActionResult {
-    // 亡语门控（2026-10-05 用户定稿）：出牌者打完最后一张牌（出完即胜判定前），
+    // 亡语门控（2026-10-05 用户定稿 + 2026-10-06 追加）：出牌者打完最后一张牌（出完即胜判定前），
+    // 或吐饼获胜条件已满足（饼数 ≥ 手牌数，宣判前不再触发别人的技能），
     // 只有标注亡语（RoleDef.deathrattleHooks）的钩子可以触发；未标注的跳过——游戏直接结束
-    const finishing = !this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0;
+    const finishing =
+      (!this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0) ||
+      this.pancakeWinCandidate() !== null;
     const hooks = this.orderedHooks('afterPlay');
     for (let i = index; i < hooks.length; i++) {
       const entry = hooks[i]!;
@@ -829,9 +832,12 @@ export class GameEngine {
   }
 
   private runInterruptHooks(playerId: string, combo: Combo, index: number): ActionResult {
-    // 亡语门控（2026-10-05 用户定稿）：同上——打断钩子也是「打完牌以后」触发，
-    // 出牌者打光手牌时只有标注亡语的打断技能（旺旺/巨石）可以询问
-    const finishing = !this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0;
+    // 亡语门控（2026-10-05 用户定稿 + 2026-10-06 追加）：同上——打断钩子也是「打完牌以后」触发，
+    // 出牌者打光手牌、或吐饼获胜条件已满足（饼数 ≥ 手牌数）时，只有标注亡语的打断技能
+    // （旺旺/巨石/五连鞭/压腿）可以询问，非亡语（答疑等）不再触发
+    const finishing =
+      (!this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0) ||
+      this.pancakeWinCandidate() !== null;
     const hooks = this.orderedHooks('onPlayInterrupt');
     for (let i = index; i < hooks.length; i++) {
       const entry = hooks[i]!;
@@ -1598,22 +1604,29 @@ export class GameEngine {
    */
   private checkPancakeWin(): boolean {
     if (this.phase !== 'playing') return false;
+    const p = this.pancakeWinCandidate();
+    if (!p) return false;
+    this.emit({
+      type: 'skill:triggered',
+      playerId: p.id,
+      roleId: p.roleId,
+      skillId: 'tu-bing',
+      text: `【吐饼】${p.name} 饼数已达手牌数，直接宣布胜利！`,
+    });
+    this.finishGame(p.id);
+    return true;
+  }
+
+  /** 吐饼获胜候选（无副作用）：饼数 ≥ 手牌数的未淘汰 pancake 角色。
+   *  2026-10-06 用户定稿：条件一旦满足即宣判——亡语门控（runAfterPlayHooks/runInterruptHooks）
+   *  也用它：出牌后已满足获胜条件的，非亡语技能不再触发，亡语钩子照常先结算。 */
+  private pancakeWinCandidate(): EnginePlayer | null {
     for (const p of this.players) {
       if (this.eliminated.has(p.id)) continue;
       if (!this.roles.get(p.roleId)?.pancake) continue;
-      if ((this.pancakes.get(p.id)?.length ?? 0) >= (this.hands.get(p.id)?.length ?? 0)) {
-        this.emit({
-          type: 'skill:triggered',
-          playerId: p.id,
-          roleId: p.roleId,
-          skillId: 'tu-bing',
-          text: `【吐饼】${p.name} 饼数已达手牌数，直接宣布胜利！`,
-        });
-        this.finishGame(p.id);
-        return true;
-      }
+      if ((this.pancakes.get(p.id)?.length ?? 0) >= (this.hands.get(p.id)?.length ?? 0)) return p;
     }
-    return false;
+    return null;
   }
 
   // ---------- 翻牌展示区 ----------
@@ -1777,7 +1790,7 @@ export class GameEngine {
         engine.emit({ type: 'cards:revealed', playerId, cards, purpose });
       },
       playForcedCombo: (combo) => {
-        // 见习（保国）罚站：技能可用但不得打出（茄汤成炸等强制出牌在罚站中落空）
+        // 见习（陈正）罚站：技能可用但不得打出（茄汤成炸等强制出牌在罚站中落空）
         if (engine.roundBanned.has(playerId)) return;
         // 校验后走正常出牌提交流程（含 afterPlay/打断/获胜判定/插队问询）
         // 张数下限放宽为 1（茄汤一元炸/二元炸），上限不变
@@ -1806,7 +1819,7 @@ export class GameEngine {
       curseNextRound: (targetId) => engine.curseNextRound(playerId, targetId),
       peekHand: (targetId) => engine.peekHand(playerId, targetId),
       banPlayThisRound: (targetId) => {
-        // 见习（保国）：目标本回合罚站（不得出牌、不被技能选为目标；自己的技能仍可用）
+        // 见习（陈正）：目标本回合罚站（不得出牌、不被技能选为目标；自己的技能仍可用）
         if (!engine.eliminated.has(targetId)) engine.roundBanned.add(targetId);
       },
       isBannedThisRound: (id) => engine.roundBanned.has(id),
@@ -1839,8 +1852,30 @@ export class GameEngine {
     if (!this.tableCombo) return;
     if (!Number.isInteger(rank) || rank < RANK_3 || rank > RANK_A) return;
     // label 同步重写为改点后的牌型（快照里桌面主显新点数；实体牌不变）
-    this.tableCombo = relabelCombo(this.tableCombo, rank as Rank, this.orderReversed());
+    const combo = relabelCombo(this.tableCombo, rank as Rank, this.orderReversed());
+    this.tableCombo = combo;
     this.tableRankNote = { rank };
+    // 修勾×惰戈联动（2026-10-06 用户确认）：改判后的判定点数和 ≥20 → 这手牌归属惰戈（亢奋）。
+    // 间隔语义：改判发生在打出之后——「打出那一刻」生效的技能（洄游切换等）已照常触发、不撤销；
+    // 原出牌者仍算本回合出过牌。已归属（惰戈自己打出或打出时点数和已 ≥20）不重复改写。
+    const retaggable =
+      combo.type === 'pair' || combo.type === 'bomb' || combo.type === 'straight' || combo.type === 'consecutivePairs';
+    if (retaggable && this.retaggedPointSum(combo) >= 20) {
+      const owner = this.exciteOwnerExcept(this.tableOwnerId);
+      if (owner) this.attributeTable(owner);
+    }
+  }
+
+  /** 答疑改判后的判定点数和（口径同亢奋：2 记 2、A 记 1；对/炸 = 张数×点数；
+   *  顺子/连对 = 按改判起点展开的窗口逐张求和，倒序起点 = 最高点） */
+  private retaggedPointSum(combo: Combo): number {
+    if (combo.type === 'pair') return 2 * pointValue(combo.rank);
+    if (combo.type === 'bomb') return combo.length * pointValue(combo.rank);
+    const span = combo.type === 'straight' ? combo.length : combo.length / 2;
+    const start = this.orderReversed() ? combo.rank - span + 1 : combo.rank;
+    let sum = 0;
+    for (let i = 0; i < span; i++) sum += pointValue((start + i) as Rank);
+    return combo.type === 'consecutivePairs' ? 2 * sum : sum;
   }
 
   /** 地坛（橐驼）：诅咒目标玩家下一轮不得出牌（自动过、不能起牌/插队/狂吠）；
@@ -1884,7 +1919,7 @@ export class GameEngine {
   ): void {
     ask.askId = ask.askId ?? this.newAskId();
     ask.timeoutMs = ask.timeoutMs ?? this.cfg.timeout.skillAskMs;
-    // 见习（保国）罚站：被罚站的玩家不能被任何技能选为目标（2026-10-05 用户确认：不得被技能响应）
+    // 见习（陈正）罚站：被罚站的玩家不能被任何技能选为目标（2026-10-05 用户确认：不得被技能响应）
     if (ask.targetCandidates) {
       ask.targetCandidates = ask.targetCandidates.filter((id) => !this.roundBanned.has(id));
     }
@@ -1955,8 +1990,14 @@ export class GameEngine {
       }
     }
     if (!infinite && sum < 20) return null;
+    return this.exciteOwnerExcept(playerId);
+  }
+
+  /** 亢奋归属候选：惰戈中第一个未淘汰且不是 excludeId 的玩家（无则 null）。
+   *  答疑改判归属（retagTable）复用同一候选逻辑。 */
+  private exciteOwnerExcept(excludeId: string): string | null {
     for (const id of this.exciteOwners) {
-      if (id !== playerId && !this.eliminated.has(id)) return id;
+      if (id !== excludeId && !this.eliminated.has(id)) return id;
     }
     return null;
   }
@@ -1993,7 +2034,7 @@ export class GameEngine {
 
   /** 可合法响应的组合：基础可管且未被 beforePlay 干跑否决（技能否决后允许过） */
   private legalResponses(playerId: string): Combo[] {
-    // 见习（保国）罚站：不得出牌 → 视为无牌可管（允许过）
+    // 见习（陈正）罚站：不得出牌 → 视为无牌可管（允许过）
     if (this.roundBanned.has(playerId)) return [];
     // 响应限制（抽你）：非指定玩家视为无牌可管（允许过）
     if (this.tableResponderRestrict && playerId !== this.tableResponderRestrict) return [];

@@ -13,9 +13,9 @@ interface RoleDef {
   maxPerRoom?: number;        // 同一房间最多几人选，默认 1
   priority?: number;          // 钩子执行顺序：大者先，同优先级按座位序（确定性）
   hooks?: Partial<RoleHooks>; // 用到哪些钩子写哪些
-  deathrattleHooks?: (keyof RoleHooks)[]; // 亡语（2026-10-05 用户定稿）：出牌者打光手牌后仍可触发的钩子白名单。未标注的 afterPlay/onPlayInterrupt 钩子在打光那一刻被引擎跳过（游戏立即结束）。目前标注 ['onPlayInterrupt'] 的有楠王旺旺、雪灾巨石、保国（五连鞭+压腿）；除非用户明确说是亡语，否则不要标注
+  deathrattleHooks?: (keyof RoleHooks)[]; // 亡语（2026-10-05 用户定稿）：出牌者打光手牌后仍可触发的钩子白名单。未标注的 afterPlay/onPlayInterrupt 钩子在打光那一刻被引擎跳过（游戏立即结束）。目前标注 ['onPlayInterrupt'] 的有楠王旺旺、雪灾巨石、陈正（五连鞭+压腿）；除非用户明确说是亡语，否则不要标注
   setup?(ctx: RoleSetupContext): unknown; // 角色私有状态：JSON 安全，随快照同步
-  skillActions?: SkillActionDef[]; // 客户端技能按钮：{ skillId, when:'myTurn'|'following', onlyWhenLeader?, label }，通用渲染。onlyWhenLeader（保国见习/反力矩）：只有拥有牌权（本回合起牌者）时按钮可用、引擎同样校验
+  skillActions?: SkillActionDef[]; // 客户端技能按钮：{ skillId, when:'myTurn'|'following', onlyWhenLeader?, label }，通用渲染。onlyWhenLeader（陈正见习/反力矩）：只有拥有牌权（本回合起牌者）时按钮可用、引擎同样校验
   canCutIn?: boolean;         // 可插队响应（无名）——引擎提供插队机制，角色只挂标志；加牌 X = 响应牌中与被压牌同花色的真牌点数总和（点数 = 牌面点数：2 记 2、A 记 1、J=11、Q=12、K=13，2026-10-06 用户确认；王不参与），引擎 matchSuitDrawX 统一计算；被亢奋归属改写的手（roundLastPlayerId 不再是无名）不触发加牌（引擎按 owner 的 canCutIn 守卫）
   canSelfFollow?: boolean;    // 出牌后立刻压自己打出的牌，可连压到放弃/压不了（修勾狂吠）——引擎在出牌后询问（selfFollow ask），角色只挂标志；留 X 禁止收尾与插队同一套过滤
   flipsOrderOnPlay?: boolean; // 每次出牌（含插队，按物理出牌者计）切换一次牌序正↔倒（海棠洄游）；每轮开始恢复正序。挂上后引擎自动：本手按切换前顺序判定（先判后切）、切换后把桌面牌型按新牌序重新解析（倒序 rank = 最高点数，保证跨序比较用同一约定）、快照携带 orderReversed
@@ -24,7 +24,7 @@ interface RoleDef {
   exciteOnPlay?: boolean;    // 亢奋（惰戈，锁定技无需询问）：点数和 ≥20 的手牌在打出那一刻归属改写为自己——引擎在四个提交路径（commitPlay/commitFlipPlay/commitSelfFollow/commitCutIn）开头自动改写：exciteOwnerFor 判定（点数和 = 牌面点数 2 记 2/A 记 1/J=11/Q=12/K=13，王按所当点数，单王/对王视为无穷；自己淘汰或自己打出 → null）→ 若有效则不触发实际出牌者的 flipsOrderOnPlay 切换、attributeTable(effOwner) 发 table:attributed。适用于一切打出（正常出牌/插队/狂吠连压/翻面接/茄汤强制）；接牌轮转从归属者下家继续（原出牌者不跳过）、判定（巨石/地坛等）对归属者生效、轮末牌权归归属者、打完按物理出牌者获胜；插队受害者仍是归属改写前捕获的旧桌面所有者
   doubleSupply?: boolean;    // 两倍（玊，锁定技无需询问）：初始手牌、手牌上限、所有从牌堆的摸牌数量 ×2——统一在 rawDraw 内翻倍（发牌/轮末补摸/一切技能摸牌全走 rawDraw：初始手牌先手 6×2=12、其余 5×2=10）；checkHandLimit 上限同样 ×2（20×2=40，超出照常淘汰）；拿回特定牌（takeRevealed）与别人给牌（giveRevealed）不走 rawDraw、不翻倍（2026-10-04 用户确认）
   ouYa?: boolean;            // 呕哑（玊，校验层放行、无需询问）：轮到自己接牌时，可打出包含桌面那一手牌全部实际点数的任意合法牌型、无视管牌规则——playCards 校验层 ouYaLegal = ouYaCovers(combo, tableCombo)（combos.ts：按实体牌判定 table.resolved 逐张实际所当点数，答疑改点不改实体、与巨石同口径；王按所当点数；单王/对王桌面 resolved 无穷无实际点数 → 空集不可发动；起牌无桌面不可发动）；其余流程（获胜/判定/插队/留 X 禁止收尾）照常；无次数限制
-  pancake?: boolean;         // 吐饼（R.F，特殊响应但**不算出牌**）：任何人每次出牌后（物理出牌者 ≠ R.F，含插队/狂吠每手/翻面接；归属改写不改物理出牌者）最先询问 R.F——先于狂吠/插队，每手限问一次、无上限；可「吃饼」：①自选一组恰好接上的牌公开亮出（留在手中，cards:revealed purpose 吐饼亮牌）→ ② rawDraw N（N=桌面张数，手牌上限淘汰照常）→ ③ 自选 N 张倒置成饼（pancake:flipped 只公开张数、永久牌背、任何人不可看不可用）；饼数 ≥ 手牌数 → 立即获胜——**2026-10-06 用户定稿：不看来因、除非有亡语**：引擎统一 checkPancakeWin 在所有结算点判定（出牌收尾 afterPlayCommitted（打断钩子含亡语已全部结算完，亡语先于获胜判定）/吃饼倒置 finishPancake/主动技 finishSkillAction/回合开始钩子 runTurnStartHooks/轮末钩子 runRoundEndHooks/过牌 pass）；**他人打完手牌的获胜判定先于吃饼询问**（afterPlayCommitted 获胜判定在前）。恰好接上 = 同型同长且 rank 恰差一级（正序 +1、倒序 −1）：A↔2 自然衔接、2 压非 A 不算；炸弹同张数差一级才算；单王/对王/首席 Q 压一切类不算；王按所当点数；顺子/连对按起点 rank 差一级。牌权不变、轮末起牌权归吃饼者（provisionalLeadId）；吃饼不消耗响应，轮到他时只能打 2（倒序 3）/炸弹、无则自动过；首席 Q 压一切特判：桌面单 Q + roundLastPlayerId 是首席 + prevTableCombo 非单 J → 不询问
+  pancake?: boolean;         // 吐饼（R.F，特殊响应但**不算出牌**）：任何人每次出牌后（物理出牌者 ≠ R.F，含插队/狂吠每手/翻面接；归属改写不改物理出牌者）最先询问 R.F——先于狂吠/插队，每手限问一次、无上限；可「吃饼」：①自选一组恰好接上的牌公开亮出（留在手中，cards:revealed purpose 吐饼亮牌）→ ② rawDraw N（N=桌面张数，手牌上限淘汰照常）→ ③ 自选 N 张倒置成饼（pancake:flipped 只公开张数、永久牌背、任何人不可看不可用）；饼数 ≥ 手牌数 → 立即获胜——**2026-10-06 用户定稿：不看来因、除非有亡语**：引擎统一 checkPancakeWin 在所有结算点判定（出牌收尾 afterPlayCommitted（打断钩子含亡语已全部结算完，亡语先于获胜判定）/吃饼倒置 finishPancake/主动技 finishSkillAction/回合开始钩子 runTurnStartHooks/轮末钩子 runRoundEndHooks/过牌 pass）；**他人打完手牌的获胜判定先于吃饼询问**（afterPlayCommitted 获胜判定在前）；**出牌后已满足条件的，亡语门控同步生效**——非亡语钩子（答疑等）不再触发、直接宣判（2026-10-06 用户追加）。恰好接上 = 同型同长且 rank 恰差一级（正序 +1、倒序 −1）：A↔2 自然衔接、2 压非 A 不算；炸弹同张数差一级才算；单王/对王/首席 Q 压一切类不算；王按所当点数；顺子/连对按起点 rank 差一级。牌权不变、轮末起牌权归吃饼者（provisionalLeadId）；吃饼不消耗响应，轮到他时只能打 2（倒序 3）/炸弹、无则自动过；首席 Q 压一切特判：桌面单 Q + roundLastPlayerId 是首席 + prevTableCombo 非单 J → 不询问
   greedy?: boolean;          // 贪婪（阿摩，锁定技无需询问）：初始手牌 = 2×全场人数（含自己，先手/后手相同、不遵循先手 +1，deal 时按 activeCount ×2 发）；手牌上限 30（checkHandLimit 特判，超出照常淘汰）；每次普通主动出牌后从牌堆摸 1 张（afterPlayCommitted 内、tableOwnerId === playerId 时——归属改写后 tableOwnerId 是惰戈故不摸；再问补打走 playSideCard 不经 playCards 管线、从不触发；**打完最后一张先判获胜不摸**——获胜判定在前；插队/狂吠/翻面接等技能出牌不触发）
   yaoWu?: boolean;           // 耀武（阿摩，锁定技无需询问）：手牌含 3~A~2 全部 13 个点数（rank 3~15）→ 立即获胜（checkYaoWu 纯函数，combos.ts，王补缺——每张王补一个缺的点数、仅此判定视作任意点数）；**每次手牌变化后立即判定**：发牌（start deal 后）/摸牌（rawDraw 后）/收牌（moveRevealedToHand 后）/别人给牌（giveTo 后），均以 phase === 'playing' 守卫，满足即 finishGame（finishGame 守卫防重复计分）
 }
@@ -40,7 +40,7 @@ interface RoleDef {
 | `afterPlay(ctx, played)` | 出牌后 | 任意 modify |
 | `onPlayInterrupt(ctx, played)` | 出牌提交后、**获胜判定前**（驱逐类优先于获胜，如巨石；**亡语**——有人打完手牌仍可在此拦截阻止立即获胜，如楠王旺旺：判定成功给压牌者摸牌 → 手牌非空 → 获胜自然取消） | 可返回 ask 挂起 |
 
-**亡语门控（2026-10-05 用户定稿，★ 写「打完牌后」类钩子必读）**：只有角色标注 `deathrattleHooks?: (keyof RoleHooks)[]` 的钩子可以在「有人打完最后一张牌」后触发；**未标注的钩子在打光那一刻引擎直接跳过（游戏立即结束）**——询问/改判/加牌/播报一律不触发。引擎在 runAfterPlayHooks/runInterruptHooks 对出牌者手牌为 0（未淘汰）时做此门控。目前标注亡语的有楠王旺旺、雪灾巨石、保国（五连鞭+压腿）（均为 `deathrattleHooks: ['onPlayInterrupt']`）；楠王回味（afterPlay）、修勾答疑、橐驼地坛、惰戈法音、阿色再问（其钩子内部原本就有手牌守卫，与全局规则一致）均不标注。**新角色的 afterPlay/onPlayInterrupt 钩子：除非用户明确说是亡语，否则不要标注——打光即结束。** 同场多个亡语 onPlayInterrupt 按 priority 降序执行（用户定稿：旺旺 100 → 保国 90 → 巨石 0）。
+**亡语门控（2026-10-05 用户定稿，★ 写「打完牌后」类钩子必读）**：只有角色标注 `deathrattleHooks?: (keyof RoleHooks)[]` 的钩子可以在「有人打完最后一张牌」后触发；**未标注的钩子在打光那一刻引擎直接跳过（游戏立即结束）**——询问/改判/加牌/播报一律不触发。引擎在 runAfterPlayHooks/runInterruptHooks 对出牌者手牌为 0（未淘汰）时做此门控。目前标注亡语的有楠王旺旺、雪灾巨石、陈正（五连鞭+压腿）（均为 `deathrattleHooks: ['onPlayInterrupt']`）；楠王回味（afterPlay）、修勾答疑、橐驼地坛、惰戈法音、阿色再问（其钩子内部原本就有手牌守卫，与全局规则一致）均不标注。**新角色的 afterPlay/onPlayInterrupt 钩子：除非用户明确说是亡语，否则不要标注——打光即结束。** 同场多个亡语 onPlayInterrupt 按 priority 降序执行（用户定稿：旺旺 100 → 陈正 90 → 巨石 0）。**门控同样覆盖吐饼获胜（2026-10-06 用户追加）**：出牌后已满足「饼数 ≥ 手牌数」（`pancakeWinCandidate()`，无副作用判定）的，非亡语钩子同样跳过、直接宣判获胜；亡语钩子照常先结算（亡语摸牌使条件不成立则取消获胜）。
 | `onPass(ctx)` | 过牌 | 任意 modify |
 | `onDraw(ctx, n)` | 摸牌（n=本次摸牌数） | `drawBonus` |
 | `onRoundEnd(ctx, lastPlayerId)` | 一轮结束（lastPlayerId=最后出牌者，牌权所在） | 可返回 ask 挂起（黑脸/观股）；`suppressDraw` 替代摸牌 |
@@ -136,7 +136,7 @@ interface ActionMods {
   - `playSideCard(playerId, cardId)`（**明置桌旁**，阿色再问补打：从手牌移除一张明置到桌旁，公开进快照 `tableSide`，随当前一手牌一起弃置；压牌者作答时用它，`handOf` 校验 + 自己校验合规性）
   - `discardFromHand(playerId, cardIds)`（**静默弃置手牌**，海棠隐匿重铸：从手牌移除进弃牌堆，不发事件——快照 discardCount 与 announce 播报覆盖 UI；角色自行保证合法）
   - `curseNextRound(playerId)`（**下回合禁出**，橐驼地坛：目标陷入红楼梦——本回合标记（快照 `cursedPlayerIds` 立即可见），**回合结束时生效**：下一整回合（轮）内不能起牌/响应/插队/狂吠/补打（轮到自动过、照常摸牌、仍可被技能询问作答），再下一回合开始时解除；若目标在本回合获得牌权（轮末最后出牌者），**由诅咒施加者取而代之**：施加者摸牌 + 起新回合，目标不摸（round:ended 事件带 `ledBy`））
-  - `banPlayThisRound(playerId)` / `isBannedThisRound(id)`（**本回合罚站**，保国见习：目标当回合不得出牌（playCards 校验拒绝）、不被任何技能选为目标——引擎在 suspend 处对所有 ask 的 `targetCandidates` 统一过滤罚站者（快照 `roundBannedIds`）；罚站者自己的技能仍可用（useSkillAction 不拦）；轮末（新回合开始）自动解除。与地坛诅咒是两条平行机制：罚站只限本回合、诅咒限下一整回合）
+  - `banPlayThisRound(playerId)` / `isBannedThisRound(id)`（**本回合罚站**，陈正见习：目标当回合不得出牌（playCards 校验拒绝）、不被任何技能选为目标——引擎在 suspend 处对所有 ask 的 `targetCandidates` 统一过滤罚站者（快照 `roundBannedIds`）；罚站者自己的技能仍可用（useSkillAction 不拦）；轮末（新回合开始）自动解除。与地坛诅咒是两条平行机制：罚站只限本回合、诅咒限下一整回合）
 
 未来需要新的改牌能力 = 在 ActionMods / facade 加一个字段，不动引擎核心。
 
@@ -192,7 +192,7 @@ export default zecheng;
 | zecheng.ts | 末席 肖亡 | 观股 | onRoundEnd ask + revealTop + giveRevealed + suppressDraw |
 | captain.ts | 阿色 | 抽你 + 再问 | beforePlay/afterPlay/onRoundEnd 多阶段 ask + 响应限制 + 归属改写 + 明置边牌 |
 | fishy.ts | 海棠 | 洄游 + 隐匿 | flipsOrderOnPlay 引擎级牌序切换（含插队）+ onRoundEnd ask(priority 1000 先于整备类) + discardFromHand 重铸 |
-| doggie.ts | 修勾 | 答疑 + 狂吠 | onPlayInterrupt ask(choice 点数，顺子/连对选项限合法起点窗口) + retagTable 改判定点（label 经 relabelCombo 重写主显） + canSelfFollow 引擎级狂吠 |
+| doggie.ts | 修勾 | 答疑 + 狂吠 | onPlayInterrupt ask(choice 点数，顺子/连对选项限合法起点窗口) + retagTable 改判定点（label 经 relabelCombo 重写主显；**2026-10-06 用户确认：改判后判定点数和 ≥20 → attributeTable 归属惰戈**（retaggedPointSum：对/炸 = 张数×点数、顺子/连对按改判窗口逐张求和；间隔语义——洄游等打出那一刻技能不撤销、已归属不重复改写）） + canSelfFollow 引擎级狂吠 |
 | guo-tt.ts | 橐驼 | 地坛 + 诅咒 | onPlayInterrupt ask(confirm 判定，≥3 张、仅他人、每回合限一次：弃权不消耗/失败消耗) + revealTop/discardRevealed + curseNextRound 下回合禁出（轮末取而代之）+ soloJoker 引擎级单王/对王；判定中的王按颜色双花色（打出的牌里与翻出的判定牌都算，见 cards.ts `jokerSuits`） |
 | king-nan.ts | 楠王 | 旺旺 + 回味 | onPlayInterrupt ask(confirm 亡语判定：翻牌非红桃 → 压牌者摸 3，打光手牌也无法获胜——打断钩子跑在获胜判定前即亡语；`prevTableOwnerId()` === 自己时触发；每回合限一次：弃权不消耗/发动即消耗；判定牌一律弃置；王按 `jokerSuits` 双花色；priority 100 先于巨石——2026-10-03 用户确认) + afterPlay 锁定回味（`prevTableOwnerId()` 被压者摸牌：点数总和差绝对值封顶 3，`pointValue` 2 记 2/A 记 1、单王/对王视为无穷）+ onRoundEnd 重置 |
 | button.ts | 轴承 | 端庄 + 窃笑 | canFlipResponse 引擎级翻面接牌（validateFlipResponse 纯函数：桌面单张翻整手接上一手 / 桌面多张翻一张按剩余接，非法剩余打后继或炸弹，后继桌面 type 'gap' 只有炸弹能压；翻面牌 tableSide 牌背展示）+ onSkillAction 主动技（pickTarget ask，每轮一次弃权不消耗，经 facade `peekHand` 发私密事件 skill:peek/skill:peeked——服务端按人路由不广播）+ onRoundEnd 重置 |
@@ -200,7 +200,7 @@ export default zecheng;
 | su.ts | 玊 | 两倍 + 呕哑 | 纯标志角色（无钩子、无 setup）：doubleSupply 引擎级发牌/摸牌/上限 ×2（rawDraw 内统一翻倍，拿回/别人给牌不翻倍）+ ouYa 引擎级校验放行（ouYaCovers 按实体点数判定，无视管牌规则；客户端预览同函数复用显金色提示） |
 | rf.ts | R.F | 吐饼 | pancake 引擎级吃饼询问（PendingAsk kind 'pancake'，resolvePancake 两阶段 pickCards：亮牌 → 倒饼，decline/超时干净作废、倒置阶段自动倒前 N 张）：每次出牌后最先询问（先于狂吠/插队）、特殊响应不算出牌（不触发洄游/归属改写）、恰好接上（同型同长 rank ±1、倒序 −1）判定走引擎 canExactFollow；吃饼后限制（无牌权时只能打 2/倒序 3 或炸弹、无则自动过）、轮末起牌权走 provisionalLeadId；饼数 ≥ 手牌数立即获胜（2026-10-06 用户定稿：不看来因、除非有亡语——引擎统一 checkPancakeWin 在所有结算点判定：出牌收尾 afterPlayCommitted（亡语已结算完）/吃饼倒置/主动技/回合开始钩子/轮末钩子/过牌）；首席 Q 特判排除 |
 | amo.ts | 阿摩 | 贪婪 + 耀武 | 纯标志角色（无钩子、无 setup）：greedy 引擎级发牌 ×2/上限 30/出牌后摸 1（afterPlayCommitted、归属改写与再问补打不算、打完先判获胜）+ yaoWu 引擎级耀武判定（checkYaoWu 纯函数王补缺，发牌/摸牌/收牌/别人给牌四个检查点立即获胜）；牌堆耗尽洗回弃牌堆（recycleDiscard）为全局规则、所有摸牌生效 |
-| bao-guo.ts | 保国 | 见习 + 反力矩 + 五连鞭 + 压腿（四技能） | onSkillAction 主动技见习（onlyWhenLeader；pickTarget→私摸 2 张暗交 1，每局限 X+2 次弃权不消耗、不能连续两回合同一人）+ banPlayThisRound 罚站（目标不得出牌、不被技能选为目标、自己的技能照常可用，轮末解除）+ onTurnStart 被动反力矩（牌权被抢 confirm→pickTarget→双方暗选各 1 张 revealTop 公开拼点：保国 +2、平局算输，赢则两张拼点牌都归对方+自弃 1 张、输则全得，手牌 ≥3 才能发动）+ onPlayInterrupt 亡语五连鞭（打出一手 ≥5 张含自己/插队/狂吠每一手/翻面接/茄汤强制、吃饼不算：出牌者摸 1）+ onPlayInterrupt 亡语压腿（仅他人炸弹：双方各 revealTop 1 公开拼点，败方摸 |点差|、两张拼点牌一律弃置、牌堆+弃牌堆都空不询问；拼点通用 contestPoint 王=14/A=1/2=2/其余牌面，priority 90：旺旺 100 → 五连鞭 → 压腿 → 巨石 0） |
+| bao-guo.ts | 陈正 | 见习 + 反力矩 + 五连鞭 + 压腿（四技能） | onSkillAction 主动技见习（onlyWhenLeader；pickTarget→私摸 2 张暗交 1，每局限 X+2 次弃权不消耗、不能连续两回合同一人）+ banPlayThisRound 罚站（目标不得出牌、不被技能选为目标、自己的技能照常可用，轮末解除）+ onTurnStart 被动反力矩（牌权被抢 confirm→pickTarget→双方暗选各 1 张 revealTop 公开拼点：陈正 +2、平局算输，赢则两张拼点牌都归对方+自弃 1 张、输则全得，手牌 ≥3 才能发动）+ onPlayInterrupt 亡语五连鞭（打出一手 ≥5 张含自己/插队/狂吠每一手/翻面接/茄汤强制、吃饼不算：出牌者摸 1）+ onPlayInterrupt 亡语压腿（仅他人炸弹：双方各 revealTop 1 公开拼点，败方摸 |点差|、两张拼点牌一律弃置、牌堆+弃牌堆都空不询问；拼点通用 contestPoint 王=14/A=1/2=2/其余牌面，priority 90：旺旺 100 → 五连鞭 → 压腿 → 巨石 0） |
 
 ## 新增角色的流程（每个角色照此执行）
 

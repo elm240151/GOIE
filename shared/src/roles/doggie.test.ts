@@ -6,6 +6,7 @@ import { GameEngine, type EnginePlayer } from '../engine/engine';
 import { mulberry32 } from '../engine/rng';
 import type { RoleDef, RoleRegistry, SkillAsk } from './types';
 import doggie from './doggie';
+import duoGe from './duo-ge';
 import fishy from './fishy';
 import yyXue from './yy-xue';
 
@@ -237,6 +238,91 @@ describe('修勾（答疑）', () => {
     expect(r3.ok && r3.suspended).toBe(false); // 本回合已答疑过
     const snap3 = engine.snapshotFor('p0');
     expect(snap3.tableRankNote).toBeNull(); // 换桌清除
+  });
+
+  it('修勾×惰戈联动（2026-10-06 用户确认）：改判点数和 ≥20 → 这手牌归属惰戈（对7 改按 10 = 20 点）', () => {
+    const hands = {
+      p0: [...byRank(7, 2), ...byRank(3, 3)], // 修勾：对7 + 兜底
+      p1: [...byRank(4, 5)], // 惰戈：压不了改判后对10 的散牌
+    };
+    const engine = mkEngine(hands, { p0: doggie, p1: duoGe });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id]); // 对7（实体 14 点 <20 不归属）
+    expect(r.ok && r.suspended).toBe(true);
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect(ask?.kind).toBe('choice');
+    expect(r.ok && r.events.some((e) => e.type === 'table:attributed')).toBe(false); // 实体 14 点 <20，改判前不归属
+    const a = engine.resolveAsk('p0', { askId: ask!.askId!, choice: '10' }); // 改判 10 → 10+10=20
+    expect(a.ok).toBe(true);
+    const snap = engine.snapshotFor('p1');
+    expect(snap.table?.rank).toBe(10); // 改点生效
+    expect(snap.turnPlayerId).toBe('p0'); // 归属惰戈：轮转从惰戈下家（修勾）继续
+    expect(
+      a.ok &&
+        a.events.some(
+          (e) => e.type === 'table:attributed' && e.playerId === 'p1' && (e as { fromPlayerId: string }).fromPlayerId === 'p0'
+        )
+    ).toBe(true);
+    // 修勾过（压不了对10）→ 轮末（2 人局其余全过）→ 惰戈（最后出牌者）摸 1 起新轮
+    expect(engine.pass('p0').ok).toBe(true);
+    expect(engine.snapshotFor('p0').roundLeaderId).toBe('p1');
+  });
+
+  it('改判点数和 <20 不归属（对7 改按 9 = 18 点）；打出时已 ≥20 的改判后不重复改写', () => {
+    // 情况一：对7 改按 9 → 9+9=18 <20 → 归属不变
+    const h1 = {
+      p0: [...byRank(7, 2), ...byRank(3, 3)], // 修勾
+      p1: [...byRank(4, 5)], // 惰戈
+    };
+    const e1 = mkEngine(h1, { p0: doggie, p1: duoGe });
+    const r1 = e1.playCards('p0', [h1.p0[0]!.id, h1.p0[1]!.id]);
+    const a1 = e1.resolveAsk('p0', { askId: (r1.ok ? (r1.pendingAsk as SkillAsk) : null)!.askId!, choice: '9' });
+    expect(a1.ok).toBe(true);
+    expect(a1.ok && a1.events.some((e) => e.type === 'table:attributed')).toBe(false); // 9+9=18 <20 不归属
+    // 情况二：对K 打出时点数和 26 已 ≥20 → 打出那一刻已归属惰戈；改判 10 后仍归属惰戈（不撤销）
+    const h2 = {
+      p0: [...byRank(13, 2), ...byRank(3, 3)], // 修勾：对K
+      p1: [...byRank(4, 5)], // 惰戈
+    };
+    const e2 = mkEngine(h2, { p0: doggie, p1: duoGe });
+    const r2 = e2.playCards('p0', [h2.p0[0]!.id, h2.p0[1]!.id]);
+    const fask = r2.ok ? (r2.pendingAsk as SkillAsk) : null;
+    expect(fask?.kind).toBe('confirm'); // 打出那一刻已归属 → 法音（按惰戈出的牌判定）先问
+    const d2 = e2.resolveAsk('p1', { askId: fask!.askId!, choice: 'decline' }); // 弃权法音
+    const ask2 = d2.ok ? (d2.pendingAsk as SkillAsk) : null;
+    expect(ask2?.kind).toBe('choice'); // 答疑接着问
+    const a2 = e2.resolveAsk('p0', { askId: ask2!.askId!, choice: '10' });
+    expect(a2.ok).toBe(true);
+    const attrs = [...(d2.ok ? d2.events : []), ...(a2.ok ? a2.events : [])].filter(
+      (e) => e.type === 'table:attributed'
+    );
+    expect(attrs.length).toBe(1); // 打出那一刻归属一次；改判已归属不重复改写
+    expect(attrs[0]!.playerId).toBe('p1');
+    expect(attrs[0]!.fromPlayerId).toBe('p0');
+    expect(e2.snapshotFor('p1').turnPlayerId).toBe('p0'); // 轮转从惰戈下家继续
+  });
+
+  it('间隔语义（2026-10-06 用户确认）：改判归属不撤销洄游切换；海棠出过牌 → 轮末隐匿不重铸', () => {
+    const hands = {
+      p0: [...byRank(7, 2), ...byRank(3, 3)], // 海棠：对7 + 兜底（倒序下压不了改判对10）
+      p1: [...byRank(4, 5)], // 修勾：兜底散牌
+      p2: [...byRank(5, 5)], // 惰戈：兜底散牌
+    };
+    const engine = mkEngine(hands, { p0: fishy, p1: doggie, p2: duoGe });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id]); // 海棠起对7 → 洄游切倒序
+    expect(engine.snapshotFor('p2').orderReversed).toBe(true);
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect(ask?.kind).toBe('choice'); // 修勾答疑（倒序对子选项 3~A）
+    const a = engine.resolveAsk('p1', { askId: ask!.askId!, choice: '10' }); // 改判 10 → 归属惰戈
+    expect(a.ok).toBe(true);
+    const snap = engine.snapshotFor('p2');
+    expect(snap.orderReversed).toBe(true); // 洄游「打出那一刻」已切换，不撤销
+    expect(snap.turnPlayerId).toBe('p0'); // 归属惰戈：轮转从惰戈下家（海棠）继续
+    // 海棠过（兜底压不了倒序对10）→ 修勾过 → 轮末（其余全过）→ 惰戈（最后出牌者）起牌
+    expect(engine.pass('p0').ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true);
+    const snap2 = engine.snapshotFor('p0');
+    expect(snap2.roundLeaderId).toBe('p2'); // 轮末牌权归惰戈
+    expect(snap2.pendingAsk).toBeNull(); // 海棠本回合出过牌（起对7）→ 隐匿不询问重铸
   });
 });
 

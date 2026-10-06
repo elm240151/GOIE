@@ -9,6 +9,7 @@ import captain from './captain';
 import doggie from './doggie';
 import duoGe from './duo-ge';
 import fishy from './fishy';
+import kingNan from './king-nan';
 import rf from './rf';
 import skywalker from './skywalker';
 import type { RoleDef, RoleRegistry, SkillAsk } from './types';
@@ -261,6 +262,78 @@ describe('兰登·费夫 R.F：吐饼', () => {
     expect(snap.phase).toBe('finished');
     expect(snap.winnerId).toBe('p1');
     expect(totalCards(engine)).toBe(162); // 饼参与守恒
+  });
+
+  it('出牌后已满足饼 ≥ 手牌 → 直接宣判获胜，不再触发非亡语技能（答疑被触发是 bug，2026-10-06 用户实机发现）', () => {
+    const hands = {
+      p0: byRank(5, 5), // 起对5（留 3 张兜底，避免出完即胜抢跑）
+      p1: [pick(6, 0), pick(6, 1), pick(9, 0)], // R.F：对6 恰好接对5 + 单9
+      p2: byRank(3, 5), // 修勾：压不了对5 的杂牌
+    };
+    const engine = mkEngine(hands, { p1: rf, p2: doggie });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id]);
+    const da = askOf(r);
+    expect(da?.kind).toBe('choice'); // 对子是答疑可改判牌型 → 修勾先被问（此时 R.F 饼 0 < 手牌 3，未满足获胜条件）
+    const d = engine.resolveAsk('p2', { askId: da!.askId!, choice: 'decline' }); // 修勾弃权答疑
+    const ask = askOf(d); // 弃权答疑后轮到吃饼询问
+    const a1 = engine.resolveAsk('p1', { askId: ask!.askId!, choice: 'yes' });
+    const pick1 = askOf(a1);
+    const a2 = engine.resolveAsk('p1', { askId: pick1!.askId!, cardIds: [hands.p1[0]!.id, hands.p1[1]!.id] });
+    const pick2 = askOf(a2);
+    const a3 = engine.resolveAsk('p1', { askId: pick2!.askId!, cardIds: [pick2!.cards![3]!.id, pick2!.cards![4]!.id] });
+    expect(a3.ok).toBe(true);
+    expect(pancakeOf(engine, 'p1')).toBe(2);
+    expect(handOf(engine, 'p1')).toBe(3);
+    // R.F 自动过（无 2/炸弹）→ 修勾过 → 轮末 R.F 起牌摸 1 → 主动出对6 → 手牌 2 = 饼 2
+    expect(engine.pass('p2').ok).toBe(true);
+    expect(engine.snapshotFor('p1').roundLeaderId).toBe('p1');
+    const r2 = engine.playCards('p1', [hands.p1[0]!.id, hands.p1[1]!.id]); // 对子：答疑本会询问
+    expect(r2.ok).toBe(true);
+    expect(askOf(r2)).toBeNull(); // 已满足获胜条件 → 修勾答疑（非亡语）不再触发
+    const snap = engine.snapshotFor('p1');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p1');
+    expect(totalCards(engine)).toBe(162);
+  });
+
+  it('已满足饼 ≥ 手牌时亡语（旺旺）照常先结算：弃权判定后获胜', () => {
+    const hands = {
+      p0: [pick(5, 0), pick(5, 1), ...byRank(7, 3)], // 楠王：起对5 + 3 张兜底
+      p1: byRank(3, 5), // 修勾：杂牌（压不了对5，答疑在对2 时本会询问）
+      p2: [pick(6, 0), pick(6, 1), pick(15, 0), pick(15, 1)], // R.F：对6 恰好 + 对2（2 的编码是 15）
+    };
+    const engine = mkEngine(hands, { p0: kingNan, p1: doggie, p2: rf });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id]); // 楠王起对5
+    const da = askOf(r);
+    expect(da?.kind).toBe('choice'); // 对子是答疑可改判牌型 → 修勾先被问（此时 R.F 饼 0 < 手牌 4，未满足获胜条件）
+    const d = engine.resolveAsk('p1', { askId: da!.askId!, choice: 'decline' }); // 修勾弃权答疑
+    const ask = askOf(d);
+    expect(ask?.kind).toBe('confirm'); // R.F 对6 恰好 → 吃饼
+    const a1 = engine.resolveAsk('p2', { askId: ask!.askId!, choice: 'yes' });
+    const pick1 = askOf(a1);
+    const a2 = engine.resolveAsk('p2', { askId: pick1!.askId!, cardIds: [hands.p2[0]!.id, hands.p2[1]!.id] });
+    const pick2 = askOf(a2);
+    expect(pick2?.cards?.length).toBe(6); // 4 + 摸 2
+    const a3 = engine.resolveAsk('p2', { askId: pick2!.askId!, cardIds: [pick2!.cards![4]!.id, pick2!.cards![5]!.id] });
+    expect(a3.ok).toBe(true);
+    expect(pancakeOf(engine, 'p2')).toBe(2);
+    expect(handOf(engine, 'p2')).toBe(4);
+    // 楠王（桌面 owner）自动过 → 修勾过 → R.F 吃过饼不能过、有对2 必须打 → 压楠王对5
+    expect(engine.snapshotFor('p2').turnPlayerId).toBe('p1');
+    expect(engine.pass('p1').ok).toBe(true);
+    const r2 = engine.playCards('p2', [hands.p2[2]!.id, hands.p2[3]!.id]); // 对2：手牌 2 = 饼 2
+    expect(r2.ok).toBe(true);
+    const ww = askOf(r2);
+    expect(ww?.kind).toBe('confirm'); // 亡语旺旺照常询问（压的是楠王的牌）
+    expect(ww?.prompt).toContain('旺旺');
+    expect(ww?.prompt).not.toContain('答疑'); // 非亡语的答疑不询问
+    // 弃权判定 → 手牌不变 → 条件仍满足 → 宣判获胜
+    const done = engine.resolveAsk('p0', { askId: ww!.askId!, choice: 'decline' });
+    expect(done.ok).toBe(true);
+    const snap = engine.snapshotFor('p2');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p2');
+    expect(totalCards(engine)).toBe(162);
   });
 
   it('他人技能致手牌减少也触发获胜：法音弃牌（2026-10-06 用户定稿：不看来因，除非有亡语）', () => {

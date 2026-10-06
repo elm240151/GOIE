@@ -1,18 +1,18 @@
-// 角色：保国（引路者·马场之王）—— 四技能角色：【见习】【反力矩】【五连鞭】【压腿】。
-// 【见习】主动技（每局限 X+2 次，X = 人数）：保国起牌的回合（拥有牌权时）可指定一人见习：
-//   保国私摸 2 张、暗交其中 1 张给目标（另 1 张留自己），目标本回合罚站——不得出牌、
+// 角色：陈正（引路者·马场之王）—— 四技能角色：【见习】【反力矩】【五连鞭】【压腿】。
+// 【见习】主动技（每局限 X+2 次，X = 人数）：陈正起牌的回合（拥有牌权时）可指定一人见习：
+//   陈正私摸 2 张、暗交其中 1 张给目标（另 1 张留自己），目标本回合罚站——不得出牌、
 //   不被任何人的技能选为目标；目标自己的技能仍可用。弃权不消耗次数；不能连续两回合见习同一人；
-//   保国见习后照常出牌；见习不算打出（不触发洄游/亢奋等）。超上限照常淘汰。
-// 【反力矩】主动技（无次数限制）：①保国起牌的回合 ②牌权被抢夺（上一回合保国起牌、
-//   这一回合起牌的变成他人）时，任取一名角色拼点：双方从手牌各暗选 1 张（对方选时不知保国所选）
-//   → 一起亮出；保国点数 +2，平局算保国输。保国赢 → 两张拼点牌都交给对方 + 保国自弃一张手牌；
-//   保国输 → 保国获得两张拼点牌。发动后照常出牌。手牌不足 3 张不能发动
+//   陈正见习后照常出牌；见习不算打出（不触发洄游/亢奋等）。超上限照常淘汰。
+// 【反力矩】主动技（无次数限制）：①陈正起牌的回合 ②牌权被抢夺（上一回合陈正起牌、
+//   这一回合起牌的变成他人）时，任取一名角色拼点：双方从手牌各暗选 1 张（对方选时不知陈正所选）
+//   → 一起亮出；陈正点数 +2，平局算陈正输。陈正赢 → 两张拼点牌都交给对方 + 陈正自弃一张手牌；
+//   陈正输 → 陈正获得两张拼点牌。发动后照常出牌。手牌不足 3 张不能发动
 //   （赢家要交出一张拼点牌再弃一张，防手牌打空成僵尸）。
-// 【五连鞭】（亡语，无次数限制）：有人打出一手 ≥5 张的牌（含保国自己、含插队/狂吠每一手/翻面接/
-//   茄汤强制等一切打出路径；吃饼不算打出）时，保国可选令出牌者摸 1 张（牌堆空洗回等全局规则照常）。
-// 【压腿】（亡语，无次数限制）：别人（不含保国）打出炸弹时，保国可与其拼点：双方从牌堆各翻 1 张公开，
-//   保国 +2，失败方摸 |点差| 张（平局 = 保国输、差 0 无事）；两张拼点牌一律弃置；牌堆+弃牌堆都空则不询问。
-// 拼点通用点数（2026-10-05 用户确认）：3~10 按牌面、J=11、Q=12、K=13、A=1、2=2、大小王都 = 14（保国 +2 后最大 16）。
+// 【五连鞭】（亡语，无次数限制）：有人打出一手 ≥5 张的牌（含陈正自己、含插队/狂吠每一手/翻面接/
+//   茄汤强制等一切打出路径；吃饼不算打出）时，陈正可选令出牌者摸 1 张（牌堆空洗回等全局规则照常）。
+// 【压腿】（亡语，无次数限制）：别人（不含陈正）打出炸弹时，陈正可与其拼点：双方从牌堆各翻 1 张公开，
+//   陈正 +2，失败方摸 |点差| 张（平局 = 陈正输、差 0 无事）；两张拼点牌一律弃置；牌堆+弃牌堆都空则不询问。
+// 拼点通用点数（2026-10-05 用户确认）：3~10 按牌面、J=11、Q=12、K=13、A=1、2=2、大小王都 = 14（陈正 +2 后最大 16）。
 // 亡语同场顺序（2026-10-05 用户确认）：旺旺(100) → 五连鞭 → 压腿 → 巨石(0)，故 priority 90。
 import { isJoker, RANK_2, RANK_A, type Card } from '../cards';
 import type { HookContext, HookResult, RoleDef } from './types';
@@ -34,10 +34,10 @@ interface BaoGuoState {
   /** 私摸到的牌 id（give 阶段的选择范围） */
   jianxiDrewIds: number[];
   // 反力矩
-  /** 阶段机：confirm = 被动触发确认；pickTarget = 选拼点目标；selfPick = 保国暗选；targetPick = 对方暗选；discard = 获胜自弃 */
+  /** 阶段机：confirm = 被动触发确认；pickTarget = 选拼点目标；selfPick = 陈正暗选；targetPick = 对方暗选；discard = 获胜自弃 */
   fanliStage: 'confirm' | 'pickTarget' | 'selfPick' | 'targetPick' | 'discard' | null;
   fanliTarget: string | null;
-  /** 保国暗选的拼点牌 id */
+  /** 陈正暗选的拼点牌 id */
   fanliMyCard: number | null;
   // 五连鞭/压腿（同一打断钩子的两段阶段机）
   interruptStage: 'wlb' | 'yt' | null;
@@ -103,7 +103,7 @@ function jianXiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
       // 没摸到牌（含私摸超上限照常淘汰、手牌已清空）：无牌可交，直接罚站
       ctx.game.banPlayThisRound(t);
       ctx.game.announce('bao-guo', 'jian-xi', `${nameOf(ctx, t)} 本回合罚站：不得出牌、不被技能响应`);
-      // 保国自己超上限被淘汰：让出回合（照常出牌无从谈起）
+      // 陈正自己超上限被淘汰：让出回合（照常出牌无从谈起）
       return ctx.game.eliminated(ctx.self.id) ? { ok: true, modify: { endTurn: true } } : undefined;
     }
     st.jianxiStage = 'give';
@@ -143,7 +143,7 @@ function jianXiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
   };
 }
 
-/** 反力矩：选拼点目标（双方从手牌各暗选 1 张 → 一起亮出；保国点数 +2，平局算保国输） */
+/** 反力矩：选拼点目标（双方从手牌各暗选 1 张 → 一起亮出；陈正点数 +2，平局算陈正输） */
 function fanLiPickTarget(ctx: HookContext, st: BaoGuoState): HookResult | void {
   if (ctx.game.handOf(ctx.self.id).length < 3)
     return { ok: false, reason: '【反力矩】手牌不足 3 张不能发动（要交出一张拼点牌并弃置一张）' };
@@ -222,7 +222,7 @@ function fanLiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
         ok: true,
         ask: {
           kind: 'pickCards',
-          prompt: '请暗选一张拼点牌与保国拼点（弃权/超时则作罢）',
+          prompt: '请暗选一张拼点牌与陈正拼点（弃权/超时则作罢）',
           cards: [...ctx.game.handOf(t)],
           min: 1,
           max: 1,
@@ -239,13 +239,13 @@ function fanLiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
       const tCard = ctx.game.handOf(t).find((c) => c.id === a?.cardIds?.[0]);
       const myCard = ctx.game.handOf(ctx.self.id).find((c) => c.id === myCardId);
       if (!tCard || !myCard) return; // 弃权/超时/牌已不在手：作罢（选牌阶段不动手牌）
-      // 一起亮出（对方选时不知保国所选）
+      // 一起亮出（对方选时不知陈正所选）
       ctx.game.revealCards([myCard, tCard], '反力矩拼点');
       const mine = contestPoint(myCard) + 2;
       const theirs = contestPoint(tCard);
       const tName = nameOf(ctx, t);
       if (mine > theirs) {
-        // 保国赢：两张拼点牌都交给对方 + 保国自弃一张手牌
+        // 陈正赢：两张拼点牌都交给对方 + 陈正自弃一张手牌
         ctx.game.giveFrom(ctx.self.id, [myCard.id]);
         ctx.game.giveFrom(t, [tCard.id]);
         ctx.game.giveTo(t, [myCard, tCard]);
@@ -265,10 +265,10 @@ function fanLiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
           },
         };
       }
-      // 保国输（含平局）：保国获得两张拼点牌（自己那张本就在手，收下对方那张即可）
+      // 陈正输（含平局）：陈正获得两张拼点牌（自己那张本就在手，收下对方那张即可）
       ctx.game.giveFrom(t, [tCard.id]);
       ctx.game.giveTo(ctx.self.id, [tCard]);
-      ctx.game.announce('bao-guo', 'fan-li-ju', `拼点落败（${mine} vs ${theirs}）：两张牌归保国`);
+      ctx.game.announce('bao-guo', 'fan-li-ju', `拼点落败（${mine} vs ${theirs}）：两张牌归陈正`);
       return;
     }
     case 'discard': {
@@ -289,7 +289,7 @@ const baoGuo: RoleDef = {
   priority: 90,
   // 亡语（2026-10-05 用户定稿）：出牌者打光手牌后五连鞭/压腿仍可触发（摸牌使其手牌非空、游戏继续）
   deathrattleHooks: ['onPlayInterrupt'],
-  name: '保国',
+  name: '陈正',
   skills: [
     {
       id: 'jian-xi',
@@ -342,14 +342,14 @@ const baoGuo: RoleDef = {
       if (ctx.game.eliminated(ctx.self.id)) return;
       const leader = ctx.game.roundLeaderId();
       // 新一轮的第一个回合（轮首 roundLastPlayerId 为空）：轮数 +1。
-      // 不能只看领袖变化——保国连续保住牌权时领袖不变但仍是新的一轮（见习「连续两回合」限制用）；
+      // 不能只看领袖变化——陈正连续保住牌权时领袖不变但仍是新的一轮（见习「连续两回合」限制用）；
       // 只在无 answer 的首次进入自增（多阶段重跑不重复计数）。
       if (!ctx.answer && ctx.game.roundLastPlayerId() === null) st.roundCount++;
       if (st.seenLeader !== leader) {
         // 换轮：见到的第一个回合 = 新一轮起牌者的回合
         const wasMine = st.seenLeader === ctx.self.id;
         st.seenLeader = leader;
-        // 反力矩被动：牌权被抢夺（上一回合保国起牌、这一回合起牌的变成他人）
+        // 反力矩被动：牌权被抢夺（上一回合陈正起牌、这一回合起牌的变成他人）
         if (wasMine && leader !== ctx.self.id && ctx.game.handOf(ctx.self.id).length >= 3) {
           st.fanliStage = 'confirm';
           return fanLiFlow(ctx, st);
@@ -413,7 +413,7 @@ const baoGuo: RoleDef = {
       if (st.interruptStage === 'yt') {
         st.interruptStage = null;
         if (a.choice !== 'yes') return;
-        // 压腿拼点：双方从牌堆各翻 1 张公开（第 1 张 = 保国的拼点牌）
+        // 压腿拼点：双方从牌堆各翻 1 张公开（第 1 张 = 陈正的拼点牌）
         const top = ctx.game.revealTop(2, '压腿拼点');
         if (top.length < 2) {
           ctx.game.discardRevealed();
@@ -428,7 +428,7 @@ const baoGuo: RoleDef = {
           ctx.game.announce('bao-guo', 'ya-tui', `拼点获胜（${mine} vs ${theirs}）：${name} 摸 ${diff} 张`);
           ctx.game.draw(player, diff);
         } else {
-          ctx.game.announce('bao-guo', 'ya-tui', `拼点落败（${mine} vs ${theirs}）：保国摸 ${diff} 张`);
+          ctx.game.announce('bao-guo', 'ya-tui', `拼点落败（${mine} vs ${theirs}）：陈正摸 ${diff} 张`);
           ctx.game.draw(ctx.self.id, diff);
         }
         return;

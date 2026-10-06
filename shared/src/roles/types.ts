@@ -77,7 +77,7 @@ export interface SkillActionDef {
   skillId: string;
   /** myTurn = 轮到自己时；following = 轮到自己且桌面有牌（接牌时） */
   when: 'myTurn' | 'following';
-  /** 仅拥有牌权（本回合起牌者）时可用/显示（见习/反力矩：保国起牌的回合才能发动） */
+  /** 仅拥有牌权（本回合起牌者）时可用/显示（见习/反力矩：陈正起牌的回合才能发动） */
   onlyWhenLeader?: boolean;
   label: string;
 }
@@ -156,9 +156,9 @@ export interface EngineFacade {
   curseNextRound(targetPlayerId: string): void;
   /** 窃笑（轴承）：私密查看目标玩家手牌（skill:peek 私发查看者、skill:peeked 私发目标） */
   peekHand(targetPlayerId: string): void;
-  /** 见习（保国）：目标玩家本回合罚站——不得出牌、不能被技能选为目标；自己的技能仍可用 */
+  /** 见习（陈正）：目标玩家本回合罚站——不得出牌、不能被技能选为目标；自己的技能仍可用 */
   banPlayThisRound(targetPlayerId: string): void;
-  /** 见习（保国）：该玩家是否本回合罚站 */
+  /** 见习（陈正）：该玩家是否本回合罚站 */
   isBannedThisRound(playerId: string): boolean;
   /** 弃牌堆张数（压腿：牌堆+弃牌堆都空则无牌可翻，不询问） */
   discardCount(): number;
@@ -218,7 +218,7 @@ export const HOOK_NAMES = [
   'onSkillAction',
 ] as const;
 
-/** 单个技能（一名角色可有 1-4 个；保国为四技能角色） */
+/** 单个技能（一名角色可有 1-4 个；陈正为四技能角色） */
 export interface SkillDef {
   /** kebab-case 唯一 id（announce/skill:triggered 用） */
   id: string;

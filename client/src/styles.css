@@ -536,7 +536,7 @@ body {
   opacity: 0.5;
   animation: none;
 }
-/* 见习罚站（保国）：与红楼梦区分颜色（青调），其余同诅咒标 */
+/* 见习罚站（陈正）：与红楼梦区分颜色（青调），其余同诅咒标 */
 .seat-jianxi {
   color: var(--accent);
   animation: none;
