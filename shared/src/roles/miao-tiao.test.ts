@@ -312,4 +312,47 @@ describe('苗条：苗条技 + 尖叫', () => {
     expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
     assertConserved(engine);
   });
+
+  it('选牌阶段放弃 → 回到类型选择可改选另一种（不消耗次数）；类型选择「放弃」才结束', () => {
+    const hands = {
+      p0: [deck[4]!, deck[2]!, deck[3]!, deck[16]!], // ♠7 ♠5 ♠6 ♥6
+      p1: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // 过牌
+    };
+    const engine = mkEngine(hands, { p0: miaoTiao });
+    // 轮 1：确认 → 范文 → 选牌阶段放弃 → 回到类型选择 → 「放弃」→ 真正结束、不消耗次数
+    const c = ask(engine);
+    const yes = engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' });
+    const kindAsk = yes.ok ? (yes.pendingAsk as SkillAsk) : null;
+    const k = engine.resolveAsk('p0', { askId: kindAsk!.askId!, choice: '范文（至多 4 张花色互不相同）' });
+    const pick = k.ok ? (k.pendingAsk as SkillAsk) : null;
+    expect(pick?.kind).toBe('pickCards');
+    const r = engine.resolveAsk('p0', { askId: pick!.askId!, choice: 'decline' });
+    const back = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect(back?.kind).toBe('choice');
+    expect(engine.resolveAsk('p0', { askId: back!.askId!, choice: '放弃' }).ok).toBe(true);
+    let snap = engine.snapshotFor('p0');
+    expect(snap.pendingAsk).toBeNull();
+    expect((snap.players.find((p) => p.id === 'p0')!.roleState as { jianjiaoUsed: number }).jianjiaoUsed).toBe(0);
+    // 过轮
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true); // ♠7
+    expect(engine.pass('p1').ok).toBe(true);
+    // 轮 2：确认 → 范文 → 选牌阶段放弃 → 回到类型选择 → 改选尖叫鸡 → 成功扣置 ♠5 ♠6（同花色）
+    const c2 = ask(engine);
+    const yes2 = engine.resolveAsk('p0', { askId: c2.askId!, choice: 'yes' });
+    const kindAsk2 = yes2.ok ? (yes2.pendingAsk as SkillAsk) : null;
+    const k2 = engine.resolveAsk('p0', { askId: kindAsk2!.askId!, choice: '范文（至多 4 张花色互不相同）' });
+    const pick2 = k2.ok ? (k2.pendingAsk as SkillAsk) : null;
+    const r2 = engine.resolveAsk('p0', { askId: pick2!.askId!, choice: 'decline' });
+    const back2 = r2.ok ? (r2.pendingAsk as SkillAsk) : null;
+    expect(back2?.kind).toBe('choice');
+    const k3 = engine.resolveAsk('p0', { askId: back2!.askId!, choice: '尖叫鸡（至多 3 张花色相同）' });
+    const pick3 = k3.ok ? (k3.pendingAsk as SkillAsk) : null;
+    expect(pick3?.kind).toBe('pickCards');
+    expect(engine.resolveAsk('p0', { askId: pick3!.askId!, cardIds: [hands.p0[1]!.id, hands.p0[2]!.id] }).ok).toBe(true);
+    snap = engine.snapshotFor('p0');
+    expect(snap.players.find((p) => p.id === 'p0')!.heldCount).toBe(2);
+    expect(snap.players.find((p) => p.id === 'p0')!.heldGroups).toEqual([{ kind: 'jianjiaoji', count: 2 }]);
+    expect((snap.players.find((p) => p.id === 'p0')!.roleState as { jianjiaoUsed: number }).jianjiaoUsed).toBe(1);
+    assertConserved(engine);
+  });
 });

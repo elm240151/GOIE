@@ -66,7 +66,8 @@ const miaoTiao: RoleDef = {
         '每局 X+2 次：回合开始前扣置手牌（范文至多 4 张花色互异 / 尖叫鸡至多 3 张花色相同），已有扣置牌未收回时不再询问；后续第一个打出其中花色或点数的牌的人摸回对应扣置牌；可任意时刻查看/收回。',
     },
   ],
-  skillActions: [{ skillId: 'jian-jiao', when: 'myTurn', anyTime: true, label: '查看/收回扣置牌' }],
+  // hidden：不在主动技按钮行渲染（查看/收回走手牌上方扣置区弹窗）；动作入口保留供弹窗收回调用
+  skillActions: [{ skillId: 'jian-jiao', when: 'myTurn', anyTime: true, hidden: true, label: '查看/收回扣置牌' }],
   deathrattleHooks: ['onPlayInterrupt'],
   setup(): MiaoTiaoState {
     return { jianjiaoUsed: 0, holdStage: 'idle', holdKind: null };
@@ -141,10 +142,17 @@ const miaoTiao: RoleDef = {
         const hand = [...ctx.game.handOf(ctx.self.id)];
         const ids = (a?.cardIds ?? []).filter((id) => hand.some((c) => c.id === id));
         if (ids.length === 0) {
-          // 弃权选牌：不消耗次数（成功扣置才消耗）
+          // 选牌阶段放弃：回到类型选择（可改选另一种类型或最终放弃；不消耗次数）
           st.holdStage = 'idle';
           st.holdKind = null;
-          return { ok: true };
+          const options: string[] = [];
+          if (hand.length >= 2) options.push('范文（至多 4 张花色互不相同）');
+          options.push('尖叫鸡（至多 3 张花色相同）');
+          options.push('放弃');
+          return {
+            ok: true,
+            ask: { kind: 'choice', prompt: '【尖叫】选择扣置类型：', options },
+          };
         }
         const cards = ids.map((id) => hand.find((c) => c.id === id)!);
         const ok = (kind === 'fanwen' ? fanwenValid : jianjiaoValid)(cards);

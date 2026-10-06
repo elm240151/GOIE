@@ -179,6 +179,8 @@ export default function GameTable() {
   const skillActions = useMemo(() => {
     if (!me || finished) return [];
     return (getRole(me.roleId)?.skillActions ?? []).filter((a) => {
+      // hidden：不在按钮行渲染（苗条查看/收回扣置牌走手牌上方扣置区弹窗）
+      if (a.hidden) return false;
       // 见习/反力矩（陈正）：仅拥有牌权（起牌回合）时显示
       if (a.onlyWhenLeader && snap?.roundLeaderId !== me.id) return false;
       return a.when === 'myTurn' ? myTurn : myTurn && snap?.table !== null;

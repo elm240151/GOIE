@@ -93,6 +93,8 @@ export interface SkillActionDef {
   onlyWhenLeader?: boolean;
   /** 不受「轮到出牌」限制、随时可用（尖叫收回扣置牌；有挂起询问时仍不可用） */
   anyTime?: boolean;
+  /** 不在主动技按钮行渲染（苗条查看/收回扣置牌改由手牌上方扣置区弹窗承担；引擎动作入口仍保留） */
+  hidden?: boolean;
   label: string;
 }
 
