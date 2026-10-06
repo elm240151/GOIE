@@ -515,4 +515,49 @@ describe('修勾（狂吠）', () => {
     expect(snap.phase).toBe('finished');
     expect(snap.winnerId).toBe('p0');
   });
+
+  it('出顺子后手牌只剩炸弹：狂吠照常询问，炸接自己获胜（2026-10-06 顺子桌面漏炸弹同根因补测）', () => {
+    const hands = {
+      p0: [...byRank(3, 1), ...byRank(4, 1), ...byRank(5, 1), ...byRank(9, 4)], // 修勾：顺345 + 炸9999
+      p1: [...byRank(13, 5)],
+    };
+    const engine = mkEngine(hands, { p0: doggie });
+    const r0 = engine.playCards('p0', hands.p0.slice(0, 3).map((c) => c.id)); // 顺345
+    expect(r0.ok && r0.suspended).toBe(true);
+    // 先问答疑（顺子 ≥2 张）→ 弃权 → 狂吠照常问（手牌只剩炸弹也可压）
+    const ask1 = r0.ok ? (r0.pendingAsk as SkillAsk) : null;
+    expect(ask1?.kind).toBe('choice');
+    const a1 = engine.resolveAsk('p0', { askId: ask1!.askId!, choice: '放弃' });
+    expect(a1.ok && a1.suspended).toBe(true);
+    const ask2 = a1.ok ? (a1.pendingAsk as SkillAsk) : null;
+    expect(ask2?.kind).toBe('selfFollow');
+    const a2 = engine.resolveAsk('p0', { askId: ask2!.askId!, choice: 'yes', cardIds: hands.p0.slice(3, 7).map((c) => c.id) }); // 炸9999
+    expect(a2.ok).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.table?.type).toBe('bomb');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p0');
+  });
+
+  it('出连对后手牌只剩炸弹：狂吠照常询问，炸接自己获胜（2026-10-06 连对桌面漏炸弹同根因补测）', () => {
+    const hands = {
+      p0: [...byRank(3, 2), ...byRank(4, 2), ...byRank(9, 4)], // 修勾：连对3344 + 炸9999
+      p1: [...byRank(13, 5)],
+    };
+    const engine = mkEngine(hands, { p0: doggie });
+    const r0 = engine.playCards('p0', hands.p0.slice(0, 4).map((c) => c.id)); // 连对3344
+    expect(r0.ok && r0.suspended).toBe(true);
+    const ask1 = r0.ok ? (r0.pendingAsk as SkillAsk) : null;
+    expect(ask1?.kind).toBe('choice');
+    const a1 = engine.resolveAsk('p0', { askId: ask1!.askId!, choice: '放弃' });
+    expect(a1.ok && a1.suspended).toBe(true);
+    const ask2 = a1.ok ? (a1.pendingAsk as SkillAsk) : null;
+    expect(ask2?.kind).toBe('selfFollow');
+    const a2 = engine.resolveAsk('p0', { askId: ask2!.askId!, choice: 'yes', cardIds: hands.p0.slice(4, 8).map((c) => c.id) }); // 炸9999
+    expect(a2.ok).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.table?.type).toBe('bomb');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p0');
+  });
 });
