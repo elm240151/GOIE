@@ -57,6 +57,14 @@ export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
     return () => clearTimeout(t);
   }, [eliminatedTs]);
 
+  // 尖叫（苗条）扣置：点击徽章显示悬浮提示（类型 + 张数，牌面不可见），2.5s 自隐
+  const [heldTip, setHeldTip] = useState(false);
+  useEffect(() => {
+    if (!heldTip) return;
+    const t = setTimeout(() => setHeldTip(false), 2500);
+    return () => clearTimeout(t);
+  }, [heldTip]);
+
   // 方位（按席位序 ±1 计上家/下家，倒序互换；2 人局互为上下家，其余「对面」）
   const directionTitle = useMemo(() => {
     if (!snap) return undefined;
@@ -122,6 +130,18 @@ export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
             {STR.game.pancakeBadge.replace('{n}', String(player.pancakeCount))}
           </span>
         )}
+        {!player.eliminated && player.heldCount > 0 && (
+          <span
+            className="seat-held"
+            title={STR.game.heldBadge}
+            onClick={(ev) => {
+              ev.stopPropagation();
+              setHeldTip((v) => !v);
+            }}
+          >
+            🪧×{player.heldCount}
+          </span>
+        )}
         {player.eliminated && <span className="seat-offline">{STR.game.eliminated}</span>}
         {!player.connected && !player.eliminated && <span className="seat-offline">{STR.room.offlineBadge}</span>}
       </div>
@@ -139,6 +159,18 @@ export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
       <div className="seat-bubble">
         {passedPhase !== 'gone' && (
           <span className={`seat-passed ${passedPhase === 'out' ? 'seat-passed-out' : ''}`}>{STR.game.passed}</span>
+        )}
+        {heldTip && (
+          <span className="seat-held-tip">
+            <b>{STR.game.heldTipTitle.replace('{name}', player.name)}</b>
+            {player.heldGroups.map((g, i) => (
+              <em key={i}>
+                {STR.game.heldGroupLine
+                  .replace('{kind}', g.kind === 'fanwen' ? STR.game.heldFanwen : STR.game.heldJianjiaoji)
+                  .replace('{n}', String(g.count))}
+              </em>
+            ))}
+          </span>
         )}
       </div>
     </div>

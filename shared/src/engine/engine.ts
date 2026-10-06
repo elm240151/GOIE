@@ -511,6 +511,8 @@ export class GameEngine {
         /** 尖叫（苗条）：扣置张数（公开张数；牌面只对苗条自己可见） */
         heldCount: (this.held.get(p.id) ?? []).reduce((s, g) => s + g.cards.length, 0),
         held: p.id === viewerId ? (this.held.get(p.id) ?? []).map((g) => ({ kind: g.kind, cards: [...g.cards] })) : null,
+        /** 尖叫（苗条）：扣置组公开信息（类型 + 张数所有人可见；牌面只对苗条自己可见） */
+        heldGroups: (this.held.get(p.id) ?? []).map((g) => ({ kind: g.kind, count: g.cards.length })),
       })),
       /** 温柔（组长）：本回合被标为「宝贝」的玩家（不得响应组长的出牌；界面展示标记） */
       babyIds: [...this.babies],

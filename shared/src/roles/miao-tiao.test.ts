@@ -137,8 +137,9 @@ describe('苗条：苗条技 + 尖叫', () => {
     expect(engine.playCards('p1', [hands.p1[0]!.id]).ok).toBe(true); // ♠8 压：♠ 已无扣置
     expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p1')!.handCount).toBe(1);
     expect(engine.pass('p0').ok).toBe(true); // 苗条压不了 8（摸到的是王，无 9）
-    // 轮末：p1 持牌权 → 新回合开始的尖叫弃权 → 领出 ♥8 → 打出 ♥ → 摸回 ♥6（发给实际打出者）
-    expect(engine.resolveAsk('p0', { askId: ask(engine).askId!, choice: 'decline' }).ok).toBe(true);
+    // 轮末：p1 持牌权 → 新回合开始：已有扣置牌（♥6 未收回）→ 不再询问
+    expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
+    // 领出 ♥8 → 打出 ♥ → 摸回 ♥6（发给实际打出者）
     expect(engine.playCards('p1', [hands.p1[1]!.id]).ok).toBe(true);
     snap = engine.snapshotFor('p0');
     expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(2); // 轮末摸 1 + 摸回 ♥6
@@ -224,16 +225,90 @@ describe('苗条：苗条技 + 尖叫', () => {
     expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     expect(engine.pass('p1').ok).toBe(true);
-    // 轮 2-5：每次扣 1 张尖叫鸡（共 4 次 = X+2），扣完领出过轮（领出点数与被扣 4/6/8/10 不重合）
+    // 轮 2-5：每次扣 1 张尖叫鸡（共 4 次 = X+2）→ 收回（扣置牌跨回合保留，不收回下轮不再询问）→ 领出过轮
     const heldIds = [109, 111, 113, 115]; // ♠4 ♠6 ♠8 ♠10（扣置）
     const leadIds = [110, 112, 114, 116]; // ♠5 ♠7 ♠9 ♠J（领出）
     for (let round = 0; round < 4; round++) {
       holdAt(engine, '尖叫鸡（至多 3 张花色相同）', [deck[heldIds[round]!]!.id]);
-      expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.heldCount).toBe(round + 1);
+      expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.heldCount).toBe(1);
+      expect(engine.useSkillAction('p0', { skillId: 'jian-jiao' }).ok).toBe(true); // 收回全部
+      expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.heldCount).toBe(0);
       expect(engine.playCards('p0', [deck[leadIds[round]!]!.id]).ok).toBe(true);
       expect(engine.pass('p1').ok).toBe(true);
     }
     // 轮 6：次数用尽 → 回合开始不再询问
+    expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
+    assertConserved(engine);
+  });
+
+  it('已有扣置牌（跨回合保留）→ 回合开始不再询问；收回后下轮恢复询问；别人可见类型不可见牌面', () => {
+    const hands = {
+      p0: [deck[4]!, deck[2]!, deck[6]!, deck[16]!, deck[29]!], // ♠7 ♠5 ♠9 ♥6 ♣6
+      p1: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // 过牌
+    };
+    const engine = mkEngine(hands, { p0: miaoTiao });
+    holdAt(engine, '范文（至多 4 张花色互不相同）', [hands.p0[3]!.id, hands.p0[4]!.id]); // 扣 ♥6 ♣6
+    expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.heldCount).toBe(2);
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true); // ♠7 领出：♠ 不匹配被扣花色 → 保留
+    expect(engine.pass('p1').ok).toBe(true);
+    // 轮 2：苗条起牌——已有扣置牌 → 不再询问
+    expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
+    // 别人视角：heldGroups 公开类型 + 张数；held 牌面只对苗条自己可见
+    let snap = engine.snapshotFor('p1');
+    const p0p = snap.players.find((p) => p.id === 'p0')!;
+    expect(p0p.heldCount).toBe(2);
+    expect(p0p.held).toBeNull();
+    expect(p0p.heldGroups).toEqual([{ kind: 'fanwen', count: 2 }]);
+    // 收回（anyTime）→ 领出过轮
+    expect(engine.useSkillAction('p0', { skillId: 'jian-jiao' }).ok).toBe(true);
+    expect(engine.playCards('p0', [hands.p0[1]!.id]).ok).toBe(true); // ♠5 领出
+    expect(engine.pass('p1').ok).toBe(true);
+    // 轮 3：扣置已收回 → 恢复询问
+    const c = ask(engine);
+    expect(c.kind).toBe('confirm');
+    expect(engine.resolveAsk('p0', { askId: c.askId!, choice: 'decline' }).ok).toBe(true);
+    assertConserved(engine);
+  });
+
+  it('非法提交不消耗次数：提示重新选牌（重发询问），成功扣置才消耗', () => {
+    const hands = {
+      p0: [deck[4]!, deck[2]!, deck[3]!, deck[16]!], // ♠7 ♠5 ♠6 ♥6（♠5♠6 同花色 → 范文非法）
+      p1: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // 过牌
+    };
+    pad(hands, { p0: 12, p1: 4 }, [109, 159]); // p0 补 8 张供后续轮扣置/领出
+    const engine = mkEngine(hands, { p0: miaoTiao });
+    const c = ask(engine);
+    const yes = engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' });
+    const kindAsk = yes.ok ? (yes.pendingAsk as SkillAsk) : null;
+    expect(kindAsk?.kind).toBe('choice');
+    const k = engine.resolveAsk('p0', { askId: kindAsk!.askId!, choice: '范文（至多 4 张花色互不相同）' });
+    const pick = k.ok ? (k.pendingAsk as SkillAsk) : null;
+    expect(pick?.kind).toBe('pickCards');
+    // 非法提交：♠5 ♠6 花色相同 → 播报提示 + 重发选牌询问，次数不消耗
+    const r1 = engine.resolveAsk('p0', { askId: pick!.askId!, cardIds: [hands.p0[1]!.id, hands.p0[2]!.id] });
+    expect(r1.ok).toBe(true);
+    expect(r1.ok && r1.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'jian-jiao')).toBe(true);
+    const again = r1.ok ? (r1.pendingAsk as SkillAsk) : null;
+    expect(again?.kind).toBe('pickCards');
+    expect(again?.prompt).toContain('重新选择');
+    expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.heldCount).toBe(0);
+    // 重新提交合法：♠5 ♥6 花色互异 → 成功扣置
+    const r2 = engine.resolveAsk('p0', { askId: again!.askId!, cardIds: [hands.p0[1]!.id, hands.p0[3]!.id] });
+    expect(r2.ok).toBe(true);
+    expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.heldCount).toBe(2);
+    // 非法提交没消耗次数：2 人局 X+2 = 4 次，还能成功扣 3 次（轮 2-4），轮 5 不再询问
+    expect(engine.useSkillAction('p0', { skillId: 'jian-jiao' }).ok).toBe(true); // 收回
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true); // ♠7 领出过轮
+    expect(engine.pass('p1').ok).toBe(true);
+    const heldIds = [109, 111, 113]; // ♠4 ♠6 ♠8（扣置）
+    const leadIds = [110, 112, 114]; // ♠5 ♠7 ♠9（领出）
+    for (let round = 0; round < 3; round++) {
+      holdAt(engine, '尖叫鸡（至多 3 张花色相同）', [deck[heldIds[round]!]!.id]);
+      expect(engine.useSkillAction('p0', { skillId: 'jian-jiao' }).ok).toBe(true); // 收回
+      expect(engine.playCards('p0', [deck[leadIds[round]!]!.id]).ok).toBe(true);
+      expect(engine.pass('p1').ok).toBe(true);
+    }
+    // 次数用尽（成功扣置恰好 4 次）→ 不再询问
     expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
     assertConserved(engine);
   });

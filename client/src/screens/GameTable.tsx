@@ -56,6 +56,9 @@ export default function GameTable() {
   const [deadline, setDeadline] = useState(0);
   const [now, setNow] = useState(Date.now());
 
+  // 尖叫（苗条）：查看扣置牌弹窗（点手牌上方的扣置牌背堆打开）
+  const [heldViewOpen, setHeldViewOpen] = useState(false);
+
   // 我被淘汰：底部操作区抖动 1.2s
   const myElimTs = useStore((s) => (myId ? s.eliminatedAt[myId] : undefined));
   const [myElimPop, setMyElimPop] = useState(false);
@@ -480,6 +483,19 @@ export default function GameTable() {
           )}
         </div>
 
+        {/* 尖叫（苗条）扣置区：手牌上方牌背堆（张数 + 类型），点开查看/收回 */}
+        {me && (me.heldCount ?? 0) > 0 && (
+          <div className="my-held" title={STR.game.heldViewHint} onClick={() => setHeldViewOpen(true)}>
+            <span className="my-held-label">{STR.game.heldBadge}</span>
+            <div className="my-held-cards">
+              {Array.from({ length: Math.min(me.heldCount, 8) }, (_, i) => (
+                <span key={i} className="my-held-cardback" />
+              ))}
+            </div>
+            <span className="my-held-count">×{me.heldCount}</span>
+          </div>
+        )}
+
         <Hand
           cards={myHand}
           order={handOrder}
@@ -529,6 +545,8 @@ export default function GameTable() {
       <PeekModal />
 
       <RoleViewModal playerId={roleViewPlayer} onClose={() => setRoleViewPlayer(null)} />
+
+      <HeldViewModal open={heldViewOpen} onClose={() => setHeldViewOpen(false)} />
 
       {!connected && (
         <div className="reconnect-overlay">
@@ -603,6 +621,57 @@ function RoleViewModal({ playerId, onClose }: { playerId: string | null; onClose
         <button type="button" className="btn btn-primary" onClick={onClose}>
           {STR.game.peekClose}
         </button>
+      </div>
+    </div>
+  );
+}
+
+/** 尖叫（苗条）：查看自己的扣置牌——牌面摊开 + 收回（全部收回手牌）/ 放回（保持扣置） */
+function HeldViewModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const snap = useStore((s) => s.snap);
+  const myId = useStore((s) => s.myId);
+  const useSkillAction = useStore((s) => s.useSkillAction);
+  const me = snap?.players.find((p) => p.id === myId);
+  const held = me?.held ?? null;
+  const heldCount = me?.heldCount ?? 0;
+  const pendingAsk = snap?.pendingAsk ?? null;
+  // 收回成功后扣置归零 → 自动关闭
+  useEffect(() => {
+    if (open && heldCount === 0) onClose();
+  }, [open, heldCount]);
+  if (!open || !held || held.length === 0) return null;
+  return (
+    <div className="modal-overlay overlay-in" onClick={onClose}>
+      <div className="modal held-modal modal-in" onClick={(ev) => ev.stopPropagation()}>
+        <h2 className="peek-title">{STR.game.heldViewTitle}</h2>
+        {held.map((g, i) => (
+          <div key={i} className="held-group">
+            <span className="held-group-kind">
+              {STR.game.heldGroupLine
+                .replace('{kind}', g.kind === 'fanwen' ? STR.game.heldFanwen : STR.game.heldJianjiaoji)
+                .replace('{n}', String(g.cards.length))}
+            </span>
+            <div className="peek-cards">
+              {g.cards.map((c) => (
+                <Card key={c.id} card={c} />
+              ))}
+            </div>
+          </div>
+        ))}
+        <div className="held-actions">
+          <button
+            type="button"
+            className="btn btn-primary"
+            title={pendingAsk ? STR.game.heldAskBusy : STR.game.heldTakeBackHint}
+            disabled={pendingAsk !== null}
+            onClick={() => void useSkillAction('jian-jiao')}
+          >
+            {STR.game.heldTakeBack}
+          </button>
+          <button type="button" className="btn btn-ghost" title={STR.game.heldPutBackHint} onClick={onClose}>
+            {STR.game.heldPutBack}
+          </button>
+        </div>
       </div>
     </div>
   );

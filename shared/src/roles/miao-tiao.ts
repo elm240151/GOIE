@@ -2,9 +2,10 @@
 // 【苗条】锁定技：打出 n 种不同花色的牌 → 摸 n 张（出牌后立即，每次出牌都触发；王双计——
 //   小王 ♠♣、大王 ♥♦；归属改写后不算自己打出——看 roundLastPlayerId；打光手牌时引擎亡语门控
 //   自动跳过本技能，直接进入获胜判定）。
-// 【尖叫】(亡语) 每局 X+2 次（X = 人数；扣置行为消耗，弃权/收回不消耗）：每回合（轮）开始前扣置
-//   手牌——范文（至多 4 张花色互不相同）/ 尖叫鸡（至多 3 张花色相同、点数无要求）；
+// 【尖叫】(亡语) 每局 X+2 次（X = 人数；成功扣置才消耗次数，弃权/收回/非法提交不消耗）：每回合（轮）
+//   开始前扣置手牌——范文（至多 4 张花色互不相同）/ 尖叫鸡（至多 3 张花色相同、点数无要求）；
 //   扣置后手牌 ≥1；扣置牌也算手牌（手牌 + 扣置 > 上限即淘汰——引擎 checkHandLimit 同口径）。
+//   已有扣置牌未收回时不询问（扣置牌跨回合保留）；非法提交提示重新选牌（重发询问，不消耗次数）。
 //   触发：后续第一个打出其中花色（范文，王双花色参与匹配；一次打出几种被扣花色摸回几张对应、
 //   剩余继续等下一个）或其中点数（尖叫鸡，一次发完三张）的牌的人摸回对应扣置牌——发给实际
 //   打出者（引擎 lastPlayPhysicalId，归属改写前）；亡语：打光手牌的这手牌触发时先摸回、不能
@@ -62,7 +63,7 @@ const miaoTiao: RoleDef = {
       id: 'jian-jiao',
       name: '尖叫',
       description:
-        '每局 X+2 次：回合开始前扣置手牌（范文至多 4 张花色互异 / 尖叫鸡至多 3 张花色相同），后续第一个打出其中花色或点数的牌的人摸回对应扣置牌；可任意时刻收回。',
+        '每局 X+2 次：回合开始前扣置手牌（范文至多 4 张花色互异 / 尖叫鸡至多 3 张花色相同），已有扣置牌未收回时不再询问；后续第一个打出其中花色或点数的牌的人摸回对应扣置牌；可任意时刻查看/收回。',
     },
   ],
   skillActions: [{ skillId: 'jian-jiao', when: 'myTurn', anyTime: true, label: '查看/收回扣置牌' }],
@@ -136,19 +137,39 @@ const miaoTiao: RoleDef = {
       const total = ctx.game.players().length + 2;
       // 选牌阶段：校验并扣置
       if (st.holdStage === 'pick') {
-        st.holdStage = 'idle';
         const kind = st.holdKind!;
-        st.holdKind = null;
         const hand = [...ctx.game.handOf(ctx.self.id)];
         const ids = (a?.cardIds ?? []).filter((id) => hand.some((c) => c.id === id));
-        if (ids.length === 0) return { ok: true }; // 弃权选牌（次数已在选类型时消耗）
+        if (ids.length === 0) {
+          // 弃权选牌：不消耗次数（成功扣置才消耗）
+          st.holdStage = 'idle';
+          st.holdKind = null;
+          return { ok: true };
+        }
         const cards = ids.map((id) => hand.find((c) => c.id === id)!);
         const ok = (kind === 'fanwen' ? fanwenValid : jianjiaoValid)(cards);
         if (!ok || cards.length >= hand.length) {
-          // 非法或扣后手牌为空 → 本次扣置失败（次数已消耗）
-          ctx.game.announce('miao-tiao', 'jian-jiao', '【尖叫】所选牌不合要求，扣置失败');
-          return { ok: true };
+          // 非法提交（或扣后手牌为空）：不消耗次数，提示重新选牌（重发询问）
+          ctx.game.announce(
+            'miao-tiao',
+            'jian-jiao',
+            `【尖叫】所选牌不合要求，请重新选择（${kind === 'fanwen' ? '范文花色互不相同' : '尖叫鸡花色相同'}，且扣置后手牌 ≥1）`
+          );
+          const max = Math.min(kind === 'fanwen' ? 4 : 3, hand.length - 1);
+          return {
+            ok: true,
+            ask: {
+              kind: 'pickCards',
+              prompt: `【尖叫】请重新选择要扣置的 ${kind === 'fanwen' ? '范文（花色互不相同）' : '尖叫鸡（花色相同）'} 牌（至多 ${max} 张）：`,
+              cards: hand,
+              min: 1,
+              max,
+            },
+          };
         }
+        st.jianjiaoUsed++; // 成功扣置才消耗次数
+        st.holdStage = 'idle';
+        st.holdKind = null;
         ctx.game.holdCards(kind, ids);
         ctx.game.announce(
           'miao-tiao',
@@ -158,6 +179,7 @@ const miaoTiao: RoleDef = {
         return { ok: true };
       }
       if (st.jianjiaoUsed >= total) return;
+      if (ctx.game.heldGroups().length > 0) return; // 已有扣置牌（跨回合保留）→ 不再询问
       if (!a) {
         return {
           ok: true,
@@ -181,9 +203,8 @@ const miaoTiao: RoleDef = {
       }
       const choice = a.choice ?? '';
       const kind = choice.startsWith('范文') ? 'fanwen' : choice.startsWith('尖叫鸡') ? 'jianjiaoji' : null;
-      if (!kind) return; // 放弃
-      st.jianjiaoUsed++; // 扣置行为消耗（发动即消耗；选牌不成同样已消耗）
-      st.holdStage = 'pick';
+      if (!kind) return; // 放弃（不消耗）
+      st.holdStage = 'pick'; // 次数在选牌成功扣置时才消耗
       st.holdKind = kind;
       const hand = [...ctx.game.handOf(ctx.self.id)];
       const max = Math.min(kind === 'fanwen' ? 4 : 3, hand.length - 1); // 扣置后手牌 ≥1

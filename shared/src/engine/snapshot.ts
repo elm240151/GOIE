@@ -19,6 +19,8 @@ export interface SnapshotPlayer {
   heldCount: number;
   /** 尖叫（苗条）：扣置组明细（仅查看者本人可见，其他人 null） */
   held: HeldGroup[] | null;
+  /** 尖叫（苗条）：扣置组公开信息（每组类型 + 张数，所有人可见——别人点扣置堆看是尖叫鸡还是范文） */
+  heldGroups: { kind: 'fanwen' | 'jianjiaoji'; count: number }[];
 }
 
 /** 快照中的询问元信息（完整载荷经 game:skill-ask 定向发给被问者） */

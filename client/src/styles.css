@@ -2156,6 +2156,98 @@ body {
   }
 }
 
+/* 尖叫（苗条）扣置区：我手牌上方的牌背堆（点开查看/收回弹窗） */
+.my-held {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  user-select: none;
+  padding: 2px 8px;
+  border: 1px dashed var(--gold-dark);
+  border-radius: 8px;
+  background: var(--gold-10);
+  align-self: flex-start;
+}
+.my-held-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gold-deep);
+}
+.my-held-cards {
+  display: flex;
+  height: 22px;
+}
+.my-held-cardback {
+  width: 15px;
+  height: 22px;
+  margin-left: -6px;
+  background: linear-gradient(160deg, var(--seat-cardback-a), var(--seat-cardback-b));
+  border: 1px solid var(--seat-cardback-line);
+  border-radius: 2px;
+}
+.my-held-cardback:first-child {
+  margin-left: 0;
+}
+.my-held-count {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text);
+}
+
+/* 别人座位上的扣置徽章（点击显示类型 + 张数悬浮提示，牌面不可见） */
+.seat-held {
+  color: var(--gold-dark);
+  border: 1px dashed currentColor;
+  border-radius: 4px;
+  padding: 0 3px;
+  font-size: 11px;
+  cursor: pointer;
+}
+.seat-held-tip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--ink-85);
+  color: #faf6ec;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+  animation: bubble-in 0.22s ease;
+}
+.seat-held-tip b {
+  font-size: 12px;
+}
+.seat-held-tip em {
+  font-style: normal;
+  color: var(--gold);
+}
+
+/* 查看扣置牌弹窗：牌面摊开 + 收回（全部收回）/ 放回（保持扣置） */
+.held-modal {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+}
+.held-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  align-items: center;
+}
+.held-group-kind {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold-deep);
+}
+.held-actions {
+  display: flex;
+  gap: 10px;
+  justify-content: center;
+}
+
 /* 系统「减弱动态效果」：全部动画/过渡骤停（无障碍） */
 @media (prefers-reduced-motion: reduce) {
   *,
