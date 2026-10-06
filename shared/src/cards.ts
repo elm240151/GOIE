@@ -14,8 +14,8 @@ export type Suit = 0 | 1 | 2 | 3;
 export interface Card {
   /** 全局唯一，一局内不变 */
   id: number;
-  /** 属于第几副牌（0-2） */
-  deck: 0 | 1 | 2;
+  /** 属于第几副牌（0-2 公共牌；3 = 辛歼【神秘】的独立牌堆） */
+  deck: number;
   /** 花色（王时无意义） */
   suit: Suit;
   rank: CardRank;

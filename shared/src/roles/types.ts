@@ -24,6 +24,8 @@ export interface ActionMods {
   eliminate?: string[];
   /** 桌面作废，由技能所有者重新起牌（如巨石驱逐成功） */
   seizeLead?: boolean;
+  /** 约等（煞蔱）：收回她刚打的一手牌，与目标均分手牌——桌面回退上一手、从她下家继续接牌（每回合限一次） */
+  yueDeng?: { targetId: string };
 }
 
 export type HookResult =
@@ -40,7 +42,8 @@ export type AskKind =
   | 'pickTarget'
   | 'cutIn'
   | 'selfFollow'
-  | 'proxyPlay';
+  | 'proxyPlay'
+  | 'guess';
 
 export interface SkillAsk {
   /** 引擎自动生成（角色可不填） */
@@ -74,6 +77,8 @@ export interface AskAnswer {
   choice?: string;
   cardIds?: number[];
   targetPlayerId?: string;
+  /** guess（障目猜手牌数，1-20） */
+  guess?: number;
 }
 
 /** 主动技动作请求（game:useSkill → onSkillAction） */
@@ -202,6 +207,19 @@ export interface EngineFacade {
   heldGroups(): HeldGroup[];
   /** 尖叫（苗条）：把指定扣置牌发给玩家（范文/尖叫鸡触发：打出者摸回） */
   giveHeldTo(playerId: string, cardIds: number[]): void;
+  /** 障目（辛歼）门控：非锁定指向性技能锁定辛歼时，由技能在目标确定后、生效前调用。
+   *  cont = 猜中并摸牌后经引擎续跑的技能效果（闭包捕获目标与答案）。返回 null = 无需门控（照常执行）；
+   *  返回 HookResult = 挂起猜牌/摸牌询问（{ok:true}）或本回合封锁（{ok:false}）——调用方直接返回该结果。 */
+  zhangMuCheck(
+    casterId: string,
+    targetId: string | null,
+    skillId: string,
+    cont: () => HookResult | void
+  ): HookResult | null;
+  /** 辛歼（神秘）：独立牌堆剩余张数 */
+  privateDeckCount(): number;
+  /** 辛歼（神秘）：独立弃牌堆张数 */
+  privateDiscardCount(): number;
 }
 
 /** 尖叫（苗条）扣置组：范文 = 至多 4 张花色互不同；尖叫鸡 = 至多 3 张同花色 */
@@ -371,6 +389,29 @@ export interface RoleDef {
    * 增益类技能同样被挡（2026-10-06 用户确认「全挡」）。
    */
   bloodPressure?: boolean;
+  /**
+   * 神秘（辛歼，锁定技，2026-10-06 用户定稿）：
+   * ①独立牌堆——游戏开始时获得额外 54 张（一整副：3..2 各 4 + 大小王，id 独立于公共三副）作为其专属牌堆，
+   *   他的摸牌一律从独立牌堆摸；他的弃牌（打出/技能弃置/淘汰清空等一切含他牌面 id 的弃置）进独立弃牌堆；
+   *   独立牌堆摸空时独立弃牌堆洗回继续自己用（不参与公共洗回，公共洗回也不含他的牌）；
+   *   两堆都空则无牌可摸。独立牌堆/弃牌堆张数只对他自己可见。
+   * ②初始手牌数自选——开局发牌时询问（先手 5-7、其他 4-6；超时取正常张数 6/5）；
+   *   handsOverride 测试模式跳过询问。
+   * ③摸牌阶段自选——轮末他获得牌权时询问摸 1 或 2 张（超时默认 1）；
+   *   技能导致的摸牌（旺旺/无名加牌等）不在其列，照常张数。
+   * ④手牌数不可探查——快照对其他玩家隐藏他的手牌数（客户端显示 ??）。
+   * ⑤留 2 豁免——可以以单 2/对 2（倒序单 3/对 3）打完手牌（含代打/翻面接等一切打出路径）。
+   */
+  mystic?: boolean;
+  /**
+   * 障目（辛歼，非锁定被动）：当别人的非锁定指向性技能锁定他时（目标确定后、生效前，引擎门控），
+   * 施放者须猜他的手牌数（1-20；超时算猜错）：
+   * 猜错 → 此次技能失效、不消耗次数、本回合不能再对其他人发动该技能（对辛歼重试可再猜）；
+   * 猜中 → 技能照常生效且辛歼自选摸 1-3 张（超时默认 1）。
+   * 血压守卫：施放者受高血压保护（手牌 ≥8 的硝烟）时障目不触发。
+   * 门控由引擎提供（facade zhangMuCheck），各非锁定指向性技能在目标确定后调用。
+   */
+  zhangMu?: boolean;
 }
 
 export type RoleRegistry = Map<string, RoleDef>;

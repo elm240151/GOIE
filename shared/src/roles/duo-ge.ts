@@ -9,11 +9,35 @@
 //   惰戈可选择一位角色（含自己）弃置一张牌——被弃者自选弃哪张（弃置进弃牌堆）；
 //   惰戈手牌 ≤3 时不能选自己（仍可选别人）；每次打出都可触发，无次数限制；弃权/超时无事发生。
 import { isJoker, jokerSuits } from '../cards';
-import type { RoleDef } from './types';
+import type { HookContext, HookResult, RoleDef } from './types';
 
 interface DuoGeState {
   /** 法音阶段二选定的弃牌目标（多阶段重跑复用） */
   target: string | null;
+  /** 障目再入：待门控的弃牌目标 */
+  gate: { skillId: 'fa-yin'; targetId: string } | null;
+}
+
+/** 法音弃牌询问（障目门控通过后执行）：被弃者自选弃哪张（超时自动弃第一张） */
+function faYinAskDiscard(ctx: HookContext, st: DuoGeState, t: string): HookResult | void {
+  st.target = t;
+  const hand = ctx.game.handOf(t);
+  if (hand.length === 0) {
+    st.target = null;
+    return;
+  }
+  return {
+    ok: true,
+    ask: {
+      kind: 'pickCards',
+      prompt: '【法音】请弃置一张牌（超时自动弃置第一张）',
+      cards: [...hand],
+      min: 1,
+      max: 1,
+      askPlayerId: t,
+      declineAllowed: false, // 弃牌效果必须执行（2026-10-06 用户确认：对别人产生的效果不能弃权；超时自动弃第一张）
+    },
+  };
 }
 
 const duoGe: RoleDef = {
@@ -39,11 +63,26 @@ const duoGe: RoleDef = {
     },
   ],
   setup(): DuoGeState {
-    return { target: null };
+    return { target: null, gate: null };
   },
   hooks: {
     afterPlay(ctx, combo) {
       if (ctx.game.eliminated(ctx.self.id)) return;
+      const st = ctx.state as DuoGeState;
+      // 障目再入（法音猜牌/摸牌答案）：门控通过后进入弃牌询问
+      if (st.gate?.skillId === 'fa-yin') {
+        const { targetId } = st.gate;
+        const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'fa-yin', () => {
+          st.gate = null;
+          return faYinAskDiscard(ctx, st, targetId);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+          return g;
+        }
+        st.gate = null;
+        return; // 防御
+      }
       // 只对算自己打出的手生效（自己实际打出 + 亢奋归属）
       if (ctx.game.roundLastPlayerId() !== ctx.self.id) return;
       // 至少两种不同花色（王按包含花色双计：小王 ♠♣、大王 ♥♦）
@@ -52,7 +91,6 @@ const duoGe: RoleDef = {
         for (const s of isJoker(c) ? jokerSuits(c) : [c.suit]) suits.add(s);
       }
       if (suits.size < 2) return;
-      const st = ctx.state as DuoGeState;
       const a = ctx.answer;
       if (!a) {
         return {
@@ -75,7 +113,18 @@ const duoGe: RoleDef = {
           const okT =
             !ctx.game.eliminated(t) && th.length > 0 && (t !== ctx.self.id || th.length > 3) && !ctx.game.bpProtected(t);
           if (!okT) return; // 防御：非法目标视为弃权
-          st.target = t;
+          // 障目门控（指向性：弃牌目标为辛歼时先猜手牌数）
+          st.gate = { skillId: 'fa-yin', targetId: t };
+          const g = ctx.game.zhangMuCheck(ctx.self.id, t, 'fa-yin', () => {
+            st.gate = null;
+            return faYinAskDiscard(ctx, st, t);
+          });
+          if (g) {
+            if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+            return g;
+          }
+          st.gate = null;
+          return faYinAskDiscard(ctx, st, t); // 直接放行
         } else {
           const candidates = ctx.game
             .players()
@@ -95,23 +144,7 @@ const duoGe: RoleDef = {
       }
       // 阶段三：被弃者自选一张弃（目标是自己则问自己；弃权/超时自动弃第一张）
       if (!a.cardIds) {
-        const hand = ctx.game.handOf(st.target);
-        if (hand.length === 0) {
-          st.target = null;
-          return;
-        }
-        return {
-          ok: true,
-          ask: {
-            kind: 'pickCards',
-            prompt: '【法音】请弃置一张牌（超时自动弃置第一张）',
-            cards: [...hand],
-            min: 1,
-            max: 1,
-            askPlayerId: st.target,
-            declineAllowed: false, // 弃牌效果必须执行（2026-10-06 用户确认：对别人产生的效果不能弃权；超时自动弃第一张）
-          },
-        };
+        return faYinAskDiscard(ctx, st, st.target!);
       }
       const target = st.target;
       st.target = null;

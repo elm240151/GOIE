@@ -407,13 +407,15 @@ export function listPlayable(
   table: Combo | null,
   cfg: RuleConfig,
   rev = false,
-  allowSoloJoker = false
+  allowSoloJoker = false,
+  liu2Exempt = false // 留 2 禁止收尾豁免（辛歼【神秘】）：单 2/对 2（倒序单 3/对 3）可打完手牌
 ): Combo[] {
   const info = analyzeHand(hand);
   const out = table === null ? listLeading(info, cfg, rev, allowSoloJoker) : listFollowing(info, table, cfg, rev, allowSoloJoker);
   const finishRank = rev ? RANK_3 : RANK_2;
   return out.filter(
     (c) =>
+      liu2Exempt ||
       !(c.cards.length === hand.length && (c.type === 'single' || c.type === 'pair') && c.rank === finishRank)
   );
 }

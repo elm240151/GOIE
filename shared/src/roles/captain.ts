@@ -25,23 +25,55 @@ interface CaptainState {
   zwBeater: string | null;
   /** 开局整备是否已处理（首回合无摸牌但仍有整备阶段；轮末 onRoundEnd 也会置位） */
   startPhaseDone: boolean;
+  /** 障目再入：待门控的技能与目标（抽你选人 / 再问压牌者） */
+  gate: { skillId: 'chou-ni' | 'zai-wen'; targetId: string } | null;
+}
+
+/** 抽你选定效果（障目门控通过后执行） */
+function chouNiEffect(ctx: HookContext, st: CaptainState, t: string): HookResult | void {
+  st.stage = null;
+  st.uses--;
+  st.designated = t;
+  const name = ctx.game.players().find((p) => p.id === t)?.name ?? t;
+  ctx.game.announce('captain', 'chou-ni', `指定 ${name}：本回合只有 TA 能响应`);
 }
 
 /** 抽你询问流（开局整备与轮末整备共用）：确认 → 选目标；阶段由 st.stage 分派 */
 function chouNiFlow(ctx: HookContext, st: CaptainState): HookResult | void {
   const a = ctx.answer;
+  // 障目再入（抽你猜牌/摸牌答案）：门控通过后照常指定
+  if (st.gate?.skillId === 'chou-ni') {
+    const t = st.gate.targetId;
+    const g = ctx.game.zhangMuCheck(ctx.self.id, t, 'chou-ni', () => {
+      st.gate = null;
+      return chouNiEffect(ctx, st, t);
+    });
+    if (g) {
+      if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+      return g;
+    }
+    st.gate = null;
+    return; // 防御
+  }
   if (st.stage === 'pick') {
     // 选目标阶段（pickTarget 超时自动弃权，答案可能没有目标）
     st.stage = null;
     const t = a?.targetPlayerId;
     if (t && t !== ctx.self.id && !ctx.game.eliminated(t)) {
-      st.uses--;
-      st.designated = t;
-      const name = ctx.game.players().find((p) => p.id === t)?.name ?? t;
-      ctx.game.announce('captain', 'chou-ni', `指定 ${name}：本回合只有 TA 能响应`);
-    } else {
-      st.designated = null;
+      // 障目门控（指向性：选定辛歼须先猜手牌数）
+      st.gate = { skillId: 'chou-ni', targetId: t };
+      const g = ctx.game.zhangMuCheck(ctx.self.id, t, 'chou-ni', () => {
+        st.gate = null;
+        return chouNiEffect(ctx, st, t);
+      });
+      if (g) {
+        if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+        return g;
+      }
+      st.gate = null;
+      return chouNiEffect(ctx, st, t); // 直接放行
     }
+    st.designated = null;
     return;
   }
   if (st.uses <= 0) {
@@ -63,6 +95,27 @@ function chouNiFlow(ctx: HookContext, st: CaptainState): HookResult | void {
   return {
     ok: true,
     ask: { kind: 'pickTarget', prompt: '【抽你】指定一人：本回合只能由其响应你的牌', targetCandidates: others },
+  };
+}
+
+/** 再问阶段二询问（障目门控通过后执行）：压牌者补打一张同点数或同花色的牌 */
+function zaiWenAsk(ctx: HookContext, st: CaptainState, beater: string): HookResult {
+  st.zwBeater = beater;
+  const hand = ctx.game.handOf(beater);
+  const special = ctx.game.orderReversed() ? 3 : 15;
+  const valid = hand.filter(
+    (c) => matchesRankOrSuit(c, ctx.game.table()!) && !(hand.length === 1 && c.rank === special)
+  );
+  return {
+    ok: true,
+    ask: {
+      kind: 'pickCards',
+      prompt: '【再问】请打出一张与压牌同点数或同花色的牌（弃权/超时则压牌归阿色）',
+      cards: valid,
+      min: 1,
+      max: 1,
+      askPlayerId: beater,
+    },
   };
 }
 
@@ -96,12 +149,27 @@ const captain: RoleDef = {
       zwUsed: false,
       zwBeater: null,
       startPhaseDone: false,
+      gate: null,
     };
   },
   hooks: {
     afterPlay(ctx) {
       const st = ctx.state as CaptainState;
       const a = ctx.answer;
+      // 障目再入（再问猜牌/摸牌答案）：门控通过后进入阶段二询问
+      if (st.gate?.skillId === 'zai-wen') {
+        const beater = st.gate.targetId;
+        const g = ctx.game.zhangMuCheck(ctx.self.id, beater, 'zai-wen', () => {
+          st.gate = null;
+          return zaiWenAsk(ctx, st, beater);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+          return g;
+        }
+        st.gate = null;
+        return; // 防御
+      }
       // 自己刚出牌（含归属改写后）：处于抽你轮则对当前桌面设响应限制
       // （被指定者淘汰/掉线限制继续有效：无人能响应，只能全过）
       if (ctx.game.roundLastPlayerId() === ctx.self.id && st.designated) {
@@ -145,24 +213,19 @@ const captain: RoleDef = {
       }
       // 阶段一确认：问压牌者补打一张（只给满足条件的牌）；
       // 留 X 禁止收尾：压牌者只剩一张且是特殊点数（正序 2/倒序 3）→ 不可补打（防空手僵尸态）
+      // 障目门控（指向性：压牌者为辛歼时先猜手牌数）
       const beater = ctx.game.roundLastPlayerId()!;
-      st.zwBeater = beater;
-      const hand = ctx.game.handOf(beater);
-      const special = ctx.game.orderReversed() ? 3 : 15;
-      const valid = hand.filter(
-        (c) => matchesRankOrSuit(c, ctx.game.table()!) && !(hand.length === 1 && c.rank === special)
-      );
-      return {
-        ok: true,
-        ask: {
-          kind: 'pickCards',
-          prompt: '【再问】请打出一张与压牌同点数或同花色的牌（弃权/超时则压牌归阿色）',
-          cards: valid,
-          min: 1,
-          max: 1,
-          askPlayerId: beater,
-        },
-      };
+      st.gate = { skillId: 'zai-wen', targetId: beater };
+      const g = ctx.game.zhangMuCheck(ctx.self.id, beater, 'zai-wen', () => {
+        st.gate = null;
+        return zaiWenAsk(ctx, st, beater);
+      });
+      if (g) {
+        if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+        return g;
+      }
+      st.gate = null;
+      return zaiWenAsk(ctx, st, beater); // 直接放行
     },
     onTurnStart(ctx) {
       const st = ctx.state as CaptainState;

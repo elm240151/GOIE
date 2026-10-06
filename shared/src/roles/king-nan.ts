@@ -12,11 +12,46 @@
 //   王当百搭按所当点数、单王/对王视为无穷（差必封顶 3）。加的牌不豁免手牌上限。
 import { isJoker, jokerSuits, pointValue } from '../cards';
 import type { Combo } from '../engine/combos';
-import type { RoleDef } from './types';
+import type { HookContext, HookResult, RoleDef } from './types';
 
 interface KingNanState {
   /** 本回合是否已判定过旺旺（每回合限一次：弃权不消耗，发动即消耗） */
   judgedThisRound: boolean;
+  /** 障目再入：待门控的技能与目标（旺旺压牌者 / 回味被压者） */
+  gate: { skillId: 'wang-wang' | 'hui-wei'; targetId: string } | null;
+}
+
+/** 旺旺判定流程（障目门控通过后执行）：翻牌非红桃 → 压牌者摸 3 张 */
+function wangWangJudge(ctx: HookContext, st: KingNanState, owner: string): HookResult | void {
+  st.judgedThisRound = true; // 发动即消耗（判定牌一律弃置，成败无关）
+  const top = ctx.game.revealTop(1, '旺旺判定');
+  const card = top[0];
+  const name = ctx.game.players().find((p) => p.id === owner)?.name ?? owner;
+  if (!card) {
+    ctx.game.discardRevealed();
+    ctx.game.announce('king-nan', 'wang-wang', '【旺旺】牌堆已空，无法判定');
+    return;
+  }
+  const isHeart = isJoker(card) ? jokerSuits(card).includes(1) : card.suit === 1;
+  ctx.game.discardRevealed(); // 判定牌一律弃置
+  if (isHeart) {
+    ctx.game.announce('king-nan', 'wang-wang', `【旺旺】判定失败（红桃），${name} 不受影响`);
+    return { ok: true };
+  }
+  ctx.game.draw(owner, 3);
+  ctx.game.announce('king-nan', 'wang-wang', `【旺旺】判定成功！${name} 进入成功班，摸 3 张手牌`);
+  return { ok: true };
+}
+
+/** 回味效果（障目门控通过后执行）：被压者摸 |点数差| 张，至多 3 */
+function huiWeiEffect(ctx: HookContext, _st: KingNanState, played: Combo, target: string): HookResult | void {
+  const prev = ctx.game.prevTable();
+  if (!prev) return;
+  const n = Math.min(3, Math.abs(comboPoints(played) - comboPoints(prev)));
+  if (n <= 0) return;
+  ctx.game.draw(target, n);
+  const name = ctx.game.players().find((p) => p.id === target)?.name ?? target;
+  ctx.game.announce('king-nan', 'hui-wei', `【回味】${name} 回味无穷，摸 ${n} 张手牌`);
 }
 
 /** 一手牌的点数总和（回味）：2 记 2、A 记 1、其余按牌面；王当百搭按所当点数，单王/对王视为无穷 */
@@ -54,7 +89,7 @@ const kingNan: RoleDef = {
     },
   ],
   setup(): KingNanState {
-    return { judgedThisRound: false };
+    return { judgedThisRound: false, gate: null };
   },
   hooks: {
     onPlayInterrupt(ctx, _played) {
@@ -63,6 +98,20 @@ const kingNan: RoleDef = {
       if (ctx.game.eliminated(owner)) return; // 防御：目标已不在场则不判定
       if (ctx.game.bpProtected(owner)) return; // 血压（硝烟）全挡：技能不能对压牌者生效（含增益）
       const st = ctx.state as KingNanState;
+      // 障目再入（旺旺猜牌/摸牌答案）：门控通过后照常判定
+      if (st.gate?.skillId === 'wang-wang') {
+        const { targetId } = st.gate;
+        const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'wang-wang', () => {
+          st.gate = null;
+          return wangWangJudge(ctx, st, targetId);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+          return g;
+        }
+        st.gate = null;
+        return; // 防御
+      }
       const a = ctx.answer;
       if (!a) {
         if (st.judgedThisRound) return;
@@ -78,24 +127,18 @@ const kingNan: RoleDef = {
       }
       if (st.judgedThisRound) return; // 防御：同轮重复回答
       if (a.choice !== 'yes') return; // 弃权不消耗
-      st.judgedThisRound = true; // 发动即消耗（判定牌一律弃置，成败无关）
-      const top = ctx.game.revealTop(1, '旺旺判定');
-      const card = top[0];
-      const name = ctx.game.players().find((p) => p.id === owner)?.name ?? owner;
-      if (!card) {
-        ctx.game.discardRevealed();
-        ctx.game.announce('king-nan', 'wang-wang', '【旺旺】牌堆已空，无法判定');
-        return;
+      // 障目门控（指向性：压牌者为辛歼时先猜手牌数；猜错不消耗次数）
+      st.gate = { skillId: 'wang-wang', targetId: owner };
+      const g = ctx.game.zhangMuCheck(ctx.self.id, owner, 'wang-wang', () => {
+        st.gate = null;
+        return wangWangJudge(ctx, st, owner);
+      });
+      if (g) {
+        if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+        return g;
       }
-      const isHeart = isJoker(card) ? jokerSuits(card).includes(1) : card.suit === 1;
-      ctx.game.discardRevealed(); // 判定牌一律弃置
-      if (isHeart) {
-        ctx.game.announce('king-nan', 'wang-wang', `【旺旺】判定失败（红桃），${name} 不受影响`);
-        return { ok: true };
-      }
-      ctx.game.draw(owner, 3);
-      ctx.game.announce('king-nan', 'wang-wang', `【旺旺】判定成功！${name} 进入成功班，摸 3 张手牌`);
-      return { ok: true };
+      st.gate = null;
+      return wangWangJudge(ctx, st, owner); // 直接放行
     },
     afterPlay(ctx, played) {
       // 锁定技：不询问。触发 = 楠王压牌（本手出牌者是楠王——afterPlay 对全场每个角色的每次出牌都会跑，
@@ -108,11 +151,35 @@ const kingNan: RoleDef = {
       if (ctx.game.bpProtected(target)) return; // 血压（硝烟）全挡：技能不能对被压者生效（含增益）
       const prev = ctx.game.prevTable();
       if (!prev) return;
+      const st = ctx.state as KingNanState;
+      // 障目再入（回味猜牌/摸牌答案）：门控通过后照常给牌（回味名义锁定但按非锁定门控，2026-10-06 用户确认）
+      if (st.gate?.skillId === 'hui-wei') {
+        const { targetId } = st.gate;
+        const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'hui-wei', () => {
+          st.gate = null;
+          return huiWeiEffect(ctx, st, played, targetId);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+          return g;
+        }
+        st.gate = null;
+        return; // 防御
+      }
       const n = Math.min(3, Math.abs(comboPoints(played) - comboPoints(prev)));
       if (n <= 0) return;
-      ctx.game.draw(target, n);
-      const name = ctx.game.players().find((p) => p.id === target)?.name ?? target;
-      ctx.game.announce('king-nan', 'hui-wei', `【回味】${name} 回味无穷，摸 ${n} 张手牌`);
+      // 障目门控（指向性：被压者为辛歼时先猜手牌数）
+      st.gate = { skillId: 'hui-wei', targetId: target };
+      const g = ctx.game.zhangMuCheck(ctx.self.id, target, 'hui-wei', () => {
+        st.gate = null;
+        return huiWeiEffect(ctx, st, played, target);
+      });
+      if (g) {
+        if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+        return g;
+      }
+      st.gate = null;
+      return huiWeiEffect(ctx, st, played, target); // 直接放行
     },
     onRoundEnd(ctx) {
       (ctx.state as KingNanState).judgedThisRound = false; // 每回合（轮）限一次

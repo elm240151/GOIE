@@ -69,6 +69,8 @@ export interface SkillUsePayload {
   choice?: string;
   cardIds?: number[];
   targetPlayerId?: string;
+  /** 障目（辛歼）猜对方手牌数（1-20） */
+  guess?: number;
 }
 
 /** 大厅/房间公开状态（所有成员可见，广播用） */

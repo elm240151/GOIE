@@ -106,7 +106,7 @@ export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
       <div className="seat-meta">
         <span className="seat-role">{role?.name ?? STR.game.seatRoleUnknown}</span>
         <span className={`seat-handcount ${drawnPop ? 'seat-handcount-pop' : ''}`}>
-          ×{player.handCount}/{handLimitOf(player.roleId)}
+          {player.handCount >= 0 ? `×${player.handCount}/${handLimitOf(player.roleId)}` : `×${STR.game.handUnknown}`}
         </span>
         {isLeader && <span className="seat-leader">{STR.game.seatLeader}</span>}
         {isAsked && <span className="seat-asking">{STR.game.seatAsking}</span>}
@@ -145,7 +145,7 @@ export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
         {player.eliminated && <span className="seat-offline">{STR.game.eliminated}</span>}
         {!player.connected && !player.eliminated && <span className="seat-offline">{STR.room.offlineBadge}</span>}
       </div>
-      {/* 牌背堆：直观显示手牌张数（最多叠 8 张，其余看 ×N） */}
+      {/* 牌背堆：直观显示手牌张数（最多叠 8 张，其余看 ×N；辛歼神秘手牌数 -1 不显示） */}
       {!player.eliminated && player.handCount > 0 && (
         <div
           className={`seat-cards ${drawnPop ? 'seat-cards-pop' : ''}`}

@@ -41,6 +41,89 @@ interface BaoGuoState {
   fanliMyCard: number | null;
   // 五连鞭/压腿（同一打断钩子的两段阶段机）
   interruptStage: 'wlb' | 'yt' | null;
+  /** 障目再入：待门控的技能与目标（见习/反力矩选人、五连鞭/压腿出牌者） */
+  gate: { skillId: 'jian-xi' | 'fan-li-ju' | 'wu-lian-bian' | 'ya-tui'; targetId: string } | null;
+}
+
+/** 见习发动（障目门控通过后执行）：私摸 2 张暗交 1 张并罚站 */
+function jianXiGrant(ctx: HookContext, st: BaoGuoState, t: string): HookResult | void {
+  st.jianxiUsed++;
+  st.jianxiTarget = t;
+  st.jianxiLastTarget = t;
+  st.jianxiLastRound = st.roundCount;
+  // 私摸 2 张（超上限照常淘汰；牌堆空则摸少）
+  const before = ctx.game.handOf(ctx.self.id).length;
+  ctx.game.draw(ctx.self.id, 2);
+  if (ctx.game.phase() !== 'playing') return; // 摸牌致终局（淘汰只剩一人等）：后续无需进行
+  const hand = ctx.game.handOf(ctx.self.id);
+  st.jianxiDrewIds = hand.slice(before).map((c) => c.id);
+  if (st.jianxiDrewIds.length === 0) {
+    // 没摸到牌（含私摸超上限照常淘汰、手牌已清空）：无牌可交，直接罚站
+    ctx.game.banPlayThisRound(t);
+    ctx.game.announce('bao-guo', 'jian-xi', `${nameOf(ctx, t)} 本回合罚站：不得出牌、不被技能响应`);
+    // 陈正自己超上限被淘汰：让出回合（照常出牌无从谈起）
+    return ctx.game.eliminated(ctx.self.id) ? { ok: true, modify: { endTurn: true } } : undefined;
+  }
+  st.jianxiStage = 'give';
+  return {
+    ok: true,
+    ask: {
+      kind: 'pickCards',
+      prompt: `选择 1 张刚摸的牌暗交给 ${nameOf(ctx, t)}（另一张留给自己；超时自动交第 1 张）`,
+      cards: st.jianxiDrewIds.map((id) => hand.find((c) => c.id === id)!),
+      min: 1,
+      max: 1,
+    },
+  };
+}
+
+/** 反力矩选定拼点目标（障目门控通过后执行）：陈正暗选拼点牌 */
+function fanLiSelfPick(ctx: HookContext, st: BaoGuoState, t: string): HookResult | void {
+  st.fanliStage = 'selfPick';
+  st.fanliTarget = t;
+  return {
+    ok: true,
+    ask: {
+      kind: 'pickCards',
+      prompt: '暗选一张拼点牌（你的点数 +2；选好后与对方一起亮出，超时作罢）',
+      cards: [...ctx.game.handOf(ctx.self.id)],
+      min: 1,
+      max: 1,
+    },
+  };
+}
+
+/** 五连鞭发动（障目门控通过后执行）：令出牌者摸 1 张；压腿适用则继续问 */
+function wlbGrant(ctx: HookContext, st: BaoGuoState, player: string, ytApplies: boolean, ytPrompt: string): HookResult | void {
+  ctx.game.draw(player, 1);
+  ctx.game.announce('bao-guo', 'wu-lian-bian', `${nameOf(ctx, player)} 摸 1 张`);
+  if (ctx.game.phase() !== 'playing') return;
+  if (ytApplies) {
+    st.interruptStage = 'yt';
+    return { ok: true, ask: { kind: 'confirm', prompt: ytPrompt } };
+  }
+}
+
+/** 压腿发动（障目门控通过后执行）：拼点流程（双方从牌堆各翻 1 张公开） */
+function ytGrant(ctx: HookContext, st: BaoGuoState, player: string): HookResult | void {
+  const top = ctx.game.revealTop(2, '压腿拼点');
+  if (top.length < 2) {
+    ctx.game.discardRevealed();
+    ctx.game.announce('bao-guo', 'ya-tui', '牌堆已空，无法拼点');
+    return;
+  }
+  const mine = contestPoint(top[0]!) + 2;
+  const theirs = contestPoint(top[1]!);
+  ctx.game.discardRevealed(); // 两张拼点牌一律弃置
+  const diff = Math.abs(mine - theirs);
+  const name = nameOf(ctx, player);
+  if (mine > theirs) {
+    ctx.game.announce('bao-guo', 'ya-tui', `拼点获胜（${mine} vs ${theirs}）：${name} 摸 ${diff} 张`);
+    ctx.game.draw(player, diff);
+  } else {
+    ctx.game.announce('bao-guo', 'ya-tui', `拼点落败（${mine} vs ${theirs}）：陈正摸 ${diff} 张`);
+    ctx.game.draw(ctx.self.id, diff);
+  }
 }
 
 /** 拼点通用点数（反力矩/压腿共用）：3~10 按牌面、J=11、Q=12、K=13、A=1、2=2、大小王都 = 14 */
@@ -58,6 +141,20 @@ function nameOf(ctx: HookContext, id: string): string {
 /** 见习阶段机（onSkillAction 多阶段重跑）：选目标 → 私摸 2 张 → 选 1 张暗交给目标并罚站 */
 function jianXiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
   const a = ctx.answer;
+  // 障目再入（见习猜牌/摸牌答案）：门控通过后照常发动
+  if (st.gate?.skillId === 'jian-xi') {
+    const { targetId } = st.gate;
+    const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'jian-xi', () => {
+      st.gate = null;
+      return jianXiGrant(ctx, st, targetId);
+    });
+    if (g) {
+      if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+      return g;
+    }
+    st.gate = null;
+    return; // 防御
+  }
   if (st.jianxiStage === 'give') {
     st.jianxiStage = null;
     const target = st.jianxiTarget!;
@@ -90,34 +187,18 @@ function jianXiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
       !ctx.game.bpProtected(t) && // 血压（硝烟）全挡：技能不能对其生效
       !(st.jianxiLastTarget === t && st.roundCount <= st.jianxiLastRound + 1);
     if (!ok) return; // 弃权/非法：不消耗次数
-    st.jianxiUsed++;
-    st.jianxiTarget = t;
-    st.jianxiLastTarget = t;
-    st.jianxiLastRound = st.roundCount;
-    // 私摸 2 张（超上限照常淘汰；牌堆空则摸少）
-    const before = ctx.game.handOf(ctx.self.id).length;
-    ctx.game.draw(ctx.self.id, 2);
-    if (ctx.game.phase() !== 'playing') return; // 摸牌致终局（淘汰只剩一人等）：后续无需进行
-    const hand = ctx.game.handOf(ctx.self.id);
-    st.jianxiDrewIds = hand.slice(before).map((c) => c.id);
-    if (st.jianxiDrewIds.length === 0) {
-      // 没摸到牌（含私摸超上限照常淘汰、手牌已清空）：无牌可交，直接罚站
-      ctx.game.banPlayThisRound(t);
-      ctx.game.announce('bao-guo', 'jian-xi', `${nameOf(ctx, t)} 本回合罚站：不得出牌、不被技能响应`);
-      // 陈正自己超上限被淘汰：让出回合（照常出牌无从谈起）
-      return ctx.game.eliminated(ctx.self.id) ? { ok: true, modify: { endTurn: true } } : undefined;
+    // 障目门控（指向性：见习目标为辛歼时先猜手牌数；猜错不消耗次数）
+    st.gate = { skillId: 'jian-xi', targetId: t };
+    const g = ctx.game.zhangMuCheck(ctx.self.id, t, 'jian-xi', () => {
+      st.gate = null;
+      return jianXiGrant(ctx, st, t);
+    });
+    if (g) {
+      if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+      return g;
     }
-    st.jianxiStage = 'give';
-    return {
-      ok: true,
-      ask: {
-        kind: 'pickCards',
-        prompt: `选择 1 张刚摸的牌暗交给 ${nameOf(ctx, t)}（另一张留给自己；超时自动交第 1 张）`,
-        cards: st.jianxiDrewIds.map((id) => hand.find((c) => c.id === id)!),
-        min: 1,
-        max: 1,
-      },
-    };
+    st.gate = null;
+    return jianXiGrant(ctx, st, t); // 直接放行
   }
   // 首次进入（按钮触发）：校验次数与可选目标
   if (st.jianxiUsed >= ctx.game.players().length + 2) return { ok: false, reason: '【见习】本局次数已用尽' };
@@ -170,6 +251,20 @@ function fanLiPickTarget(ctx: HookContext, st: BaoGuoState): HookResult | void {
 /** 反力矩阶段机（onSkillAction 主动 / onTurnStart 被动共用） */
 function fanLiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
   const a = ctx.answer;
+  // 障目再入（反力矩猜牌/摸牌答案）：门控通过后进入暗选
+  if (st.gate?.skillId === 'fan-li-ju') {
+    const { targetId } = st.gate;
+    const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'fan-li-ju', () => {
+      st.gate = null;
+      return fanLiSelfPick(ctx, st, targetId);
+    });
+    if (g) {
+      if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+      return g;
+    }
+    st.gate = null;
+    return; // 防御
+  }
   switch (st.fanliStage) {
     case 'confirm': {
       if (!a) {
@@ -194,18 +289,18 @@ function fanLiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
         st.fanliStage = null; // 弃权/非法：作罢
         return;
       }
-      st.fanliStage = 'selfPick';
-      st.fanliTarget = t;
-      return {
-        ok: true,
-        ask: {
-          kind: 'pickCards',
-          prompt: '暗选一张拼点牌（你的点数 +2；选好后与对方一起亮出，超时作罢）',
-          cards: [...ctx.game.handOf(ctx.self.id)],
-          min: 1,
-          max: 1,
-        },
-      };
+      // 障目门控（指向性：拼点目标为辛歼时先猜手牌数）
+      st.gate = { skillId: 'fan-li-ju', targetId: t };
+      const g = ctx.game.zhangMuCheck(ctx.self.id, t, 'fan-li-ju', () => {
+        st.gate = null;
+        return fanLiSelfPick(ctx, st, t);
+      });
+      if (g) {
+        if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+        return g;
+      }
+      st.gate = null;
+      return fanLiSelfPick(ctx, st, t); // 直接放行
     }
     case 'selfPick': {
       const myCard = ctx.game.handOf(ctx.self.id).find((c) => c.id === a?.cardIds?.[0]);
@@ -335,6 +430,7 @@ const baoGuo: RoleDef = {
       fanliTarget: null,
       fanliMyCard: null,
       interruptStage: null,
+      gate: null,
     };
   },
   skillActions: [
@@ -385,6 +481,33 @@ const baoGuo: RoleDef = {
         player !== ctx.self.id &&
         !(ctx.game.deckCount() === 0 && ctx.game.discardCount() === 0);
       const ytPrompt = `${name} 使用了炸弹，是否与其拼点？（双方从牌堆各翻 1 张，你的点数 +2，失败方摸 |点差| 张）`;
+      // 障目再入（五连鞭/压腿猜牌/摸牌答案）：门控通过后照常生效
+      if (st.gate?.skillId === 'wu-lian-bian') {
+        const { targetId } = st.gate;
+        const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'wu-lian-bian', () => {
+          st.gate = null;
+          return wlbGrant(ctx, st, targetId, ytApplies, ytPrompt);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+          return g;
+        }
+        st.gate = null;
+        return; // 防御
+      }
+      if (st.gate?.skillId === 'ya-tui') {
+        const { targetId } = st.gate;
+        const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'ya-tui', () => {
+          st.gate = null;
+          return ytGrant(ctx, st, targetId);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+          return g;
+        }
+        st.gate = null;
+        return; // 防御
+      }
       if (!a) {
         st.interruptStage = null; // 新一手：重置阶段
         if (played.cards.length >= 5) {
@@ -406,8 +529,18 @@ const baoGuo: RoleDef = {
       if (st.interruptStage === 'wlb') {
         st.interruptStage = null;
         if (a.choice === 'yes') {
-          ctx.game.draw(player, 1);
-          ctx.game.announce('bao-guo', 'wu-lian-bian', `${name} 摸 1 张`);
+          // 障目门控（指向性：出牌者为辛歼时先猜手牌数；猜错不消耗次数）
+          st.gate = { skillId: 'wu-lian-bian', targetId: player };
+          const g = ctx.game.zhangMuCheck(ctx.self.id, player, 'wu-lian-bian', () => {
+            st.gate = null;
+            return wlbGrant(ctx, st, player, ytApplies, ytPrompt);
+          });
+          if (g) {
+            if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+            return g;
+          }
+          st.gate = null;
+          return wlbGrant(ctx, st, player, ytApplies, ytPrompt); // 直接放行
         }
         if (ctx.game.phase() !== 'playing') return;
         if (ytApplies) {
@@ -419,25 +552,18 @@ const baoGuo: RoleDef = {
       if (st.interruptStage === 'yt') {
         st.interruptStage = null;
         if (a.choice !== 'yes') return;
-        // 压腿拼点：双方从牌堆各翻 1 张公开（第 1 张 = 陈正的拼点牌）
-        const top = ctx.game.revealTop(2, '压腿拼点');
-        if (top.length < 2) {
-          ctx.game.discardRevealed();
-          ctx.game.announce('bao-guo', 'ya-tui', '牌堆已空，无法拼点');
-          return;
+        // 障目门控（指向性：出牌者为辛歼时先猜手牌数；猜错不消耗次数）
+        st.gate = { skillId: 'ya-tui', targetId: player };
+        const g = ctx.game.zhangMuCheck(ctx.self.id, player, 'ya-tui', () => {
+          st.gate = null;
+          return ytGrant(ctx, st, player);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+          return g;
         }
-        const mine = contestPoint(top[0]!) + 2;
-        const theirs = contestPoint(top[1]!);
-        ctx.game.discardRevealed(); // 两张拼点牌一律弃置
-        const diff = Math.abs(mine - theirs);
-        if (mine > theirs) {
-          ctx.game.announce('bao-guo', 'ya-tui', `拼点获胜（${mine} vs ${theirs}）：${name} 摸 ${diff} 张`);
-          ctx.game.draw(player, diff);
-        } else {
-          ctx.game.announce('bao-guo', 'ya-tui', `拼点落败（${mine} vs ${theirs}）：陈正摸 ${diff} 张`);
-          ctx.game.draw(ctx.self.id, diff);
-        }
-        return;
+        st.gate = null;
+        return ytGrant(ctx, st, player); // 直接放行
       }
     },
   },

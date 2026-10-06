@@ -64,13 +64,16 @@ interface PendingAsk {
   ask: SkillAsk;
   /** 被询问的玩家 */
   playerId: string;
-  /** 内部调度标签：'hook' = 重跑提问钩子；'cutIn' = 插队；'pancake' = 吐饼多阶段；'proxyPlay' = 讲题代打 */
-  kind: 'hook' | 'cutIn' | 'pancake' | 'proxyPlay';
+  /** 内部调度标签：'hook' = 重跑提问钩子；'cutIn' = 插队；'pancake' = 吐饼多阶段；'proxyPlay' = 讲题代打；
+   *  'engine' = 引擎级询问（神秘初始手牌/摸牌 1-2 选择），不走钩子重跑 */
+  kind: 'hook' | 'cutIn' | 'pancake' | 'proxyPlay' | 'engine';
   entry: HookEntry | null;
   hookName: keyof RoleHooks | null;
   args: unknown[];
   /** 恢复执行（带答案重跑钩子后的续跑逻辑） */
   resume: (outcome: HookOutcome) => void;
+  /** kind='engine' 时的答复处理（直接拿 AskAnswer，不经钩子） */
+  onResolve?: (answer: AskAnswer) => void;
 }
 
 export class GameEngine {
@@ -164,6 +167,21 @@ export class GameEngine {
   private held = new Map<string, HeldGroup[]>();
   /** 当前桌面一手牌的实际打出者（归属改写前）——尖叫（苗条）发牌给实际打出者：打光手牌的人摸回扣置牌后才能避免获胜 */
   private lastPlayPhysicalId: string | null = null;
+  /** 神秘（辛歼）：独立牌堆（54 张一整副，id 独立于公共三副；摸空时独立弃牌堆洗回） */
+  private privateDeck: Card[] = [];
+  /** 神秘（辛歼）：独立弃牌堆（含他牌面 id 的一切弃置都进这里，不参与公共洗回） */
+  private privateDiscard: Card[] = [];
+  /** 神秘（辛歼）：独立牌堆的牌 id 集合（弃置按牌面 id 路由进独立弃牌堆） */
+  private privateCardIds = new Set<number>();
+  /** 神秘（辛歼）玩家 id（房间至多一人） */
+  private mysticPlayerId: string | null = null;
+  /** 障目（辛歼）门控状态：key = 'casterId:skillId'。pending = 猜牌/摸牌阶段中；passed = 本回合已猜中通过；
+   *  blocked = 本回合已猜错（不能对其他人发动，对辛歼重试可再猜） */
+  private zhangMuPending = new Map<string, 'guess' | 'draw'>();
+  private zhangMuPassed = new Set<string>();
+  private zhangMuBlocked = new Set<string>();
+  /** 当前正在运行的钩子条目（zhangMuCheck 续跑 applyOutcome 用） */
+  private runningEntry: HookEntry | null = null;
 
   constructor(cfg: RuleConfig, players: EnginePlayer[], opts: EngineOptions) {
     if (players.length < cfg.players.min || players.length > cfg.players.max)
@@ -181,11 +199,21 @@ export class GameEngine {
       if (this.roles.get(p.roleId)?.flipsOrderOnPlay) this.orderFlippers.add(p.id);
       if (this.roles.get(p.roleId)?.exciteOnPlay) this.exciteOwners.add(p.id);
     }
+    // 神秘（辛歼）：独立牌堆 = 一整副 54 张，id 接在公共三副之后（162..215）、deck 字段 3
+    const mystic = players.find((p) => this.roles.get(p.roleId)?.mystic);
+    if (mystic) {
+      this.mysticPlayerId = mystic.id;
+      this.privateDeck = shuffle(
+        buildDeck(1).map((c, i) => ({ ...c, id: 162 + i, deck: 3 })),
+        this.rng
+      );
+      for (const c of this.privateDeck) this.privateCardIds.add(c.id);
+    }
   }
 
   // ---------- 对外接口 ----------
 
-  /** 开局：发牌、角色 setup、onDeal 钩子、进入第一轮 */
+  /** 开局：发牌（辛歼先问初始手牌数）→ 角色 setup → onDeal 钩子 → 进入第一轮 */
   start(): void {
     if (this.phase !== 'dealing') return;
     for (const p of this.players) this.hands.set(p.id, []);
@@ -194,6 +222,8 @@ export class GameEngine {
     } else {
       this.deck = shuffle(buildDeck(this.cfg.deck.count), this.rng);
       for (const p of this.players) {
+        // 神秘（辛歼）：初始手牌数自选（先手 5-7、其他 4-6），挂起询问后再发
+        if (p.id === this.mysticPlayerId) continue;
         // 贪婪（阿摩）：初始手牌 = 2×全场人数张（先手/后手同，不沿用「先手多 1」）
         const n = this.roles.get(p.roleId)?.greedy
           ? this.players.length * 2
@@ -203,6 +233,30 @@ export class GameEngine {
         this.rawDraw(p.id, n); // 两倍（玊）：发牌 ×2（先手 6×2=12、其余 5×2=10）在 rawDraw 内统一处理
       }
     }
+    if (this.mysticPlayerId && !this.handsOverride) {
+      // 神秘（辛歼）：开局询问初始手牌数（超时取正常张数——先手 6/其他 5）
+      const isLeader = this.mysticPlayerId === this.startPlayerId;
+      this.suspendEngine(
+        this.mysticPlayerId,
+        {
+          kind: 'choice',
+          prompt: '【神秘】选择你的初始手牌数',
+          options: isLeader ? ['6 张', '5 张', '7 张'] : ['5 张', '4 张', '6 张'],
+          declineAllowed: false,
+        },
+        (answer) => {
+          const n = Number.parseInt(answer.choice ?? '', 10) || (isLeader ? 6 : 5);
+          this.rawDraw(this.mysticPlayerId!, n);
+          this.finishStart();
+        }
+      );
+      return;
+    }
+    this.finishStart();
+  }
+
+  /** 发牌完成后的开局收尾：角色 setup → onDeal 钩子 → 进入第一轮 */
+  private finishStart(): void {
     // 角色 setup（发牌后可见手牌）
     for (const p of this.players) {
       const role = this.roles.get(p.roleId);
@@ -260,8 +314,10 @@ export class GameEngine {
     // 呕哑（玊）：接牌时可打出包含桌面全部实际点数的任意合法牌型，无视管牌规则（单王/对王桌面不可发动）
     const role = this.players.find((p) => p.id === playerId);
     const ouYaLegal = !!role && !!this.roles.get(role.roleId)?.ouYa && ouYaCovers(combo, this.tableCombo);
-    // 留 X 禁止收尾：以单 2/对 2（倒序：单 3/对 3）打完手牌 → 拒绝（技能优先：钩子可 allowAnyway 放行）
+    // 留 X 禁止收尾：以单 2/对 2（倒序：单 3/对 3）打完手牌 → 拒绝（技能优先：钩子可 allowAnyway 放行；
+    // 辛歼【神秘】豁免）
     const finishSpecial =
+      !this.liu2ExemptFor(playerId) &&
       cards.length === hand.length &&
       (combo.type === 'single' || combo.type === 'pair') &&
       combo.rank === (rev ? RANK_3 : RANK_2);
@@ -298,8 +354,9 @@ export class GameEngine {
       this.soloJokerAllowed(playerId)
     );
     if (!res.ok) return fail(res.reason);
-    // 留 X 禁止收尾同样适用于翻面接牌（后继 gap 牌型免于此限：多点数无法判定收尾）
+    // 留 X 禁止收尾同样适用于翻面接牌（后继 gap 牌型免于此限：多点数无法判定收尾；辛歼【神秘】豁免）
     const finishSpecial =
+      !this.liu2ExemptFor(playerId) &&
       cards.length === hand.length &&
       (res.combo.type === 'single' || res.combo.type === 'pair') &&
       res.combo.rank === (rev ? RANK_3 : RANK_2);
@@ -392,12 +449,18 @@ export class GameEngine {
 
   /** 回答技能询问：重跑提问钩子（带 answer）或处理插队 */
   resolveAsk(playerId: string, answer: AskAnswer): ActionResult {
-    if (this.phase !== 'playing') return fail('游戏已结束');
     const p = this.pendingAsk;
     if (!p) return fail('没有待处理的技能询问');
+    // 引擎级询问（神秘初始手牌等）在发牌期即可作答
+    if (this.phase !== 'playing' && p.kind !== 'engine') return fail('游戏已结束');
     if (p.playerId !== playerId) return fail('不是你的技能询问');
     if (p.ask.askId !== answer.askId) return fail('询问已失效');
     this.pendingAsk = null;
+    // 引擎级询问：直接交给答复处理（神秘初始手牌/摸牌 1-2 等，不走钩子重跑）
+    if (p.kind === 'engine') {
+      p.onResolve?.(this.effectiveAnswer(p.ask, answer));
+      return this.ok();
+    }
     // suspend() 会把 PendingAsk.kind 设为 'hook'/'cutIn'/'pancake'/'proxyPlay'（内部调度标签），此处须看 ask.kind
     if (p.ask.kind === 'selfFollow') {
       return this.resolveSelfFollow(playerId, answer);
@@ -429,8 +492,9 @@ export class GameEngine {
         this.advanceTurn();
         return fail('压不过上家的牌');
       }
-      // 留 X 禁止收尾：插队同样不能以单 2/对 2（倒序单 3/对 3）打完手牌
+      // 留 X 禁止收尾：插队同样不能以单 2/对 2（倒序单 3/对 3）打完手牌（辛歼【神秘】豁免）
       if (
+        !this.liu2ExemptFor(playerId) &&
         cards.length === hand.length &&
         (combo.type === 'single' || combo.type === 'pair') &&
         combo.rank === (rev ? RANK_3 : RANK_2)
@@ -501,7 +565,11 @@ export class GameEngine {
         id: p.id,
         name: p.name,
         roleId: p.roleId,
-        handCount: this.hands.get(p.id)?.length ?? 0,
+        // 神秘（辛歼）：手牌数不可探查——对其他玩家发 -1（客户端显示 ??）
+        handCount:
+          p.id !== viewerId && p.id === this.mysticPlayerId
+            ? -1
+            : this.hands.get(p.id)?.length ?? 0,
         hand: p.id === viewerId ? [...(this.hands.get(p.id) ?? [])] : null,
         connected: true,
         eliminated: this.eliminated.has(p.id),
@@ -522,6 +590,9 @@ export class GameEngine {
       bpProtectedIds: this.players.filter((p) => this.bpProtected(p.id)).map((p) => p.id),
       deckCount: this.deck.length,
       discardCount: this.discarded.length,
+      /** 神秘（辛歼）：独立牌堆/弃牌堆张数只对自己可见 */
+      privateDeckCount: viewerId === this.mysticPlayerId ? this.privateDeck.length : null,
+      privateDiscardCount: viewerId === this.mysticPlayerId ? this.privateDiscard.length : null,
       /** 翻牌展示区：判定牌公开，所有人都能看（角色须在动作内清空） */
       revealed: [...this.revealedPool],
       table: this.tableCombo,
@@ -578,6 +649,12 @@ export class GameEngine {
     return !!p && !!this.roles.get(p.roleId)?.doubleSupply;
   }
 
+  /** 神秘（辛歼）：留 2 豁免——可以以单 2/对 2（倒序单 3/对 3）打完手牌（含代打/翻面接等一切路径） */
+  private liu2ExemptFor(playerId: string): boolean {
+    const p = this.players.find((x) => x.id === playerId);
+    return !!p && !!this.roles.get(p.roleId)?.mystic;
+  }
+
   /** 取走未消费的事件（服务端广播用；start() 产生的事件也走这里） */
   drainEvents(): GameEvent[] {
     const events = this.pendingEvents;
@@ -601,9 +678,9 @@ export class GameEngine {
       for (const p of this.players) this.checkHandLimit(p.id);
       if (this.phase !== 'playing') return;
       while (this.eliminated.has(leaderId)) leaderId = this.nextSeat(leaderId);
-      if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
+      if (this.tableCombo) this.discardCards([...this.tableCombo.cards, ...this.tableSide]);
       // 弃牌暂存区（2026-10-06 用户规则）：轮末与桌面牌一起进弃牌堆
-      for (const e of this.stagedDiscards) this.discarded.push(...e.cards);
+      for (const e of this.stagedDiscards) this.discardCards(e.cards);
       this.stagedDiscards = [];
       this.tableCombo = null;
       this.tableSide = [];
@@ -625,6 +702,9 @@ export class GameEngine {
       this.roundBanned.clear(); // 见习（陈正）罚站：只持续本回合，新一轮开始解除
       this.babies.clear(); // 温柔（组长）：宝贝只持续本回合，新一轮开始解除
       this.babyOwnerId = null;
+      this.zhangMuPending.clear(); // 障目（辛歼）：门控状态只持续本回合
+      this.zhangMuPassed.clear();
+      this.zhangMuBlocked.clear();
       this.orderFlipCount = 0; // 洄游：每轮恢复正序（隐匿在轮末结算读的是本轮的计数，清零发生在结算之后）
       // 先设 turnPlayerId：死锁守卫干跑 beforePlay 时技能能识别"自己起牌"
       this.turnPlayerId = leaderId;
@@ -783,7 +863,7 @@ export class GameEngine {
     this.lastPlayOrderReversed = this.orderReversed(); // 洄游先判后切：本手按切换前顺序判定（巨石触发镜像用）
     if (flips) this.orderFlipCount++; // 洄游：物理出牌即切换（先判后切，本手按切换前顺序判定）
     this.removeCards(playerId, combo.cards);
-    if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
+    if (this.tableCombo) this.discardCards([...this.tableCombo.cards, ...this.tableSide]);
     this.tableSide = [];
     this.tableSideHidden = [];
     this.tableResponderRestrict = null;
@@ -827,7 +907,7 @@ export class GameEngine {
     this.removeCards(playerId, combo.cards);
     const flipped = this.tableCombo?.cards.find((c) => c.id === flippedCardId) ?? null;
     const remainder = (this.tableCombo?.cards ?? []).filter((c) => c.id !== flippedCardId);
-    if (this.tableCombo) this.discarded.push(...remainder, ...this.tableSide);
+    if (this.tableCombo) this.discardCards([...remainder, ...this.tableSide]);
     this.tableSide = flipped ? [flipped] : [];
     this.tableSideHidden = flipped ? [flippedCardId] : [];
     this.tableResponderRestrict = null;
@@ -935,6 +1015,58 @@ export class GameEngine {
   }
 
   /** 出牌后的收尾：夺权 → 出完即胜/留2判负 → 吐饼问询（最先）→ 插队/无名加牌后续 → 插队问询/轮到下家 */
+  /** 约等（煞蔱）：收回她刚打的一手牌（桌面回退上一手）→ 与目标均分手牌 → 从她下家继续接牌 */
+  private yueDengRevert(ownerId: string, targetId: string): void {
+    const nameOf = (id: string) => this.players.find((p) => p.id === id)?.name ?? id;
+    // 收回刚压的那一手（桌旁边牌随弃）
+    const hand = this.hands.get(ownerId) ?? [];
+    hand.push(...(this.tableCombo?.cards ?? []));
+    if (this.tableSide.length > 0) this.discardCards([...this.tableSide]);
+    this.tableSide = [];
+    this.tableSideHidden = [];
+    this.tableCombo = this.prevTableCombo;
+    this.tableOwnerId = this.prevTableOwnerId ?? '';
+    // 被压的一手从弃牌堆移回桌面（commitPlay 已将其弃置；不移回会双重计数破坏守恒，2026-10-06 修复）
+    if (this.prevTableCombo) {
+      const restored = new Set(this.prevTableCombo.cards.map((c) => c.id));
+      this.discarded = this.discarded.filter((c) => !restored.has(c.id));
+      this.privateDiscard = this.privateDiscard.filter((c) => !restored.has(c.id));
+    }
+    this.prevTableCombo = null;
+    this.prevTableOwnerId = null;
+    this.prevTableSuits = new Set();
+    this.tableRankNote = null;
+    this.tableResponderRestrict = null;
+    this.lastPlayPhysicalId = null;
+    this.roundLastPlayerId = this.tableOwnerId === '' ? ownerId : this.tableOwnerId;
+    // 均分：合洗随机分，她拿 ⌊X/2⌋、对方拿其余（奇数时对方多 1）
+    const other = this.hands.get(targetId) ?? [];
+    const pool = shuffle([...hand, ...other], this.rng);
+    const x = pool.length;
+    const mine = Math.floor(x / 2);
+    this.hands.set(ownerId, pool.slice(0, mine));
+    this.hands.set(targetId, pool.slice(mine));
+    this.checkHandLimit(ownerId);
+    if (this.phase !== 'playing') return;
+    this.checkHandLimit(targetId);
+    if (this.phase !== 'playing') return;
+    this.emit({
+      type: 'skill:triggered',
+      playerId: ownerId,
+      roleId: 'sha-sha',
+      skillId: 'yue-deng',
+      text: `【约等】${nameOf(ownerId)} 收回刚打的手牌，与 ${nameOf(targetId)} 均分手牌（共 ${x} 张，${nameOf(ownerId)} 得 ${mine} 张），从其下家继续接牌`,
+    });
+    if (!this.tableCombo) {
+      // 桌面空了（她收回的是起牌手）：她重新起牌
+      this.startRound(ownerId);
+      return;
+    }
+    this.passCount = 0;
+    this.turnPlayerId = this.nextSeat(ownerId);
+    this.beginTurn();
+  }
+
   private afterPlayCommitted(playerId: string): ActionResult {
     // 夺权（巨石驱逐成功）：桌面作废，由技能所有者起牌
     for (const p of this.players) {
@@ -943,13 +1075,25 @@ export class GameEngine {
         delete mods.seizeLead;
         if (Object.keys(mods).length === 0) this.pendingMods.delete(p.id);
         if (this.phase === 'playing') {
-          if (this.tableCombo) this.discarded.push(...this.tableCombo.cards);
+          if (this.tableCombo) this.discardCards([...this.tableCombo.cards]);
           this.tableCombo = null;
           this.tableRankNote = null;
           this.aftermathMode = 'normal';
           this.cutInVictimId = null;
           this.startRound(p.id);
         }
+        return this.ok();
+      }
+    }
+    // 约等（煞蔱）：收回她刚打的一手牌并均分——桌面回退上一手、从她下家继续接牌（亡语：打光手牌仍可发动，
+    // 在获胜判定之前结算）
+    for (const p of this.players) {
+      const mods = this.pendingMods.get(p.id);
+      if (mods?.yueDeng) {
+        const targetId = mods.yueDeng.targetId;
+        delete mods.yueDeng;
+        if (Object.keys(mods).length === 0) this.pendingMods.delete(p.id);
+        if (this.phase === 'playing') this.yueDengRevert(p.id, targetId);
         return this.ok();
       }
     }
@@ -1003,8 +1147,22 @@ export class GameEngine {
         !this.eliminated.has(victimId) &&
         !this.bpProtected(victimId) // 血压（硝烟）：技能（含增益）不能对其生效
       ) {
-        this.drawCards(victimId, x);
-        if (this.phase !== 'playing') return this.ok();
+        // 障目（辛歼）：指向性技能以辛歼为目标（被响应者）须先猜手牌数；猜错跳过加牌
+        this.zhangMuGateRun(
+          ownerId,
+          victimId,
+          'wu-ming',
+          () => {
+            this.drawCards(victimId, x);
+            if (this.phase === 'playing') {
+              this.turnPlayerId = this.nextSeat(ownerId);
+              this.beginTurn();
+            }
+            return this.ok();
+          },
+          ownerId
+        );
+        return this.ok();
       }
       if (this.phase !== 'playing') return this.ok();
       this.turnPlayerId = this.nextSeat(ownerId);
@@ -1022,10 +1180,27 @@ export class GameEngine {
       const owner = this.players.find((p) => p.id === ownerId);
       const x = this.matchSuitDrawX();
       if (owner && this.roles.get(owner.roleId)?.canCutIn && x > 0) {
-        this.drawCards(this.prevTableOwnerId, x);
-        if (this.phase !== 'playing') return this.ok();
+        // 障目（辛歼）：指向性技能以辛歼为目标（被响应者）须先猜手牌数；猜错跳过加牌
+        this.zhangMuGateRun(
+          ownerId,
+          this.prevTableOwnerId,
+          'wu-ming',
+          () => {
+            this.drawCards(this.prevTableOwnerId!, x);
+            if (this.phase !== 'playing') return this.ok();
+            return this.afterPlayTailFollowups();
+          },
+          ownerId
+        );
+        return this.ok();
       }
     }
+    return this.afterPlayTailFollowups();
+  }
+
+  /** 出牌后的收尾尾部（无名普通响应加牌后）：狂吠问询 → 插队问询/轮到下家 */
+  private afterPlayTailFollowups(): ActionResult {
+    if (this.phase !== 'playing') return this.ok();
     // 狂吠（修勾）：出牌者可以立刻压自己打出的牌，可连压到放弃/压不了（压完走完整流水线，狂吠可再次触发）
     const selfId = this.roundLastPlayerId!;
     if (
@@ -1038,7 +1213,8 @@ export class GameEngine {
         this.tableCombo,
         this.cfg,
         this.orderReversed(),
-        this.soloJokerAllowed(selfId)
+        this.soloJokerAllowed(selfId),
+        this.liu2ExemptFor(selfId)
       ).length > 0
     ) {
       this.suspend(selfId, null, null, [], () => {}, {
@@ -1077,7 +1253,8 @@ export class GameEngine {
       this.tableCombo,
       this.cfg,
       rev,
-      this.soloJokerAllowed(playerId)
+      this.soloJokerAllowed(playerId),
+      this.liu2ExemptFor(playerId)
     ).filter((c) => c.type === 'bomb' || ((c.type === 'single' || c.type === 'pair') && c.rank === rk));
   }
 
@@ -1299,8 +1476,9 @@ export class GameEngine {
     const combo = parseCombo(cards, this.cfg, rev);
     if (!combo) return this.reaskSelfFollow(playerId, '这不是合法牌型');
     if (!canBeat(combo, this.tableCombo, this.cfg, rev)) return this.reaskSelfFollow(playerId, '压不过自己的牌');
-    // 留 X 禁止收尾：狂吠同样不能以单 2/对 2（倒序单 3/对 3）打完手牌
+    // 留 X 禁止收尾：狂吠同样不能以单 2/对 2（倒序单 3/对 3）打完手牌（辛歼【神秘】豁免）
     if (
+      !this.liu2ExemptFor(playerId) &&
       cards.length === hand.length &&
       (combo.type === 'single' || combo.type === 'pair') &&
       combo.rank === (rev ? RANK_3 : RANK_2)
@@ -1331,7 +1509,7 @@ export class GameEngine {
     this.lastPlayOrderReversed = this.orderReversed(); // 同上：狂吠连压也按切换前顺序判定
     if (flips) this.orderFlipCount++;
     this.removeCards(playerId, combo.cards);
-    if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
+    if (this.tableCombo) this.discardCards([...this.tableCombo.cards, ...this.tableSide]);
     this.tableSide = [];
     this.tableSideHidden = [];
     this.tableResponderRestrict = null;
@@ -1394,8 +1572,9 @@ export class GameEngine {
     const baseLegal = this.tableCombo ? canBeat(combo, this.tableCombo, this.cfg, rev) : true;
     // 呕哑（玊）：代打者本人的技能同样可用（技能优先）
     const ouYaLegal = !!role?.ouYa && !!this.tableCombo && ouYaCovers(combo, this.tableCombo);
-    // 留 X 禁止收尾：代打者同样不能以单 2/对 2（倒序单 3/对 3）打完自己的手牌
+    // 留 X 禁止收尾：代打者同样不能以单 2/对 2（倒序单 3/对 3）打完自己的手牌（辛歼【神秘】豁免）
     const finishSpecial =
+      !this.liu2ExemptFor(playerId) &&
       cards.length === hand.length &&
       (combo.type === 'single' || combo.type === 'pair') &&
       combo.rank === (rev ? RANK_3 : RANK_2);
@@ -1452,7 +1631,8 @@ export class GameEngine {
       this.tableCombo,
       this.cfg,
       this.orderReversed(),
-      this.soloJokerAllowed(cutter.id)
+      this.soloJokerAllowed(cutter.id),
+      this.liu2ExemptFor(cutter.id)
     ).some((c) => c.cards.some((card) => !isJoker(card) && playedSuits.has(card.suit)));
     if (!qualifying) {
       this.advanceTurn();
@@ -1472,7 +1652,7 @@ export class GameEngine {
     const prevSuits: Set<number> = this.tableCombo
       ? new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit))
       : new Set();
-    if (this.tableCombo) this.discarded.push(...this.tableCombo.cards);
+    if (this.tableCombo) this.discardCards([...this.tableCombo.cards]);
     const prevCombo = this.tableCombo;
     this.tableCombo = combo;
     this.tableRankNote = null;
@@ -1530,6 +1710,14 @@ export class GameEngine {
 
   private finishRoundEnd(lastId: string): void {
     const mods = this.pendingMods.get(lastId);
+    // 约等（煞蔱）拥有牌权：收回刚打的一手牌并均分——她出 0 张不用摸牌，从她下家继续接牌
+    if (mods?.yueDeng) {
+      const targetId = mods.yueDeng.targetId;
+      delete mods.yueDeng;
+      if (Object.keys(mods).length === 0) this.pendingMods.delete(lastId);
+      if (this.phase === 'playing') this.yueDengRevert(lastId, targetId);
+      return;
+    }
     let suppress = false;
     if (mods?.suppressDraw) {
       delete mods.suppressDraw;
@@ -1538,14 +1726,42 @@ export class GameEngine {
 
     if (mods && Object.keys(mods).length === 0) this.pendingMods.delete(lastId);
     // 地坛取而代之：被诅咒者本回合轮末获得牌权 → 诅咒者代替摸牌并起新回合
-    const seizedBy = this.pendingBan.get(lastId);
+    const seizedBy = this.pendingBan.get(lastId)!;
     const takenOver = !!seizedBy && !this.eliminated.has(seizedBy);
     const drawId = takenOver ? seizedBy : lastId;
-    let drew = 0;
     if (!suppress && this.cfg.roundEnd.lastPlayerDraws && this.cfg.roundEnd.drawCount > 0) {
-      drew = this.drawCards(drawId, this.cfg.roundEnd.drawCount);
+      // 神秘（辛歼）：摸牌阶段自选 1 或 2 张（超时默认 1）
+      if (drawId === this.mysticPlayerId) {
+        this.suspendEngine(
+          drawId,
+          {
+            kind: 'choice',
+            prompt: '【神秘】摸牌阶段：选择摸 1 张或 2 张',
+            options: ['摸 1 张', '摸 2 张'],
+            declineAllowed: false,
+          },
+          (answer) => {
+            const n = answer.choice === '摸 2 张' ? 2 : 1;
+            const drew = this.drawCards(drawId, n);
+            if (this.phase !== 'playing') return;
+            this.afterRoundEndDraw(lastId, takenOver, drew);
+          }
+        );
+        return;
+      }
+      const drew = this.drawCards(drawId, this.cfg.roundEnd.drawCount);
+      if (this.phase !== 'playing') return;
+      this.afterRoundEndDraw(lastId, takenOver, drew);
+      return;
     }
     if (this.phase !== 'playing') return;
+    this.afterRoundEndDraw(lastId, takenOver, 0);
+  }
+
+  /** 轮末摸牌后的收尾：诅咒轮更 → 起新回合 */
+  private afterRoundEndDraw(lastId: string, takenOver: boolean, drew: number): void {
+    const seizedBy = this.pendingBan.get(lastId)!;
+    const drawId = takenOver ? seizedBy : lastId;
     // 轮更：本轮判定成功的诅咒下一轮生效
     this.activeBan = new Set(this.pendingBan.keys());
     this.pendingBan.clear();
@@ -1600,6 +1816,8 @@ export class GameEngine {
     const used = new Set<number>();
     for (const h of this.hands.values()) for (const c of h) used.add(c.id);
     this.deck = buildDeck(this.cfg.deck.count).filter((c) => !used.has(c.id));
+    // 神秘（辛歼）：override 的私有牌（id 162..215）从独立牌堆扣除（测试白盒塞私有牌时守恒 216）
+    this.privateDeck = this.privateDeck.filter((c) => !used.has(c.id));
   }
 
   /** 正常摸牌：onDraw 钩子 → drawBonus → 原始摸牌 */
@@ -1622,6 +1840,8 @@ export class GameEngine {
    *  拿回特定牌与别人给牌走 takeRevealed/giveRevealed，不翻倍——2026-10-04 用户确认） */
   private rawDraw(playerId: string, n: number): number {
     if (n <= 0) return 0;
+    // 神秘（辛歼）：一切从牌堆摸的牌都从独立牌堆摸（摸空时独立弃牌堆洗回；两堆都空则摸不到）
+    if (playerId === this.mysticPlayerId) return this.privateDraw(n);
     this.recycleDiscard(); // 牌堆耗尽洗回（2026-10-05 用户确认）：牌堆空时弃牌堆洗回当新牌堆
     const total = n * (this.doubleSupplyFor(playerId) ? 2 : 1);
     const actual = Math.min(total, this.deck.length);
@@ -1633,6 +1853,32 @@ export class GameEngine {
     }
     if (this.phase === 'playing') this.checkYaoWu(); // 耀武（阿摩）：摸牌后立即判定（发牌阶段的检查统一在 start 末尾做）
     return actual;
+  }
+
+  /** 神秘（辛歼）：从独立牌堆摸牌（独立弃牌堆洗回继续自己用；不翻倍、不参与公共洗回） */
+  private privateDraw(n: number): number {
+    if (this.privateDeck.length === 0 && this.privateDiscard.length > 0) {
+      this.privateDeck = shuffle(this.privateDiscard, this.rng);
+      this.privateDiscard = [];
+      this.emit({ type: 'deck:recycled', count: this.privateDeck.length });
+    }
+    const actual = Math.min(n, this.privateDeck.length);
+    const drawn = this.privateDeck.splice(this.privateDeck.length - actual, actual);
+    const hand = this.hands.get(this.mysticPlayerId!);
+    if (hand) {
+      hand.push(...drawn);
+      this.checkHandLimit(this.mysticPlayerId!);
+    }
+    if (this.phase === 'playing') this.checkYaoWu(); // 耀武（阿摩）：摸牌后立即判定
+    return actual;
+  }
+
+  /** 弃置路由：辛歼（神秘）的牌（按牌面 id）进独立弃牌堆，其余进公共弃牌堆 */
+  private discardCards(cards: Card[]): void {
+    for (const c of cards) {
+      if (this.privateCardIds.has(c.id)) this.privateDiscard.push(c);
+      else this.discarded.push(c);
+    }
   }
 
   /**
@@ -1673,6 +1919,7 @@ export class GameEngine {
     if (mods.suppressDraw) cur.suppressDraw = true;
     if (mods.endTurn) cur.endTurn = true;
     if (mods.seizeLead) cur.seizeLead = true;
+    if (mods.yueDeng) cur.yueDeng = mods.yueDeng; // 约等（煞蔱）：afterPlayCommitted 消费
     if (Object.keys(cur).length === 0) this.pendingMods.delete(playerId);
     else this.pendingMods.set(playerId, cur);
   }
@@ -1688,7 +1935,7 @@ export class GameEngine {
     // 尖叫（苗条）：扣置牌一并进弃牌堆（牌守恒）
     const heldCards = (this.held.get(playerId) ?? []).flatMap((g) => g.cards);
     this.held.delete(playerId);
-    if (hand.length > 0 || heldCards.length > 0) this.discarded.push(...hand, ...heldCards);
+    if (hand.length > 0 || heldCards.length > 0) this.discardCards([...hand, ...heldCards]);
     this.pendingMods.delete(playerId);
     this.forcedPass.delete(playerId);
     this.activeBan.delete(playerId);
@@ -1830,7 +2077,7 @@ export class GameEngine {
     this.revealedPool = this.revealedPool.filter((c) => !ids.has(c.id));
     const hand = this.hands.get(playerId);
     if (!hand) {
-      this.discarded.push(...taken);
+      this.discardCards(taken);
       return;
     }
     hand.push(...taken);
@@ -1842,12 +2089,12 @@ export class GameEngine {
   /** 展示区指定牌（缺省全部）→ 弃牌堆 */
   private discardRevealed(cardIds?: number[]): void {
     if (!cardIds) {
-      this.discarded.push(...this.revealedPool);
+      this.discardCards([...this.revealedPool]);
       this.revealedPool = [];
       return;
     }
     const ids = new Set(cardIds);
-    this.discarded.push(...this.revealedPool.filter((c) => ids.has(c.id)));
+    this.discardCards([...this.revealedPool.filter((c) => ids.has(c.id))]);
     this.revealedPool = this.revealedPool.filter((c) => !ids.has(c.id));
   }
 
@@ -1870,6 +2117,9 @@ export class GameEngine {
     args: unknown[],
     opts?: { answer?: AskAnswer; dryRun?: boolean }
   ): HookOutcome {
+    // 记录当前钩子条目（障目 zhangMuCheck 续跑 applyOutcome 用；钩子内不会重入 runHook 之外）
+    const prevEntry = this.runningEntry;
+    this.runningEntry = entry;
     try {
       const result = (entry.hook as (...a: unknown[]) => HookResult | void)(this.makeCtx(entry.playerId, opts), ...args);
       if (result && result.ok === false) return { vetoed: true, reason: result.reason };
@@ -1881,6 +2131,8 @@ export class GameEngine {
       return { vetoed: false };
     } catch {
       return { vetoed: true, reason: '技能执行出错' };
+    } finally {
+      this.runningEntry = prevEntry;
     }
   }
 
@@ -2022,6 +2274,10 @@ export class GameEngine {
       takeHeldBack: (cardIds) => engine.takeHeldBack(playerId, cardIds),
       heldGroups: () => engine.held.get(playerId) ?? [],
       giveHeldTo: (toId, cardIds) => engine.giveHeldTo(playerId, toId, cardIds),
+      zhangMuCheck: (casterId, targetId, skillId, cont) =>
+        engine.zhangMuCheck(casterId, targetId, skillId, cont, opts?.answer),
+      privateDeckCount: () => engine.privateDeck.length,
+      privateDiscardCount: () => engine.privateDiscard.length,
     };
   }
 
@@ -2181,7 +2437,7 @@ export class GameEngine {
     args: unknown[],
     resume: (outcome: HookOutcome) => void,
     ask: SkillAsk,
-    internalKind?: 'hook' | 'cutIn' | 'pancake' | 'proxyPlay'
+    internalKind?: 'hook' | 'cutIn' | 'pancake' | 'proxyPlay' | 'engine'
   ): void {
     ask.askId = ask.askId ?? this.newAskId();
     ask.timeoutMs = ask.timeoutMs ?? this.cfg.timeout.skillAskMs;
@@ -2206,6 +2462,156 @@ export class GameEngine {
 
   private newAskId(): string {
     return `ask-${++this.askSeq}`;
+  }
+
+  /** 引擎级询问挂起（神秘初始手牌/摸牌 1-2 等）：不走钩子重跑，答复直接交给 onResolve */
+  private suspendEngine(playerId: string, ask: SkillAsk, onResolve: (answer: AskAnswer) => void): void {
+    this.suspend(playerId, null, null, [], () => {}, ask, 'engine');
+    this.pendingAsk!.onResolve = onResolve;
+  }
+
+  /**
+   * 障目（辛歼）门控（2026-10-06 用户定稿）：非锁定指向性技能锁定辛歼时（目标确定后、生效前），
+   * 施放者猜他的手牌数：猜错 → 技能失效、不扣次数、本回合不能再对其他人发动（对辛歼重试可再猜）；
+   * 猜中 → 技能照常 + 辛歼自选摸 1-3 张（超时默认 1）。血压守卫：施放者受高血压保护不触发。
+   * 门控以询问挂起展开（猜牌 → 摸牌 → 续跑效果）：每次钩子重跑先路由到这里（角色用 st.gate 标记再入）。
+   * 返回 null = 无需门控/已通过（调用方照常执行效果）；返回 HookResult = 挂起（{ok:true}）或封锁（{ok:false}）。
+   */
+  /** 障目门控续跑（引擎内部路径，如无名加牌）：挂起猜牌 → （猜中）挂起摸牌 → 执行 finish；猜错/拦截则跳过 */
+  private zhangMuGateRun(
+    casterId: string,
+    targetId: string,
+    skillId: string,
+    finish: () => ActionResult,
+    messageTarget: string,
+    answer?: AskAnswer
+  ): void {
+    let ran = false;
+    const run = (): void => {
+      if (ran) return;
+      ran = true;
+      this.requeue(finish()); // 续跑结果的事件重排回待广播队列（内层 ok() 已排空，防止事件被吞）
+    };
+    const gate = this.zhangMuCheck(
+      casterId,
+      targetId,
+      skillId,
+      () => {
+        run();
+        return { ok: true };
+      },
+      answer
+    );
+    if (!gate) {
+      run(); // 无需门控（无辛歼/已通过/非指向辛歼）
+      return;
+    }
+    if (!gate.ok) {
+      this.emit({ type: 'game:error', playerId: messageTarget, reason: gate.reason });
+      return;
+    }
+    if (!gate.ask) return; // 猜错跳过效果 / draw 阶段续跑已完成（run 已执行）
+    if (ran) return; // 续跑内部已挂起新询问（狂吠等）：交给该询问自身处理
+    this.suspendEngine(gate.ask.askPlayerId ?? casterId, gate.ask, (ans) => {
+      this.zhangMuGateRun(casterId, targetId, skillId, finish, messageTarget, ans);
+    });
+  }
+
+  private zhangMuCheck(
+    casterId: string,
+    targetId: string | null,
+    skillId: string,
+    cont: () => HookResult | void,
+    answer?: AskAnswer
+  ): HookResult | null {
+    const mystic = this.mysticPlayerId;
+    if (!mystic || casterId === mystic) return null;
+    if (this.bpProtected(casterId)) return null; // 血压（硝烟）：受保护者的技能不被障目拦截
+    const key = `${casterId}:${skillId}`;
+    const stage = this.zhangMuPending.get(key);
+    const mysticName = this.players.find((p) => p.id === mystic)?.name ?? '辛歼';
+    if (stage === 'guess') {
+      const actual = this.hands.get(mystic)?.length ?? 0;
+      if (answer?.guess !== actual) {
+        // 猜错（含超时）：技能失效、不消耗次数、本回合不能再对其他人发动
+        this.zhangMuPending.delete(key);
+        this.zhangMuBlocked.add(key);
+        this.emit({
+          type: 'skill:triggered',
+          playerId: mystic,
+          roleId: 'xin-jian',
+          skillId: 'zhang-mu',
+          text: `【障目】猜错了（手牌数是 ${actual}）：此次技能失效，本回合不能再对其他人发动`,
+        });
+        return { ok: true }; // 效果跳过
+      }
+      // 猜中：技能照常，辛歼自选摸 1-3 张
+      this.zhangMuPending.set(key, 'draw');
+      this.emit({
+        type: 'skill:triggered',
+        playerId: mystic,
+        roleId: 'xin-jian',
+        skillId: 'zhang-mu',
+        text: `【障目】猜中了：技能照常生效`,
+      });
+      return {
+        ok: true,
+        ask: {
+          kind: 'choice',
+          prompt: '【障目】你被猜中了：选择摸几张牌',
+          options: ['摸 1 张', '摸 2 张', '摸 3 张'],
+          askPlayerId: mystic,
+          declineAllowed: false,
+        },
+      };
+    }
+    if (stage === 'draw') {
+      // 摸牌答案（超时默认 1 张）：摸牌并续跑技能效果
+      const n = Math.min(3, Math.max(1, ['摸 1 张', '摸 2 张', '摸 3 张'].indexOf(answer?.choice ?? '') + 1 || 1));
+      this.zhangMuPending.delete(key);
+      this.zhangMuPassed.add(key);
+      this.rawDraw(mystic, n);
+      this.emit({
+        type: 'skill:triggered',
+        playerId: mystic,
+        roleId: 'xin-jian',
+        skillId: 'zhang-mu',
+        text: `${mysticName} 摸 ${n} 张牌`,
+      });
+      if (this.phase === 'playing') {
+        const r = cont();
+        // 续跑结果带询问（如直播摸牌后进入「选择一项」）：转交挂起；带 modify：立即落盘
+        if (r && r.ok && r.ask) return { ok: true, ask: r.ask };
+        if (r && r.ok && this.runningEntry) this.applyOutcome(this.runningEntry, { vetoed: false, result: r });
+      }
+      return { ok: true };
+    }
+    if (this.zhangMuPassed.has(key)) return null; // 本回合已猜中通过：照常执行
+    if (this.zhangMuBlocked.has(key) && targetId !== mystic) {
+      this.emit({
+        type: 'skill:triggered',
+        playerId: mystic,
+        roleId: 'xin-jian',
+        skillId: 'zhang-mu',
+        text: '【障目】猜错后本回合不能再对其他人发动该技能',
+      });
+      return { ok: true }; // 技能跳过、不出牌否决（2026-10-06 修复：{ok:false} 会连带否决触发技能的那次出牌）
+    }
+    if (targetId === mystic) {
+      this.zhangMuPending.set(key, 'guess');
+      return {
+        ok: true,
+        ask: {
+          kind: 'guess',
+          prompt: `【障目】猜测 ${mysticName} 的手牌数（1-20，超时算猜错）`,
+          min: 1,
+          max: 20,
+          askPlayerId: casterId,
+          declineAllowed: false,
+        },
+      };
+    }
+    return null;
   }
 
   private finishSkillAction(playerId: string): void {
@@ -2301,7 +2707,14 @@ export class GameEngine {
   private legalLeadCombos(playerId: string): Combo[] {
     return this.playableNotVetoed(
       playerId,
-      listPlayable(this.hands.get(playerId)!, null, this.cfg, this.orderReversed(), this.soloJokerAllowed(playerId))
+      listPlayable(
+        this.hands.get(playerId)!,
+        null,
+        this.cfg,
+        this.orderReversed(),
+        this.soloJokerAllowed(playerId),
+        this.liu2ExemptFor(playerId)
+      )
     );
   }
 
@@ -2360,7 +2773,8 @@ export class GameEngine {
       this.tableCombo,
       this.cfg,
       this.orderReversed(),
-      this.soloJokerAllowed(playerId)
+      this.soloJokerAllowed(playerId),
+      this.liu2ExemptFor(playerId)
     );
     // 吐饼（R.F）无牌权限制：响应他人时只有 2/炸弹可直接打出（有牌能管必须出牌判断同口径）
     const role = this.roles.get(this.players.find((p) => p.id === playerId)!.roleId);

@@ -35,7 +35,7 @@ function mkEngine(hands: Record<string, Card[]>, roles: Record<string, RoleDef>,
   return engine;
 }
 
-/** 全部 19 个角色 id（loader 按文件名排序注册） */
+/** 全部 24 个角色 id（loader 按文件名排序注册） */
 const ROLE_IDS = [
   'amo',
   'bao-guo',
@@ -52,10 +52,12 @@ const ROLE_IDS = [
   'miao-tiao',
   'patrick',
   'rf',
+  'sha-sha',
   'skywalker',
   'su',
   'unhumanity',
   'xiao-yan',
+  'xin-jian',
   'yy-xue',
   'zecheng',
   'zu-zhang',
@@ -113,8 +115,10 @@ describe('席位排序（seatOrder）', () => {
     'king-nan',
     'miao-tiao',
     'rf',
+    'sha-sha',
     'su',
     'xiao-yan',
+    'xin-jian',
     'zu-zhang',
   ];
 
@@ -202,7 +206,7 @@ describe('角色加载器', () => {
   it('node loader：默认目录自动发现全部 19 个角色（幂等）', async () => {
     clearRoles();
     expect(await loadAllRoles()).toEqual(ROLE_IDS);
-    expect(listRoles()).toHaveLength(22);
+    expect(listRoles()).toHaveLength(24);
     expect(await loadAllRoles()).toEqual([]); // 重复加载不重复注册
   });
 
@@ -230,6 +234,6 @@ export default def;
     loadAllRolesClient();
     expect(listRoles().map((r) => r.id).sort()).toEqual(ROLE_IDS);
     loadAllRolesClient(); // 幂等
-    expect(listRoles()).toHaveLength(22);
+    expect(listRoles()).toHaveLength(24);
   });
 });

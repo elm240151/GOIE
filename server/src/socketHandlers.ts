@@ -115,6 +115,7 @@ export function registerHandlers(io: Server, rooms: RoomManager): void {
           choice: payload?.choice,
           cardIds: Array.isArray(payload?.cardIds) ? payload!.cardIds.map(Number) : undefined,
           targetPlayerId: payload?.targetPlayerId,
+          guess: payload?.guess,
         });
         ack?.({ ok: true });
       } catch (e) {

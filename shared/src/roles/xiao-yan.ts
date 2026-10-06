@@ -10,7 +10,7 @@
 //   （讲题强制代打优先于禁打）；温柔「宝贝」也不得代打组长的牌（resolveProxyPlay 守卫）。
 // 【血压】锁定技（引擎守卫 RoleDef.bloodPressure）：手牌 ≥8 时其余人的技能一律不能对硝烟生效
 //   （含增益，引擎各技能守卫 bpProtected）；禁打对其无效（playBanned 豁免）；动态生效。
-import type { RoleDef } from './types';
+import type { HookContext, HookResult, RoleDef } from './types';
 
 interface XiaoYanState {
   /** 本回合是否已发动讲题（每回合限一次，发动即消耗；轮末重置） */
@@ -19,6 +19,23 @@ interface XiaoYanState {
   stage: number;
   /** 代打者 id */
   proxyId: string;
+  /** 障目再入：待门控的代打者 */
+  gate: { skillId: 'jiang-ti'; targetId: string } | null;
+}
+
+/** 讲题代打请求（障目门控通过后执行）：发出 proxyPlay 询问 */
+function jiangTiProxyAsk(ctx: HookContext, st: XiaoYanState, targetId: string): HookResult {
+  st.proxyId = targetId;
+  st.stage = 2;
+  const selfName = ctx.self.name;
+  return {
+    ok: true,
+    ask: {
+      kind: 'proxyPlay',
+      askPlayerId: targetId,
+      prompt: `【讲题】${selfName} 指定你替他出牌：选牌打出（按正常管牌规则，打出视作他打出），弃权则选择惩罚`,
+    },
+  };
 }
 
 const xiaoYan: RoleDef = {
@@ -40,7 +57,7 @@ const xiaoYan: RoleDef = {
     },
   ],
   setup(): XiaoYanState {
-    return { jiangtiUsed: false, stage: 0, proxyId: '' };
+    return { jiangtiUsed: false, stage: 0, proxyId: '', gate: null };
   },
   hooks: {
     onTurnStart(ctx) {
@@ -49,6 +66,26 @@ const xiaoYan: RoleDef = {
       if (!ctx.game.table()) return; // 只在接牌时发动（2026-10-06 用户确认）：桌面有牌、轮到硝烟响应才触发；起牌（领出）不发动
       const st = ctx.state as XiaoYanState;
       const a = ctx.answer;
+      // 障目再入（讲题猜牌/摸牌答案）：门控通过后照常发出代打请求
+      if (st.gate?.skillId === 'jiang-ti') {
+        const { targetId } = st.gate;
+        const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'jiang-ti', () => {
+          st.gate = null;
+          return jiangTiProxyAsk(ctx, st, targetId);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) {
+            st.gate = null;
+            if (g.ok) {
+              st.stage = 0;
+              st.jiangtiUsed = false; // 障目猜错：技能失效、不扣次数（发动时摸的牌不收回）
+            }
+          }
+          return g;
+        }
+        st.gate = null;
+        return; // 防御
+      }
       // 防御：无回答的重新调用 = 新一次轮到（上一手讲题已成功出牌、钩子链未续跑），阶段归零
       if (!a) st.stage = 0;
       const selfName = ctx.self.name;
@@ -57,21 +94,23 @@ const xiaoYan: RoleDef = {
       // 阶段 1：选代打者
       if (st.stage === 1) {
         const target = a?.targetPlayerId;
-        if (!target || target === ctx.self.id || ctx.game.eliminated(target)) {
+        if (!target || target === ctx.self.id || ctx.game.eliminated(target) || ctx.game.bpProtected(target)) {
           st.stage = 0;
           ctx.game.announce('xiao-yan', 'jiang-ti', '【讲题】未指定代打者，放弃');
           return { ok: true };
         }
-        st.proxyId = target;
-        st.stage = 2;
-        return {
-          ok: true,
-          ask: {
-            kind: 'proxyPlay',
-            askPlayerId: target,
-            prompt: `【讲题】${selfName} 指定你替他出牌：选牌打出（按正常管牌规则，打出视作他打出），弃权则选择惩罚`,
-          },
-        };
+        // 障目门控（指向性：代打者为辛歼时先猜手牌数；猜错不消耗次数）
+        st.gate = { skillId: 'jiang-ti', targetId: target };
+        const g = ctx.game.zhangMuCheck(ctx.self.id, target, 'jiang-ti', () => {
+          st.gate = null;
+          return jiangTiProxyAsk(ctx, st, target);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+          return g;
+        }
+        st.gate = null;
+        return jiangTiProxyAsk(ctx, st, target); // 直接放行
       }
       // 阶段 2：代打结果（成功出牌时钩子链不续跑；重跑 = 弃权/超时，即未能打出）
       if (st.stage === 2) {

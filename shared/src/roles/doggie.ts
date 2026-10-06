@@ -7,11 +7,13 @@
 // 【狂吠】出牌后可以立刻按正常管牌规则压自己打出的牌，可连压到放弃/压不了。
 import { RANK_2, RANK_3, RANK_A } from '../cards';
 import type { Combo } from '../engine/combos';
-import type { RoleDef } from './types';
+import type { HookResult, RoleDef } from './types';
 
 interface DoggieState {
   /** 本回合是否已用过答疑（每回合限一次，弃权不消耗） */
   answeredThisRound: boolean;
+  /** 障目再入：待门控的技能、目标与已选点数 */
+  gate: { skillId: 'da-yi'; targetId: string; rank: number } | null;
 }
 
 /** 可选点数 3~A（choice 选项文本 → 点数编码） */
@@ -45,14 +47,32 @@ const doggie: RoleDef = {
     { id: 'kuang-fei', name: '狂吠', description: '你出牌后可以立刻按正常管牌规则压自己打出的牌，可连续压到放弃或压不了。' },
   ],
   setup(): DoggieState {
-    return { answeredThisRound: false };
+    return { answeredThisRound: false, gate: null };
   },
   hooks: {
     onPlayInterrupt(ctx, played) {
       // 只对 对/顺子/连对/炸：单张与王类牌型（单王/对王）无点数可改，翻面接（端庄）无单一判定点数，不触发（与技能描述一致）
       if (played.type === 'single' || played.type === 'singleJoker' || played.type === 'jokerPair' || played.type === 'gap') return;
-      if (ctx.game.bpProtected(ctx.game.roundLastPlayerId()!)) return; // 血压（硝烟）全挡：技能不能对打出者生效（含改判）
+      const owner = ctx.game.roundLastPlayerId()!;
+      if (ctx.game.bpProtected(owner)) return; // 血压（硝烟）全挡：技能不能对打出者生效（含改判）
       const st = ctx.state as DoggieState;
+      // 障目再入（答疑猜牌/摸牌答案）：门控通过后照常改判
+      if (st.gate?.skillId === 'da-yi') {
+        const { targetId, rank } = st.gate;
+        const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'da-yi', () => {
+          st.gate = null;
+          st.answeredThisRound = true;
+          ctx.game.retagTable(rank);
+          ctx.game.announce('doggie', 'da-yi', `【答疑】桌面牌改按点数 ${RANK_CHOICES[rank - 3]} 判定`);
+          return { ok: true };
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+          return g;
+        }
+        st.gate = null;
+        return; // 防御
+      }
       const a = ctx.answer;
       if (!a) {
         if (st.answeredThisRound) return;
@@ -68,10 +88,24 @@ const doggie: RoleDef = {
       if (st.answeredThisRound) return; // 防御：同轮重复回答
       const choice = a.choice ?? '';
       if (choice === 'decline' || choice === '放弃' || !(choice in RANK_OF)) return; // 弃权不消耗次数
-      st.answeredThisRound = true;
-      ctx.game.retagTable(RANK_OF[choice]!);
-      ctx.game.announce('doggie', 'da-yi', `【答疑】桌面牌改按点数 ${choice} 判定`);
-      return { ok: true };
+      // 障目门控（指向性：打出者为辛歼时先猜手牌数；猜错不消耗次数）
+      st.gate = { skillId: 'da-yi', targetId: owner, rank: RANK_OF[choice]! };
+      const doRetag = (): HookResult => {
+        st.answeredThisRound = true;
+        ctx.game.retagTable(RANK_OF[choice]!);
+        ctx.game.announce('doggie', 'da-yi', `【答疑】桌面牌改按点数 ${choice} 判定`);
+        return { ok: true };
+      };
+      const g = ctx.game.zhangMuCheck(ctx.self.id, owner, 'da-yi', () => {
+        st.gate = null;
+        return doRetag();
+      });
+      if (g) {
+        if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+        return g;
+      }
+      st.gate = null;
+      return doRetag(); // 直接放行
     },
     onRoundEnd(ctx) {
       (ctx.state as DoggieState).answeredThisRound = false; // 每回合（轮）限一次

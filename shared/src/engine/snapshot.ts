@@ -6,6 +6,7 @@ export interface SnapshotPlayer {
   id: string;
   name: string;
   roleId: string;
+  /** 手牌数；辛歼（神秘）对其他玩家为 -1（不可探查，客户端显示 ??） */
   handCount: number;
   /** 仅查看者本人的手牌（其他人 null） */
   hand: Card[] | null;
@@ -38,6 +39,9 @@ export interface GameSnapshot {
   deckCount: number;
   /** 弃牌堆张数（被压过的牌） */
   discardCount: number;
+  /** 辛歼（神秘）：独立牌堆/弃牌堆张数——只对辛歼本人可见（其他人 null） */
+  privateDeckCount: number | null;
+  privateDiscardCount: number | null;
   /** 翻牌展示区（判定牌等公开牌，所有人可见；动作内须清空） */
   revealed: Card[];
   table: Combo | null;

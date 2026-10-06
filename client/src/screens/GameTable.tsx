@@ -266,24 +266,45 @@ export default function GameTable() {
       <div className="game-table">
         {/* 本回合出牌记录条：每一手牌按时间序展示，回合结束统一弃置 */}
         <RoundHistory />
-        {/* 中央牌堆：卡背叠（5 张封顶）+ 张数；顶部牌背随张数变化脉冲（摸牌反馈） */}
+        {/* 中央牌堆：卡背叠（5 张封顶）+ 张数；顶部牌背随张数变化脉冲（摸牌反馈）；
+            辛歼（神秘）本人另有独立牌堆/弃牌堆并排显示（只对本人可见） */}
         {!finished && (
-          <div className="deck-zone" title={STR.game.deckLeft.replace('{n}', String(snap?.deckCount ?? 0))}>
-            <div className="deck-stack">
-              {(snap?.deckCount ?? 0) > 0 ? (
-                Array.from({ length: Math.min(snap?.deckCount ?? 0, 5) }, (_, i) => (
-                  <span
-                    key={i === 0 ? `top-${snap?.deckCount ?? 0}` : `under-${i}`}
-                    className={`deck-back${i === 0 ? ' deck-back-top' : ''}`}
-                  />
-                ))
-              ) : (
-                <span className="deck-back deck-back-empty" />
-              )}
+          <div className="deck-row">
+            <div className="deck-zone" title={STR.game.deckLeft.replace('{n}', String(snap?.deckCount ?? 0))}>
+              <div className="deck-stack">
+                {(snap?.deckCount ?? 0) > 0 ? (
+                  Array.from({ length: Math.min(snap?.deckCount ?? 0, 5) }, (_, i) => (
+                    <span
+                      key={i === 0 ? `top-${snap?.deckCount ?? 0}` : `under-${i}`}
+                      className={`deck-back${i === 0 ? ' deck-back-top' : ''}`}
+                    />
+                  ))
+                ) : (
+                  <span className="deck-back deck-back-empty" />
+                )}
+              </div>
+              <em className="deck-count deck-count-pop" key={snap?.deckCount ?? 0}>
+                {STR.game.deckLeft.replace('{n}', String(snap?.deckCount ?? 0))}
+              </em>
             </div>
-            <em className="deck-count deck-count-pop" key={snap?.deckCount ?? 0}>
-              {STR.game.deckLeft.replace('{n}', String(snap?.deckCount ?? 0))}
-            </em>
+            {(snap?.privateDeckCount != null || snap?.privateDiscardCount != null) && (
+              <div className="deck-zone private-zone" title={STR.game.privateZoneTitle}>
+                <div className="deck-stack">
+                  {(snap?.privateDeckCount ?? 0) > 0 ? (
+                    Array.from({ length: Math.min(snap?.privateDeckCount ?? 0, 5) }, (_, i) => (
+                      <span
+                        key={i === 0 ? `ptop-${snap?.privateDeckCount ?? 0}` : `punder-${i}`}
+                        className={`deck-back${i === 0 ? ' deck-back-top' : ''}`}
+                      />
+                    ))
+                  ) : (
+                    <span className="deck-back deck-back-empty" />
+                  )}
+                </div>
+                <em className="deck-count">{STR.game.privateDeck.replace('{n}', String(snap?.privateDeckCount ?? 0))}</em>
+                <em className="deck-count">{STR.game.privateDiscard.replace('{n}', String(snap?.privateDiscardCount ?? 0))}</em>
+              </div>
+            )}
           </div>
         )}
 

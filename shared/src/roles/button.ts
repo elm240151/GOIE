@@ -11,6 +11,8 @@ import type { RoleDef } from './types';
 interface ButtonState {
   /** 窃笑本轮是否已用（轮末重置） */
   peekedThisRound: boolean;
+  /** 障目再入：待门控的查看目标 */
+  gate: { skillId: 'qie-xiao'; targetId: string } | null;
 }
 
 const button: RoleDef = {
@@ -32,7 +34,7 @@ const button: RoleDef = {
   ],
   skillActions: [{ skillId: 'qie-xiao', when: 'myTurn', label: '窃笑' }],
   setup(): ButtonState {
-    return { peekedThisRound: false };
+    return { peekedThisRound: false, gate: null };
   },
   hooks: {
     onRoundEnd(ctx) {
@@ -41,6 +43,21 @@ const button: RoleDef = {
     onSkillAction(ctx, req) {
       if (req.skillId !== 'qie-xiao') return;
       const st = ctx.state as ButtonState;
+      // 障目再入（窃笑猜牌/摸牌答案）：门控通过后照常查看
+      if (st.gate?.skillId === 'qie-xiao') {
+        const { targetId } = st.gate;
+        const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'qie-xiao', () => {
+          st.gate = null;
+          st.peekedThisRound = true;
+          ctx.game.peekHand(targetId);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+          return g;
+        }
+        st.gate = null;
+        return; // 防御
+      }
       if (st.peekedThisRound) return { ok: false, reason: '【窃笑】本轮已经使用过了' };
       if (!ctx.answer) {
         const others = ctx.game
@@ -59,8 +76,20 @@ const button: RoleDef = {
       }
       if (ctx.answer.choice === 'decline' || !ctx.answer.targetPlayerId) return; // 弃权不消耗
       if (ctx.game.bpProtected(ctx.answer.targetPlayerId)) return; // 血压（硝烟）全挡：技能不能对其生效
+      // 障目门控（指向性：查看辛歼时先猜手牌数；猜错不消耗次数）
+      st.gate = { skillId: 'qie-xiao', targetId: ctx.answer.targetPlayerId };
+      const g = ctx.game.zhangMuCheck(ctx.self.id, ctx.answer.targetPlayerId, 'qie-xiao', () => {
+        st.gate = null;
+        st.peekedThisRound = true;
+        ctx.game.peekHand(ctx.answer!.targetPlayerId!);
+      });
+      if (g) {
+        if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+        return g;
+      }
+      st.gate = null;
       st.peekedThisRound = true;
-      ctx.game.peekHand(ctx.answer.targetPlayerId);
+      ctx.game.peekHand(ctx.answer.targetPlayerId); // 直接放行
     },
   },
 };

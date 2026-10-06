@@ -221,6 +221,7 @@ export class Room {
             choice: req.choice,
             cardIds: req.cardIds,
             targetPlayerId: req.targetPlayerId,
+            guess: req.guess,
           })
         : engine.useSkillAction(playerId, { skillId: req.skillId ?? '' });
     } catch (e) {

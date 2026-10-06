@@ -14,7 +14,8 @@
 //   苗条可查看扣置牌、任意时刻收回（主动技按钮 anyTime，hidden 不进按钮行）。
 import type { Card, CardRank } from '../cards';
 import { isJoker, jokerSuits } from '../cards';
-import type { HeldGroup, RoleDef } from './types';
+import type { Combo } from '../engine/combos';
+import type { HeldGroup, HookContext, HookResult, RoleDef } from './types';
 
 interface MiaoTiaoState {
   /** 尖叫已扣置次数（每局 X+2 次；扣置行为消耗） */
@@ -23,6 +24,8 @@ interface MiaoTiaoState {
   holdStage: 'idle' | 'pick';
   /** 已选扣置类型 */
   holdKind: 'fanwen' | 'jianjiaoji' | null;
+  /** 障目再入：待门控的发牌目标与扣置组下标 */
+  gate: { skillId: 'jian-jiao'; targetId: string; groupIdx: number } | null;
 }
 
 /** 范文合法性：至多 4 张且花色互不相同（王双花色参与） */
@@ -50,6 +53,70 @@ function jokerSuitsOf(c: Card): number[] {
   return isJoker(c) ? jokerSuits(c) : [c.suit];
 }
 
+/**
+ * 尖叫匹配发牌（从指定扣置组下标继续）：逐个扣置组匹配打出花色/点数并交给打出者。
+ * 每组发牌前过障目门控（指向性：打出者为辛歼时先猜手牌数；猜错该组保留，继续匹配后续组）。
+ */
+function jianJiaoMatch(ctx: HookContext, st: MiaoTiaoState, played: Combo, fromIdx: number): HookResult | void {
+  const physical = ctx.game.lastPlayPhysicalId();
+  if (!physical) return;
+  const groups = ctx.game.heldGroups();
+  if (groups.length === 0) return;
+  if (ctx.game.eliminated(physical)) return;
+  if (ctx.game.bpProtected(physical)) return; // 血压全挡：技能不能对其生效（含增益摸牌）
+  const playedSuits = new Set<number>();
+  for (const c of played.cards) {
+    for (const s of jokerSuitsOf(c)) playedSuits.add(s);
+  }
+  const playedRanks = new Set<CardRank>();
+  for (const c of played.cards) {
+    if (isJoker(c)) {
+      const rep = played.resolved.find((r) => r.cardId === c.id)?.rank;
+      if (rep !== undefined) playedRanks.add(rep);
+    } else {
+      playedRanks.add(c.rank);
+    }
+  }
+  const name = ctx.game.players().find((p) => p.id === physical)?.name ?? physical;
+  for (let i = fromIdx; i < groups.length; i++) {
+    const g = groups[i]!;
+    const give = (ids: number[], text: string) => {
+      // 障目门控（指向性：打出者为辛歼时先猜手牌数）
+      st.gate = { skillId: 'jian-jiao', targetId: physical, groupIdx: i };
+      const gg = ctx.game.zhangMuCheck(ctx.self.id, physical, 'jian-jiao', () => {
+        st.gate = null;
+        ctx.game.giveHeldTo(physical, ids);
+        ctx.game.announce('miao-tiao', 'jian-jiao', text);
+        return jianJiaoMatch(ctx, st, played, i + 1); // 继续后续组
+      });
+      if (gg) {
+        if (st.gate && !('ask' in gg)) {
+          st.gate = null;
+          return jianJiaoMatch(ctx, st, played, i + 1); // 猜错/已封锁（本回合障目已对他人试过）：该组保留（不发给辛歼），继续后续组
+        }
+        return gg;
+      }
+      st.gate = null;
+      ctx.game.giveHeldTo(physical, ids); // 直接放行
+      ctx.game.announce('miao-tiao', 'jian-jiao', text);
+    };
+    if (g.kind === 'fanwen') {
+      const matched = g.cards.filter((c) => jokerSuitsOf(c).some((s) => playedSuits.has(s)));
+      if (matched.length > 0) {
+        const r = give(matched.map((c) => c.id), `【尖叫】${name} 打出范文花色，摸回 ${matched.length} 张扣置牌`);
+        if (r) return r; // 门控挂起（猜牌/摸牌询问）：停止循环，待回答后从记录的下标继续
+      }
+    } else {
+      // 尖叫鸡：打出被扣点数 → 一次发完该组（王本身无固定点数，不参与点数触发）
+      const matched = g.cards.filter((c) => !isJoker(c) && playedRanks.has(c.rank));
+      if (matched.length > 0) {
+        const r = give(g.cards.map((c) => c.id), `【尖叫】${name} 打出尖叫鸡点数，摸回全部 ${g.cards.length} 张扣置牌`);
+        if (r) return r; // 门控挂起（猜牌/摸牌询问）：停止循环，待回答后从记录的下标继续
+      }
+    }
+  }
+}
+
 const miaoTiao: RoleDef = {
   id: 'miao-tiao',
   name: '苗条',
@@ -71,7 +138,7 @@ const miaoTiao: RoleDef = {
   skillActions: [{ skillId: 'jian-jiao', when: 'myTurn', anyTime: true, hidden: true, label: '查看/收回扣置牌' }],
   deathrattleHooks: ['onPlayInterrupt'],
   setup(): MiaoTiaoState {
-    return { jianjiaoUsed: 0, holdStage: 'idle', holdKind: null };
+    return { jianjiaoUsed: 0, holdStage: 'idle', holdKind: null, gate: null };
   },
   hooks: {
     afterPlay(ctx, played) {
@@ -87,42 +154,14 @@ const miaoTiao: RoleDef = {
       ctx.game.announce('miao-tiao', 'miao-tiao', `【苗条】打出 ${n} 种花色，摸 ${n} 张牌`);
     },
     onPlayInterrupt(ctx, played) {
-      const physical = ctx.game.lastPlayPhysicalId();
-      if (!physical) return;
-      const groups = ctx.game.heldGroups();
-      if (groups.length === 0) return;
-      if (ctx.game.eliminated(physical)) return;
-      if (ctx.game.bpProtected(physical)) return; // 血压全挡：技能不能对其生效（含增益摸牌）
-      const playedSuits = new Set<number>();
-      for (const c of played.cards) {
-        for (const s of jokerSuitsOf(c)) playedSuits.add(s);
+      const st = ctx.state as MiaoTiaoState;
+      // 障目再入（尖叫猜牌/摸牌答案）：门控通过后从记录的下标继续匹配发牌
+      if (st.gate?.skillId === 'jian-jiao') {
+        const { groupIdx } = st.gate;
+        st.gate = null;
+        return jianJiaoMatch(ctx, st, played, groupIdx);
       }
-      const playedRanks = new Set<CardRank>();
-      for (const c of played.cards) {
-        if (isJoker(c)) {
-          const rep = played.resolved.find((r) => r.cardId === c.id)?.rank;
-          if (rep !== undefined) playedRanks.add(rep);
-        } else {
-          playedRanks.add(c.rank);
-        }
-      }
-      const name = ctx.game.players().find((p) => p.id === physical)?.name ?? physical;
-      for (const g of groups) {
-        if (g.kind === 'fanwen') {
-          const matched = g.cards.filter((c) => jokerSuitsOf(c).some((s) => playedSuits.has(s)));
-          if (matched.length > 0) {
-            ctx.game.giveHeldTo(physical, matched.map((c) => c.id));
-            ctx.game.announce('miao-tiao', 'jian-jiao', `【尖叫】${name} 打出范文花色，摸回 ${matched.length} 张扣置牌`);
-          }
-        } else {
-          // 尖叫鸡：打出被扣点数 → 一次发完该组（王本身无固定点数，不参与点数触发）
-          const matched = g.cards.filter((c) => !isJoker(c) && playedRanks.has(c.rank));
-          if (matched.length > 0) {
-            ctx.game.giveHeldTo(physical, g.cards.map((c) => c.id));
-            ctx.game.announce('miao-tiao', 'jian-jiao', `【尖叫】${name} 打出尖叫鸡点数，摸回全部 ${g.cards.length} 张扣置牌`);
-          }
-        }
-      }
+      return jianJiaoMatch(ctx, st, played, 0);
     },
     onTurnStart(ctx) {
       if (ctx.game.eliminated(ctx.self.id)) return;

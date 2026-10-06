@@ -5,7 +5,7 @@
 // 其余人全过则本轮结束（最后出牌者摸 1 张并起新回合，2 人局即对方直接摸 1 张起新回合），
 // 否则轮到下家正常接牌。
 import { cardColor } from '../cards';
-import type { HookResult, RoleDef } from './types';
+import type { HookContext, HookResult, RoleDef } from './types';
 
 interface CsState {
   /** 换牌中间态：自己给出的两张牌、模式（1 = 换对方 1 张；2 = 换对方 2 张）与已选目标 */
@@ -16,6 +16,25 @@ interface CsState {
     /** 同花色给牌：等待玩家选择换 1 张还是 2 张（同花色也算同颜色） */
     chooseTake: boolean;
   } | null;
+  /** 障目再入：待门控的换牌目标 */
+  gate: { skillId: 'sao-sao'; targetId: string } | null;
+}
+
+/** 骚骚盲抽询问（障目门控通过后执行）：从目标手牌盲抽拿走 */
+function saoSaoAskBlind(ctx: HookContext, st: CsState, targetPlayerId: string): HookResult {
+  st.trade = { ...st.trade!, targetPlayerId };
+  const need = st.trade.mode === 1 ? 1 : 2;
+  return {
+    ok: true,
+    ask: {
+      kind: 'pickCards',
+      prompt: `从目标手中盲抽 ${need} 张拿走（只看牌背）`,
+      cards: [...ctx.game.handOf(targetPlayerId)],
+      min: need,
+      max: need,
+      hidden: true,
+    },
+  };
 }
 
 const csChampion: RoleDef = {
@@ -32,13 +51,27 @@ const csChampion: RoleDef = {
   ],
   skillActions: [{ skillId: 'sao-sao', when: 'following', label: '骚骚' }],
   setup(): CsState {
-    return { trade: null };
+    return { trade: null, gate: null };
   },
   hooks: {
     onSkillAction(ctx, req) {
       if (req.skillId !== 'sao-sao') return;
       const st = ctx.state as CsState;
       const a = ctx.answer;
+      // 障目再入（骚骚猜牌/摸牌答案）：门控通过后进入盲抽
+      if (st.gate?.skillId === 'sao-sao') {
+        const t = st.gate.targetId;
+        const g = ctx.game.zhangMuCheck(ctx.self.id, t, 'sao-sao', () => {
+          st.gate = null;
+          return saoSaoAskBlind(ctx, st, t);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
+          return g;
+        }
+        st.gate = null;
+        return; // 防御
+      }
       /** 选目标（候选：手牌数 ≥ 需拿张数）；无候选则作废 */
       const askTarget = (): HookResult | void => {
         const need = st.trade!.mode === 1 ? 1 : 2;
@@ -149,19 +182,18 @@ const csChampion: RoleDef = {
       // 阶段 3：目标已定 → 从目标手牌盲抽（只看牌背，凭运气抽，增加游戏体验）
       if (a.targetPlayerId && !a.cardIds && st.trade && !st.trade.targetPlayerId) {
         if (ctx.game.bpProtected(a.targetPlayerId)) return; // 血压（硝烟）全挡：技能不能对其生效
-        st.trade = { ...st.trade, targetPlayerId: a.targetPlayerId };
-        const need = st.trade.mode === 1 ? 1 : 2;
-        return {
-          ok: true,
-          ask: {
-            kind: 'pickCards',
-            prompt: `从目标手中盲抽 ${need} 张拿走（只看牌背）`,
-            cards: [...ctx.game.handOf(a.targetPlayerId)],
-            min: need,
-            max: need,
-            hidden: true,
-          },
-        };
+        // 障目门控（指向性：换牌目标为辛歼时先猜手牌数）
+        st.gate = { skillId: 'sao-sao', targetId: a.targetPlayerId };
+        const g = ctx.game.zhangMuCheck(ctx.self.id, a.targetPlayerId, 'sao-sao', () => {
+          st.gate = null;
+          return saoSaoAskBlind(ctx, st, a.targetPlayerId!);
+        });
+        if (g) {
+          if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
+          return g;
+        }
+        st.gate = null;
+        return saoSaoAskBlind(ctx, st, a.targetPlayerId); // 直接放行
       }
       // 未匹配任何阶段（异常载荷）：技能作废、清中间态
       st.trade = null;

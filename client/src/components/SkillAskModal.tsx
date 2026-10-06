@@ -103,7 +103,7 @@ export default function SkillAskModal() {
   const toggle = (id: number) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
-  const answer = (payload: { choice?: string; cardIds?: number[]; targetPlayerId?: string }) =>
+  const answer = (payload: { choice?: string; cardIds?: number[]; targetPlayerId?: string; guess?: number }) =>
     void answerSkill({ askId: last.askId, ...payload });
 
   let body: React.ReactNode;
@@ -137,12 +137,27 @@ export default function SkillAskModal() {
         <div className="ask-options">
           {(last.targetCandidates ?? []).map((pid) => {
             const p = snap?.players.find((x) => x.id === pid);
+            const n = p && p.handCount >= 0 ? String(p.handCount) : '??'; // 辛歼（神秘）手牌数不可探查
             return (
               <button key={pid} className="btn btn-primary ask-option" onClick={() => answer({ targetPlayerId: pid })}>
-                {p ? STR.game.pickTargetLabel.replace('{name}', p.name).replace('{n}', String(p.handCount)) : pid}
+                {p ? STR.game.pickTargetLabel.replace('{name}', p.name).replace('{n}', n) : pid}
               </button>
             );
           })}
+        </div>
+      );
+      break;
+    case 'guess':
+      // 障目（辛歼）：猜对方手牌数 1-20，点数字直接提交（超时服务端按猜错处理）
+      body = (
+        <div className="guess-grid">
+          {Array.from({ length: (last.max ?? 20) - (last.min ?? 1) + 1 }, (_, i) => (last.min ?? 1) + i).map(
+            (n) => (
+              <button key={n} className="btn btn-primary guess-cell" onClick={() => answer({ guess: n })}>
+                {n}
+              </button>
+            ),
+          )}
         </div>
       );
       break;
@@ -175,6 +190,13 @@ export default function SkillAskModal() {
         </div>
         <p className="ask-prompt">{last.prompt}</p>
         {last.kind === 'cutIn' && <p className="ask-hint">{STR.game.cutInHint}</p>}
+        {last.kind === 'guess' && (
+          <p className="ask-hint">
+            {STR.game.guessHint
+              .replace('{min}', String(last.min ?? 1))
+              .replace('{max}', String(last.max ?? 20))}
+          </p>
+        )}
         {last.kind === 'selfFollow' && <p className="ask-hint">{STR.game.selfFollowHint}</p>}
         {last.kind === 'proxyPlay' && <p className="ask-hint">{STR.game.proxyPlayHint}</p>}
         {last.kind === 'pickCards' && (

@@ -1308,6 +1308,11 @@ body {
 }
 
 /* 中央牌堆：卡背叠（5 张封顶）+ 张数；顶部牌背随张数变化脉冲（摸牌反馈） */
+.deck-row {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+}
 .deck-zone {
   display: flex;
   flex-direction: column;
@@ -1783,6 +1788,21 @@ body {
 .ask-option {
   flex: 0 0 auto;
   min-width: 64px;
+}
+/* 障目（辛歼）：猜手牌数 1-20 数字网格 */
+.guess-grid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+  margin-bottom: 14px;
+  max-height: 40vh;
+  overflow-y: auto;
+  padding: 2px;
+}
+.guess-cell {
+  padding: 12px 0;
+  font-size: 16px;
+  font-weight: 700;
 }
 .ask-actions {
   display: flex;

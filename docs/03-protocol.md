@@ -25,7 +25,7 @@
 | 事件 | payload |
 |---|---|
 | `room:updated` | `RoomState {code, phase:'lobby'|'playing'|'finished', hostId, players[], winnerId, scoreDeltas, totals, rematchVotes}` |
-| `game:snapshot` | `GameSnapshot`（按接收者过滤：只有自己的 `hand` 非 null；含 `pendingAsk: {askId, playerId, kind, prompt, timeoutMs} \| null`；`revealed` 翻牌展示区**所有人可见**——判定牌公开，动作内须清空；`orderReversed` 当前牌序是否倒序（海棠洄游），`table` 牌型的 rank 已按当前牌序约定解析——倒序时 rank = 最高点数；`tableRankNote: {rank} \| null` 桌面一手牌被答疑改点后的新判定点数（修勾，牌面实体不变；**`table.label` 已按新点数重写**（主显金色），界面据 note 用实体牌重建原 label 小标「改判：原X」）；`cursedPlayerIds` 陷入红楼梦的玩家（橐驼地坛，含本回合 pending 诅咒——判定成功即广播，下回合生效）；桌面可为单王牌型 `type: 'singleJoker'`（橐驼诅咒：label「王」，压一切单张、只有炸弹能压）或对王牌型 `type: 'jokerPair'`（label「对王」，压一切对子、只有炸弹能压）；`prevTable: Combo \| null` 上一手桌面牌型（轴承端庄情况一接的是它）；`tableSide: Card[]` 明置桌旁的边牌，`tableSideHidden: number[]` 其中以牌背展示的牌 id（端庄翻面牌**可见但背面**）——随当前一手牌一起弃置；`stagedDiscards: {playerId, cards}[]` 弃牌暂存区——本回合公开弃置的牌（谁弃的、弃了什么全场可见；轮末进弃牌堆，客户端据此渲染「弃牌」区）；`tableOwnerId: string \| null` 当前桌面一手牌的实际打出者（归属改写前——温柔宝贝守卫基准）；`babyIds: string[]` 温柔（组长）标定的宝贝；`babyOwnerId: string \| null` 标定者（组长）id；`heldCount/held/heldGroups` 尖叫（苗条）扣置牌——张数公开、`held` 牌面只对苗条自己可见、`heldGroups: {kind, count}[]` 类型 + 张数所有人可见（别人点扣置徽章看是范文还是尖叫鸡）） |
+| `game:snapshot` | `GameSnapshot`（按接收者过滤：只有自己的 `hand` 非 null；**神秘（辛歼）手牌数对别人发 -1（客户端显示 ??）、牌面永不可见**，`privateDeckCount/privateDiscardCount` 只有辛歼自己非 null——独立牌堆/弃牌张数；含 `pendingAsk: {askId, playerId, kind, prompt, timeoutMs} \| null`；`revealed` 翻牌展示区**所有人可见**——判定牌公开，动作内须清空；`orderReversed` 当前牌序是否倒序（海棠洄游），`table` 牌型的 rank 已按当前牌序约定解析——倒序时 rank = 最高点数；`tableRankNote: {rank} \| null` 桌面一手牌被答疑改点后的新判定点数（修勾，牌面实体不变；**`table.label` 已按新点数重写**（主显金色），界面据 note 用实体牌重建原 label 小标「改判：原X」）；`cursedPlayerIds` 陷入红楼梦的玩家（橐驼地坛，含本回合 pending 诅咒——判定成功即广播，下回合生效）；桌面可为单王牌型 `type: 'singleJoker'`（橐驼诅咒：label「王」，压一切单张、只有炸弹能压）或对王牌型 `type: 'jokerPair'`（label「对王」，压一切对子、只有炸弹能压）；`prevTable: Combo \| null` 上一手桌面牌型（轴承端庄情况一接的是它）；`tableSide: Card[]` 明置桌旁的边牌，`tableSideHidden: number[]` 其中以牌背展示的牌 id（端庄翻面牌**可见但背面**）——随当前一手牌一起弃置；`stagedDiscards: {playerId, cards}[]` 弃牌暂存区——本回合公开弃置的牌（谁弃的、弃了什么全场可见；轮末进弃牌堆，客户端据此渲染「弃牌」区）；`tableOwnerId: string \| null` 当前桌面一手牌的实际打出者（归属改写前——温柔宝贝守卫基准）；`babyIds: string[]` 温柔（组长）标定的宝贝；`babyOwnerId: string \| null` 标定者（组长）id；`heldCount/held/heldGroups` 尖叫（苗条）扣置牌——张数公开、`held` 牌面只对苗条自己可见、`heldGroups: {kind, count}[]` 类型 + 张数所有人可见（别人点扣置徽章看是范文还是尖叫鸡）） |
 | `game:event` | `GameEvent`（判别联合 + 自增 seq，见下） |
 | `game:error` | 中文原因字符串 |
 | `game:skill-ask` | 完整 `SkillAsk`（**只发给被询问者**——被询问者可由 `askPlayerId` 指定，缺省 = 技能所有者；重连时重发未决询问；`hidden: true` 的 pickCards 为盲抽，经 currentAsk 下发时牌面已掩码只留 id；`declineAllowed: false` = 不可弃权——客户端隐藏「放弃」按钮，弃权/超时由引擎按默认处理：choice/suit 取第一项、pickCards 自动取最前牌） |
@@ -44,7 +44,7 @@
 → 超时/掉线 → 服务端自动 {askId, choice:'decline'} 了结
 ```
 
-客户端弹窗按 `kind` 渲染：confirm（是/否）、suit/choice（选项按钮，答案 = 所选选项文本）、pickCards（选牌 + 数量校验；`hidden` 时显示牌背盲抽）、pickTarget（目标按钮）、cutIn（自己的手牌选接牌组合）、selfFollow（修勾狂吠：自己的手牌选牌压自己打出的牌，提交 = `choice:'yes'`+cardIds，放弃 = decline）。
+客户端弹窗按 `kind` 渲染：confirm（是/否）、suit/choice（选项按钮，答案 = 所选选项文本）、pickCards（选牌 + 数量校验；`hidden` 时显示牌背盲抽）、pickTarget（目标按钮）、cutIn（自己的手牌选接牌组合）、selfFollow（修勾狂吠：自己的手牌选牌压自己打出的牌，提交 = `choice:'yes'`+cardIds，放弃 = decline）、guess（障目：猜辛歼手牌数——数字键盘 1-20（`min`/`max` 给范围），提交 = `guess: number`、超时算猜错）、proxyPlay（讲题代打：pickTarget + 代打者选牌界面）。
 
 ## 约定
 

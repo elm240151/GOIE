@@ -1,5 +1,5 @@
 // 15× 种子化全流程稳定性模拟：随机角色/人数/起手，随机合法出牌与技能答复，
-// 每步断言牌守恒（手牌+桌面+牌堆+弃牌+饼=162），结束断言恰一个赢家。
+// 每步断言牌守恒（全池 216 = 公共三副 162 + 辛歼独立牌堆/弃牌 54），结束断言恰一个赢家。
 import { defaultRules } from '../shared/src/config';
 import { listPlayable } from '../shared/src/engine/combos';
 import { GameEngine, type EnginePlayer } from '../shared/src/engine/engine';
@@ -11,15 +11,33 @@ const ROUNDS = 15;
 const STEP_CAP = 30000;
 
 function totalCards(engine: GameEngine): number {
+  // 白盒守恒 216 = 公共三副 162 + 辛歼独立牌堆/弃牌 54（无辛歼时私有池为空）。
+  // 快照口径不可用：辛歼手牌数对他人才发 -1、私有池张数只有本人可见
+  const e = engine as unknown as {
+    hands: Map<string, { length: number }>;
+    held: Map<string, { cards: { length: number }[] }>;
+    pancakes: Map<string, { length: number }>;
+    deck: { length: number };
+    discarded: { length: number };
+    privateDeck: { length: number };
+    privateDiscard: { length: number };
+  };
   const s = engine.snapshotFor('p0');
+  const hands = [...e.hands.values()].reduce((x, h) => x + h.length, 0);
+  const held = [...e.held.values()].reduce((x, gs) => x + gs.reduce((y, g) => y + g.cards.length, 0), 0);
+  const pancakes = [...e.pancakes.values()].reduce((x, cs) => x + cs.length, 0);
   return (
-    s.players.reduce((x, p) => x + p.handCount + p.pancakeCount + p.heldCount, 0) +
+    hands +
+    held +
+    pancakes +
     (s.table ? s.table.cards.length : 0) +
-    s.deckCount +
-    s.discardCount +
+    e.deck.length +
+    e.discarded.length +
     s.revealed.length + // 翻牌池（判定挂起期间）
     s.tableSide.length + // 边牌（再问补打等明置桌旁）
-    s.stagedDiscards.reduce((x, e) => x + e.cards.length, 0) // 弃牌暂存区（本回合公开弃置，轮末进弃牌堆）
+    s.stagedDiscards.reduce((x, se) => x + se.cards.length, 0) + // 弃牌暂存区（本回合公开弃置，轮末进弃牌堆）
+    e.privateDeck.length +
+    e.privateDiscard.length
   );
 }
 
@@ -42,9 +60,11 @@ async function main() {
 
     let steps = 0;
     const trace: string[] = [];
-    while (engine.snapshotFor('p0').phase === 'playing' && steps < STEP_CAP) {
+    // 守恒目标：无辛歼 162（公共三副）、有辛歼 216（+ 独立 54）
+    const expected = chosen.some((r) => r.mystic) ? 216 : 162;
+    while (steps < STEP_CAP) {
       steps++;
-      if (totalCards(engine) !== 162) {
+      if (totalCards(engine) !== expected) {
         const s = engine.snapshotFor('p0');
         console.log('守恒破坏现场 seed=', seed, 'step=', steps, '实际=', totalCards(engine));
         console.log('players:', s.players.map((p) => `${p.id}: ${p.handCount}手${p.pancakeCount}饼${p.heldCount}扣`).join(' '), 'table:', s.table?.cards.length, 'deck:', s.deckCount, 'discard:', s.discardCount, 'revealed:', s.revealed.length);
@@ -87,12 +107,15 @@ async function main() {
         }
         continue;
       }
+      if (s0.phase !== 'playing') break; // 终局（发牌期无询问时会在此跳出）
       const turnId = s0.turnPlayerId;
       const snap = engine.snapshotFor(turnId);
       const me = snap.players.find((p) => p.id === turnId)!;
       const hand = me.hand;
       if (hand.length === 0) throw new Error(`0 手未判胜 seed=${seed} step=${steps} turn=${turnId}（引擎应已判空手获胜）`);
-      const legal = listPlayable(hand, snap.table, defaultRules, snap.orderReversed, engine.soloJokerAllowed(turnId));
+      // 留 2 禁止收尾豁免（辛歼【神秘】：单 2/对 2 可打完收尾）与引擎同口径
+      const liu2Exempt = (engine as unknown as { liu2ExemptFor(id: string): boolean }).liu2ExemptFor(turnId);
+      const legal = listPlayable(hand, snap.table, defaultRules, snap.orderReversed, engine.soloJokerAllowed(turnId), liu2Exempt);
       if (legal.length === 0) {
         trace[trace.length - 1] += '过';
         engine.pass(turnId);
@@ -131,7 +154,7 @@ async function main() {
       console.log('最近 30 步:', trace.join(' '));
       throw new Error(`超步数未结束 seed=${seed}`);
     }
-    if (totalCards(engine) !== 162) throw new Error(`终局牌守恒破坏 seed=${seed}`);
+    if (totalCards(engine) !== expected) throw new Error(`终局牌守恒破坏 seed=${seed}`);
     const winners = fin.players.filter((p) => p.eliminated === false && fin.winnerId === p.id).length;
     if (fin.winnerId && winners !== 1) throw new Error(`赢家异常 seed=${seed}`);
     games++;
