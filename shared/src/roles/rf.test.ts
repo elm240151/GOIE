@@ -69,7 +69,8 @@ const totalCards = (engine: GameEngine): number => {
     snap.players.reduce((s, p) => s + p.handCount + p.pancakeCount, 0) +
     (snap.table ? snap.table.cards.length : 0) +
     snap.deckCount +
-    snap.discardCount
+    snap.discardCount +
+    snap.stagedDiscards.reduce((x, e) => x + e.cards.length, 0)
   );
 };
 const eventsOf = (r: { ok: boolean; events?: { type: string }[] }): string[] =>

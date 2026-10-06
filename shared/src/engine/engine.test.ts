@@ -53,7 +53,8 @@ function totalCards(snap: ReturnType<GameEngine['snapshotFor']>): number {
   const pancakeCards = snap.players.reduce((x, p) => x + p.pancakeCount, 0);
   const heldCards = snap.players.reduce((x, p) => x + p.heldCount, 0);
   return (
-    handCards + heldCards + (snap.table ? snap.table.cards.length : 0) + snap.deckCount + snap.discardCount + pancakeCards
+    handCards + heldCards + (snap.table ? snap.table.cards.length : 0) + snap.deckCount + snap.discardCount + pancakeCards +
+    snap.stagedDiscards.reduce((x, e) => x + e.cards.length, 0)
   );
 }
 

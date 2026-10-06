@@ -162,6 +162,8 @@ export const STR = {
     pileTitle: '本回合打出的牌（回合结束统一弃置）',
     judgedTitle: '判定牌（回合结束统一弃置）',
     judgedLabel: '判定',
+    discardStageTitle: '本回合公开弃置的牌（轮末进弃牌堆）',
+    discardStageLabel: '弃牌',
     roleTitle: '{name} · {role}',
     viewSkills: '查看技能',
   },

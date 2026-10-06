@@ -47,6 +47,9 @@ export interface GameSnapshot {
   tableSide: Card[];
   /** 端庄（轴承）翻面：桌旁翻面牌 id（渲染为牌背） */
   tableSideHidden: number[];
+  /** 弃牌暂存区（2026-10-06 用户规则）：本回合（轮）内公开弃置的牌（谁弃的、弃了什么全场可见——博弈信息），
+   *  轮末随桌面牌一起进弃牌堆 */
+  stagedDiscards: { playerId: string; cards: Card[] }[];
   /** 是否倒序（海棠洄游：出牌即切换，每轮恢复正序） */
   orderReversed: boolean;
   /** 答疑改点（修勾）：当前桌面一手牌的判定点数被改写（牌型不变）；null = 无改写 */

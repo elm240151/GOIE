@@ -46,7 +46,7 @@ function mkEngine(hands: Record<string, Card[]>, roles: Record<string, RoleDef>,
 /** 牌守恒：所有手牌 + 牌堆 + 弃牌 + 桌面 + 边牌 + 翻牌区 = 162 */
 function total(engine: GameEngine): number {
   const snap = engine.snapshotFor('p0');
-  let n = snap.deckCount + snap.discardCount + snap.revealed.length + snap.tableSide.length;
+  let n = snap.deckCount + snap.discardCount + snap.revealed.length + snap.tableSide.length + snap.stagedDiscards.reduce((x, e) => x + e.cards.length, 0);
   for (const p of snap.players) n += p.handCount;
   if (snap.table) n += snap.table.cards.length;
   return n;
@@ -293,7 +293,9 @@ describe('惰戈（亢奋/法音）', () => {
     ).toBe(true);
     const snap = engine.snapshotFor('p0');
     expect(snap.players[1]!.handCount).toBe(2);
-    expect(snap.discardCount).toBe(1);
+    // 弃牌暂存区（2026-10-06 用户规则）：p1 弃的牌本回合公开展示，轮末才进弃牌堆
+    expect(snap.stagedDiscards).toEqual([{ playerId: 'p1', cards: [p1Hand[0]!] }]);
+    expect(snap.discardCount).toBe(0);
     expect(askOf(done)).toBeNull(); // 流水线继续，无残留询问
     expect(total(engine)).toBe(before);
   });
@@ -348,7 +350,8 @@ describe('惰戈（亢奋/法音）', () => {
     // 被弃者手牌归零 → 空手判胜（同吐饼「不看来因」口径）：立即终局
     const snap = engine.snapshotFor('p0');
     expect(snap.players[1]!.handCount).toBe(0);
-    expect(snap.discardCount).toBe(1);
+    expect(snap.stagedDiscards).toEqual([{ playerId: 'p1', cards: [hands.p1[0]!] }]); // 终局也保留在暂存区公开可见
+    expect(snap.discardCount).toBe(0);
     expect(snap.phase).toBe('finished');
     expect(snap.winnerId).toBe('p1');
   });

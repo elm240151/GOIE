@@ -18,7 +18,8 @@ function totalCards(engine: GameEngine): number {
     s.deckCount +
     s.discardCount +
     s.revealed.length + // 翻牌池（判定挂起期间）
-    s.tableSide.length // 边牌（再问补打等明置桌旁）
+    s.tableSide.length + // 边牌（再问补打等明置桌旁）
+    s.stagedDiscards.reduce((x, e) => x + e.cards.length, 0) // 弃牌暂存区（本回合公开弃置，轮末进弃牌堆）
   );
 }
 

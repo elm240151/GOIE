@@ -92,6 +92,8 @@ export class GameEngine {
   private tableSide: Card[] = [];
   /** 端庄（轴承）翻面：桌旁展示的翻面牌 id（渲染为牌背；随当前一手牌一起进弃牌堆） */
   private tableSideHidden: number[] = [];
+  /** 弃牌暂存区（2026-10-06 用户规则）：本回合（轮）内公开弃置的牌，全场可见；轮末随桌面牌一起进弃牌堆 */
+  private stagedDiscards: { playerId: string; cards: Card[] }[] = [];
   /** 响应限制（抽你）：当前桌面一手牌只能由该玩家响应；null = 无限制 */
   private tableResponderRestrict: string | null = null;
   /** 上一手被压的玩家（无名普通响应加牌的对象；新一轮起牌时重置） */
@@ -528,6 +530,8 @@ export class GameEngine {
       tableSide: [...this.tableSide],
       /** 端庄（轴承）翻面：桌旁牌背展示的翻面牌 id */
       tableSideHidden: [...this.tableSideHidden],
+      /** 弃牌暂存区：本回合公开弃置的牌（轮末进弃牌堆） */
+      stagedDiscards: this.stagedDiscards.map((e) => ({ playerId: e.playerId, cards: [...e.cards] })),
       orderReversed: this.orderReversed(),
       tableRankNote: this.tableRankNote,
       /** 红楼梦（地坛）：被诅咒（含下一轮生效中）的玩家，界面展示标记 */
@@ -596,6 +600,9 @@ export class GameEngine {
       if (this.phase !== 'playing') return;
       while (this.eliminated.has(leaderId)) leaderId = this.nextSeat(leaderId);
       if (this.tableCombo) this.discarded.push(...this.tableCombo.cards, ...this.tableSide);
+      // 弃牌暂存区（2026-10-06 用户规则）：轮末与桌面牌一起进弃牌堆
+      for (const e of this.stagedDiscards) this.discarded.push(...e.cards);
+      this.stagedDiscards = [];
       this.tableCombo = null;
       this.tableSide = [];
       this.tableSideHidden = [];
@@ -1625,7 +1632,7 @@ export class GameEngine {
   /**
    * 牌堆耗尽洗回（2026-10-05 用户确认，全局规则）：牌堆空时弃牌堆洗回当新牌堆继续摸；
    * 判定类技能「牌堆已空视为未判定」相应变为「牌堆+弃牌堆都空才视为未判定」（revealTop 同走此路）。
-   * 牌守恒不变：162 = 手牌+桌面+牌堆+弃牌+饼+翻牌池+边牌，洗回只是牌堆/弃牌两堆之间流转。
+   * 牌守恒不变：162 = 手牌+桌面+牌堆+弃牌+饼+翻牌池+边牌+弃牌暂存区，洗回只是牌堆/弃牌两堆之间流转。
    */
   private recycleDiscard(): void {
     if (this.deck.length > 0 || this.discarded.length === 0) return;
@@ -2066,7 +2073,7 @@ export class GameEngine {
     this.pendingBan.set(targetId, bannerId);
   }
 
-  /** 手牌指定牌 → 弃牌堆（隐匿重铸等） */
+  /** 手牌指定牌 → 弃牌暂存区（2026-10-06 用户规则：本回合公开可见——谁弃了什么全场都看得到，轮末进弃牌堆） */
   private discardFromHand(playerId: string, cardIds: number[]): void {
     const hand = this.hands.get(playerId);
     if (!hand) return;
@@ -2074,7 +2081,7 @@ export class GameEngine {
     const taken = hand.filter((c) => ids.has(c.id));
     if (taken.length === 0) return;
     this.hands.set(playerId, hand.filter((c) => !ids.has(c.id)));
-    this.discarded.push(...taken);
+    this.stagedDiscards.push({ playerId, cards: taken });
   }
 
   /** 窃笑（轴承）：私密查看一名玩家的手牌——查看者与目标各收一条私有事件（服务端按人路由，不广播） */

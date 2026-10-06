@@ -35,6 +35,7 @@ export default function GameTable() {
   const leaveRoom = useStore((s) => s.leaveRoom);
   const tablePlayerId = useStore((s) => s.tablePlayerId);
   const tableSideCards = useStore((s) => s.tableSideCards);
+  const stagedDiscards = useStore((s) => s.stagedDiscards);
   const useSkillAction = useStore((s) => s.useSkillAction);
   const revealed = useStore((s) => s.revealed);
   const roundPlayLog = useStore((s) => s.roundPlayLog);
@@ -338,6 +339,23 @@ export default function GameTable() {
                         <Card key={c.id} card={c} />
                       ))}
                     </div>
+                  </div>
+                )}
+                {stagedDiscards.length > 0 && (
+                  <div className="table-pile-judged" title={STR.game.discardStageTitle}>
+                    <span className="table-pile-name">{STR.game.discardStageLabel}</span>
+                    {stagedDiscards.map((e) => (
+                      <div className="table-pile-discard" key={e.cards[0]!.id}>
+                        <span className="table-pile-discard-owner">
+                          {snap?.players.find((p) => p.id === e.playerId)?.name ?? ''}
+                        </span>
+                        <div className="table-pile-cards">
+                          {e.cards.map((c) => (
+                            <Card key={c.id} card={c} />
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
               </div>

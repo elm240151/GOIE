@@ -110,6 +110,8 @@ interface AppStore {
   judgedCards: Card[];
   /** 明置桌旁的边牌（再问补打等，随当前一手牌一起弃置） */
   tableSideCards: Card[];
+  /** 弃牌暂存区（本回合公开弃置的牌，谁弃的、弃了什么全场可见；轮末进弃牌堆） */
+  stagedDiscards: { playerId: string; cards: Card[] }[];
   /** 服务端发给我的技能询问（完整载荷，弹窗用） */
   skillAsk: SkillAsk | null;
   /** 场上公开亮出的判定牌（逐张动画展示区，来自 cards:revealed 事件流） */
@@ -245,6 +247,7 @@ export const useStore = create<AppStore>((set, get) => ({
   roundPlayLog: [],
   judgedCards: [],
   tableSideCards: [],
+  stagedDiscards: [],
   skillAsk: null,
   revealed: null,
   handOrder: null,
@@ -485,6 +488,7 @@ export const useStore = create<AppStore>((set, get) => ({
         roundPlayLog: [],
         judgedCards: [],
         tableSideCards: [],
+        stagedDiscards: [],
         drawnAt: {},
         curseActiveIds: [],
         curseBaselineLeader: '',
@@ -504,6 +508,7 @@ export const useStore = create<AppStore>((set, get) => ({
         roundPlayLog: [],
         judgedCards: [],
         tableSideCards: [],
+        stagedDiscards: [],
         selectedCardIds: [],
         organize: false,
         enteredCardIds: [],
@@ -581,6 +586,7 @@ export const useStore = create<AppStore>((set, get) => ({
     set({
       snap,
       tableSideCards: snap.tableSide,
+      stagedDiscards: snap.stagedDiscards,
       selectedCardIds: selectedCardIds.filter((id) => myHandIds.has(id)),
       flippedCardId: flipped,
       skillAsk: snap.pendingAsk?.playerId === myId ? get().skillAsk : null,
@@ -628,8 +634,8 @@ export const useStore = create<AppStore>((set, get) => ({
       }
       case 'round:ended': {
         cancelDrawnToast(); // 轮末摸牌由 roundEndToast 播报（避免「摸了 N 张」重复）
-        // 本轮牌全部进弃牌堆：清空中央暂存区与出牌记录、判定牌
-        set({ tablePlayerId: null, passedAt: {}, roundPlayLog: [], judgedCards: [], tableSideCards: [] });
+        // 本轮牌全部进弃牌堆：清空中央暂存区与出牌记录、判定牌、弃牌暂存区
+        set({ tablePlayerId: null, passedAt: {}, roundPlayLog: [], judgedCards: [], tableSideCards: [], stagedDiscards: [] });
         scheduleRevealClear(get().revealed?.cards.length ?? 0);
         const last = room?.players.find((p) => p.id === e.lastPlayerId);
         if (e.ledBy && e.ledBy !== e.lastPlayerId) {

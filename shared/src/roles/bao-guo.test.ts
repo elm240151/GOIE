@@ -40,7 +40,7 @@ function mkEngine(hands: Record<string, Card[]>, roles: Record<string, RoleDef>,
 /** 牌守恒：所有手牌 + 牌堆 + 弃牌 + 桌面 + 边牌 + 翻牌区 = 162 */
 function total(engine: GameEngine): number {
   const snap = engine.snapshotFor('p0');
-  let n = snap.deckCount + snap.discardCount + snap.revealed.length + snap.tableSide.length;
+  let n = snap.deckCount + snap.discardCount + snap.revealed.length + snap.tableSide.length + snap.stagedDiscards.reduce((x, e) => x + e.cards.length, 0);
   for (const p of snap.players) n += p.handCount;
   if (snap.table) n += snap.table.cards.length;
   return n;

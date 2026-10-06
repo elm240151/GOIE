@@ -62,7 +62,7 @@ function pad(hands: Record<string, Card[]>, targets: Record<string, number>, ran
 function assertConserved(engine: GameEngine): void {
   const snap = engine.snapshotFor('p0');
   const handCards = snap.players.reduce((x, p) => x + p.handCount, 0);
-  expect(handCards + (snap.table?.cards.length ?? 0) + snap.revealed.length + snap.deckCount + snap.discardCount).toBe(162);
+  expect(handCards + (snap.table?.cards.length ?? 0) + snap.revealed.length + snap.deckCount + snap.discardCount + snap.stagedDiscards.reduce((x, e) => x + e.cards.length, 0)).toBe(162);
 }
 
 describe('楠王：旺旺（亡语）+ 回味', () => {

@@ -53,7 +53,7 @@ function pad(hands: Record<string, Card[]>, targets: Record<string, number>, ran
 function assertConserved(engine: GameEngine): void {
   const snap = engine.snapshotFor('p0');
   const handCards = snap.players.reduce((x, p) => x + p.handCount + p.heldCount, 0);
-  expect(handCards + (snap.table?.cards.length ?? 0) + snap.revealed.length + snap.tableSide.length + snap.deckCount + snap.discardCount).toBe(162);
+  expect(handCards + (snap.table?.cards.length ?? 0) + snap.revealed.length + snap.tableSide.length + snap.deckCount + snap.discardCount + snap.stagedDiscards.reduce((x, e) => x + e.cards.length, 0)).toBe(162);
 }
 
 function ask(engine: GameEngine): SkillAsk {
@@ -273,6 +273,14 @@ describe('硝烟：讲题 + 血压', () => {
       )
     ).toBe(true);
     expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.handCount).toBe(before - 1);
+    // 弃牌暂存区（2026-10-06 用户规则）：弃的 ♠5 本回合公开展示（谁弃的、弃了什么全场可见）
+    expect(engine.snapshotFor('p0').stagedDiscards).toEqual([{ playerId: 'p0', cards: [deck[2]!] }]);
+    // 轮末（p0、p1 相继过牌，轮末最后出牌者 = p2）：暂存区与桌面牌一起进弃牌堆
+    expect(engine.pass('p0').ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true);
+    const snapEnd = engine.snapshotFor('p0');
+    expect(snapEnd.stagedDiscards).toEqual([]);
+    expect(snapEnd.discardCount).toBe(4); // 轮 1 被压的 ♠4 + 轮 1 轮末桌面 ♣5 + 轮 2 桌面 ♠4 + 弃置的 ♠5
     assertConserved(engine);
   });
 
