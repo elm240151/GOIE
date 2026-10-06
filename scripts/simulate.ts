@@ -13,7 +13,7 @@ const STEP_CAP = 30000;
 function totalCards(engine: GameEngine): number {
   const s = engine.snapshotFor('p0');
   return (
-    s.players.reduce((x, p) => x + p.handCount + p.pancakeCount, 0) +
+    s.players.reduce((x, p) => x + p.handCount + p.pancakeCount + p.heldCount, 0) +
     (s.table ? s.table.cards.length : 0) +
     s.deckCount +
     s.discardCount +
@@ -46,7 +46,7 @@ async function main() {
       if (totalCards(engine) !== 162) {
         const s = engine.snapshotFor('p0');
         console.log('守恒破坏现场 seed=', seed, 'step=', steps, '实际=', totalCards(engine));
-        console.log('players:', s.players.map((p) => `${p.id}:${p.handCount}手${p.pancakeCount}饼`).join(' '), 'table:', s.table?.cards.length, 'deck:', s.deckCount, 'discard:', s.discardCount, 'revealed:', s.revealed.length);
+        console.log('players:', s.players.map((p) => `${p.id}: ${p.handCount}手${p.pancakeCount}饼${p.heldCount}扣`).join(' '), 'table:', s.table?.cards.length, 'deck:', s.deckCount, 'discard:', s.discardCount, 'revealed:', s.revealed.length);
         console.log('trace:', trace.join(' '));
         throw new Error(`牌守恒破坏 seed=${seed} step=${steps}`);
       }
@@ -90,7 +90,7 @@ async function main() {
       const snap = engine.snapshotFor(turnId);
       const me = snap.players.find((p) => p.id === turnId)!;
       const hand = me.hand;
-      if (hand.length === 0) continue;
+      if (hand.length === 0) throw new Error(`0 手未判胜 seed=${seed} step=${steps} turn=${turnId}（引擎应已判空手获胜）`);
       const legal = listPlayable(hand, snap.table, defaultRules, snap.orderReversed, engine.soloJokerAllowed(turnId));
       if (legal.length === 0) {
         trace[trace.length - 1] += '过';
@@ -124,7 +124,7 @@ async function main() {
       console.log('卡死现场 seed=', seed, 'steps=', steps);
       console.log(
         'players:',
-        fin.players.map((p) => `${p.id}:${p.handCount}手${p.pancakeCount}饼${p.eliminated ? '淘' : ''}`).join(' ')
+        fin.players.map((p) => `${p.id}:${p.handCount}手${p.pancakeCount}饼${p.heldCount}扣${p.eliminated ? "淘" : ""}`).join(' ')
       );
       console.log('turn:', fin.turnPlayerId, 'table:', fin.table?.type, fin.table?.rank, 'deck:', fin.deckCount, 'discard:', fin.discardCount, 'rev:', fin.orderReversed, 'ask:', fin.pendingAsk ? `${fin.pendingAsk.kind}→${fin.pendingAsk.playerId}` : '无');
       console.log('最近 30 步:', trace.join(' '));

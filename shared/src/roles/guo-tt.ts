@@ -45,6 +45,7 @@ const guoTT: RoleDef = {
       const owner = ctx.game.roundLastPlayerId()!;
       if (owner === ctx.self.id) return; // 仅他人（2026-10-03 与用户确认）
       if (ctx.game.eliminated(owner)) return;
+      if (ctx.game.bpProtected(owner)) return; // 血压（硝烟）全挡：技能不能对打出者生效
       const st = ctx.state as GuoTTState;
       const a = ctx.answer;
       if (!a) {

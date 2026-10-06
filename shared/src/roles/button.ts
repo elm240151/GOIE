@@ -58,6 +58,7 @@ const button: RoleDef = {
         };
       }
       if (ctx.answer.choice === 'decline' || !ctx.answer.targetPlayerId) return; // 弃权不消耗
+      if (ctx.game.bpProtected(ctx.answer.targetPlayerId)) return; // 血压（硝烟）全挡：技能不能对其生效
       st.peekedThisRound = true;
       ctx.game.peekHand(ctx.answer.targetPlayerId);
     },

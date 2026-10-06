@@ -72,7 +72,8 @@ const duoGe: RoleDef = {
         const t = a.targetPlayerId;
         if (t) {
           const th = ctx.game.handOf(t);
-          const okT = !ctx.game.eliminated(t) && th.length > 0 && (t !== ctx.self.id || th.length > 3);
+          const okT =
+            !ctx.game.eliminated(t) && th.length > 0 && (t !== ctx.self.id || th.length > 3) && !ctx.game.bpProtected(t);
           if (!okT) return; // 防御：非法目标视为弃权
           st.target = t;
         } else {

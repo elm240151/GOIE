@@ -148,6 +148,7 @@ const csChampion: RoleDef = {
       }
       // 阶段 3：目标已定 → 从目标手牌盲抽（只看牌背，凭运气抽，增加游戏体验）
       if (a.targetPlayerId && !a.cardIds && st.trade && !st.trade.targetPlayerId) {
+        if (ctx.game.bpProtected(a.targetPlayerId)) return; // 血压（硝烟）全挡：技能不能对其生效
         st.trade = { ...st.trade, targetPlayerId: a.targetPlayerId };
         const need = st.trade.mode === 1 ? 1 : 2;
         return {

@@ -34,6 +34,7 @@ const yyXue: RoleDef = {
     onPlayInterrupt(ctx, played) {
       const owner = ctx.game.roundLastPlayerId()!;
       if (owner === ctx.self.id) return;
+      if (ctx.game.bpProtected(owner)) return; // 血压（硝烟）全挡：技能不能对打出者生效（含驱逐）
       const ownerName = ctx.game.players().find((p) => p.id === owner)?.name ?? owner;
       const ownerRole = ctx.game.players().find((p) => p.id === owner)?.roleId;
       // 按实体牌判定：答疑（修勾）改点只改判定点数，不改变"打出的是 2"这一事实——

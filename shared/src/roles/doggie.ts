@@ -51,6 +51,7 @@ const doggie: RoleDef = {
     onPlayInterrupt(ctx, played) {
       // 只对 对/顺子/连对/炸：单张与王类牌型（单王/对王）无点数可改，翻面接（端庄）无单一判定点数，不触发（与技能描述一致）
       if (played.type === 'single' || played.type === 'singleJoker' || played.type === 'jokerPair' || played.type === 'gap') return;
+      if (ctx.game.bpProtected(ctx.game.roundLastPlayerId()!)) return; // 血压（硝烟）全挡：技能不能对打出者生效（含改判）
       const st = ctx.state as DoggieState;
       const a = ctx.answer;
       if (!a) {

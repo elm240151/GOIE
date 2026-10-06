@@ -32,7 +32,15 @@ export type HookResult =
 
 // ---------- 技能询问（可选技能的服务端↔客户端问答） ----------
 
-export type AskKind = 'confirm' | 'suit' | 'choice' | 'pickCards' | 'pickTarget' | 'cutIn' | 'selfFollow';
+export type AskKind =
+  | 'confirm'
+  | 'suit'
+  | 'choice'
+  | 'pickCards'
+  | 'pickTarget'
+  | 'cutIn'
+  | 'selfFollow'
+  | 'proxyPlay';
 
 export interface SkillAsk {
   /** 引擎自动生成（角色可不填） */
@@ -79,6 +87,8 @@ export interface SkillActionDef {
   when: 'myTurn' | 'following';
   /** 仅拥有牌权（本回合起牌者）时可用/显示（见习/反力矩：陈正起牌的回合才能发动） */
   onlyWhenLeader?: boolean;
+  /** 不受「轮到出牌」限制、随时可用（尖叫收回扣置牌；有挂起询问时仍不可用） */
+  anyTime?: boolean;
   label: string;
 }
 
@@ -162,6 +172,32 @@ export interface EngineFacade {
   isBannedThisRound(playerId: string): boolean;
   /** 弃牌堆张数（压腿：牌堆+弃牌堆都空则无牌可翻，不询问） */
   discardCount(): number;
+  /** 该玩家当前是否被禁打（诅咒/罚站；血压保护者豁免）——讲题（硝烟）自查能否发动 */
+  playBanned(playerId: string): boolean;
+  /** 当前桌面一手牌的实际打出者（归属改写前）——尖叫（苗条）发牌给实际打出者：打光手牌的人摸回后才能避免获胜 */
+  lastPlayPhysicalId(): string | null;
+  /** 血压（硝烟）：该玩家是否受高血压保护（手牌 ≥8 的未淘汰硝烟）——其余人的技能不能对其生效 */
+  bpProtected(playerId: string): boolean;
+  /** 温柔（组长）：标记玩家为「宝贝」（本回合不得响应组长的出牌；轮末自动清空） */
+  markBaby(playerId: string): void;
+  /** 温柔（组长）：该玩家是否为宝贝 */
+  isBaby(playerId: string): boolean;
+  /** 温柔（组长）：当前桌面这手牌是否组长打出的（宝贝禁响应的判定基准） */
+  tableOwnerId(): string | null;
+  /** 尖叫（苗条）：扣置手牌为范文/尖叫鸡（引擎校验牌在手、扣后手牌 ≥1） */
+  holdCards(kind: 'fanwen' | 'jianjiaoji', cardIds: number[]): void;
+  /** 尖叫（苗条）：收回扣置牌到手中（缺省全部；不消耗次数） */
+  takeHeldBack(cardIds?: number[]): void;
+  /** 尖叫（苗条）：查看自己的扣置牌 */
+  heldGroups(): HeldGroup[];
+  /** 尖叫（苗条）：把指定扣置牌发给玩家（范文/尖叫鸡触发：打出者摸回） */
+  giveHeldTo(playerId: string, cardIds: number[]): void;
+}
+
+/** 尖叫（苗条）扣置组：范文 = 至多 4 张花色互不同；尖叫鸡 = 至多 3 张同花色 */
+export interface HeldGroup {
+  kind: 'fanwen' | 'jianjiaoji';
+  cards: Card[];
 }
 
 export interface HookContext<S = unknown> {
@@ -316,6 +352,15 @@ export interface RoleDef {
    * 满足即 finishGame（2026-10-05 用户确认：任何时刻满足立即获胜，含发牌时）。
    */
   yaoWu?: boolean;
+  /**
+   * 血压（硝烟，锁定技）：手牌 ≥8 时「其余人的技能不能对你生效」——引擎守卫：
+   * ①技能目标选择（suspend 的 targetCandidates）自动过滤保护者；
+   * ②禁打（诅咒/罚站）对保护者无效（动态：摸到 ≥8 立即解除禁打）；
+   * ③亢奋归属改写、无名加牌等引擎内自动锁定不生效；
+   * ④其余角色钩子（旺旺/回味/巨石/答疑改判/五连鞭/压腿/尖叫发牌等）用 facade bpProtected 自查目标。
+   * 增益类技能同样被挡（2026-10-06 用户确认「全挡」）。
+   */
+  bloodPressure?: boolean;
 }
 
 export type RoleRegistry = Map<string, RoleDef>;

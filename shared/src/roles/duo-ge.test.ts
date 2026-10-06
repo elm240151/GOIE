@@ -8,6 +8,7 @@ import captain from './captain';
 import doggie from './doggie';
 import duoGe from './duo-ge';
 import fishy from './fishy';
+import miaoTiao from './miao-tiao';
 import guoTT from './guo-tt';
 import patrick from './patrick';
 import yyXue from './yy-xue';
@@ -295,6 +296,71 @@ describe('惰戈（亢奋/法音）', () => {
     expect(snap.discardCount).toBe(1);
     expect(askOf(done)).toBeNull(); // 流水线继续，无残留询问
     expect(total(engine)).toBe(before);
+  });
+
+  it('空手判胜（2026-10-06 用户定稿）：法音弃置目标最后一张牌 → 目标立即获胜（不看来因）', () => {
+    const hands = {
+      p0: [pick(3, 0), pick(4, 1), pick(5, 2), pick(6, 3), pick(7, 0), pick(8, 1)], // 惰戈：34567 四花色 + 闲牌
+      p1: [pick(9, 0)], // 目标：唯一手牌
+      p2: byRank(5, 3),
+    };
+    const engine = mkEngine(hands, { p0: duoGe });
+    const r = engine.playCards('p0', hands.p0.slice(0, 5).map((c) => c.id)); // 34567 四花色（25）→ 法音
+    const confirm = askOf(r);
+    expect(confirm?.prompt).toContain('法音');
+    const a1 = engine.resolveAsk('p0', { askId: confirm!.askId!, choice: 'yes' });
+    const pickT = askOf(a1);
+    const a2 = engine.resolveAsk('p0', { askId: pickT!.askId!, targetPlayerId: 'p1' });
+    const pickC = askOf(a2);
+    expect(pickC?.kind).toBe('pickCards');
+    expect(pickC?.askPlayerId).toBe('p1');
+    const done = engine.resolveAsk('p1', { askId: pickC!.askId!, cardIds: [hands.p1[0]!.id] });
+    expect(done.ok).toBe(true);
+    // 被弃者手牌归零 → 空手判胜（同吐饼「不看来因」口径）：立即终局
+    const snap = engine.snapshotFor('p0');
+    expect(snap.players[1]!.handCount).toBe(0);
+    expect(snap.discardCount).toBe(1);
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p1');
+  });
+
+  it('空手判胜：苗条手牌被法音弃光但有扣置 → 不判胜（扣置牌也算手牌），可主动收回', () => {
+    const hands = {
+      p0: [pick(3, 0), pick(4, 1), pick(5, 2), pick(6, 3), pick(7, 0), pick(8, 1)], // 惰戈：34567 四花色
+      p1: [pick(8, 0), pick(9, 0), pick(12, 0)], // 苗条：♠9 手牌 + 扣置 ♠8 ♠2（点数不在 34567，不摸回）
+      p2: byRank(6, 3),
+    };
+    const engine = mkEngine(hands, { p0: duoGe, p1: miaoTiao });
+    // 开局尖叫询问：苗条（p1）扣置 ♠8 ♠2（尖叫鸡：同花色）
+    const c = engine.snapshotFor('p0').pendingAsk as SkillAsk | null;
+    expect(c?.prompt).toContain('尖叫');
+    const yes = engine.resolveAsk('p1', { askId: c!.askId!, choice: 'yes' });
+    const kindAsk = askOf(yes);
+    const k = engine.resolveAsk('p1', { askId: kindAsk!.askId!, choice: '尖叫鸡（至多 3 张花色相同）' });
+    const pickH = askOf(k);
+    expect(engine.resolveAsk('p1', { askId: pickH!.askId!, cardIds: [hands.p1[1]!.id, hands.p1[2]!.id] }).ok).toBe(true);
+    expect(engine.snapshotFor('p0').players[1]!.heldCount).toBe(2);
+    // 法音：弃置苗条唯一手牌 ♠9
+    const r = engine.playCards('p0', hands.p0.slice(0, 5).map((c) => c.id));
+    const confirm = askOf(r);
+    const a1 = engine.resolveAsk('p0', { askId: confirm!.askId!, choice: 'yes' });
+    const pickT = askOf(a1);
+    const a2 = engine.resolveAsk('p0', { askId: pickT!.askId!, targetPlayerId: 'p1' });
+    const pickC = askOf(a2);
+    const done = engine.resolveAsk('p1', { askId: pickC!.askId!, cardIds: [hands.p1[0]!.id] });
+    expect(done.ok).toBe(true);
+    // 手牌 0 但扣置 2 → 空手判胜不成立（扣置牌也算手牌）；游戏继续
+    let snap = engine.snapshotFor('p0');
+    expect(snap.players[1]!.handCount).toBe(0);
+    expect(snap.players[1]!.heldCount).toBe(2);
+    expect(snap.phase).toBe('playing');
+    expect(snap.winnerId).toBeNull();
+    // 主动收回全部扣置牌 → 手牌 2，牌守恒
+    expect(engine.useSkillAction('p1', { skillId: 'jian-jiao' }).ok).toBe(true);
+    snap = engine.snapshotFor('p0');
+    expect(snap.players[1]!.handCount).toBe(2);
+    expect(snap.players[1]!.heldCount).toBe(0);
+    expect(total(engine)).toBe(162);
   });
 
   it('法音：惰戈手牌 ≤3 时不能选自己（别人照常）', () => {

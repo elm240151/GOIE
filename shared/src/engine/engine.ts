@@ -16,6 +16,7 @@ import {
   type ActionMods,
   type AskAnswer,
   type EngineFacade,
+  type HeldGroup,
   type HookContext,
   type HookResult,
   type PlayerView,
@@ -63,8 +64,8 @@ interface PendingAsk {
   ask: SkillAsk;
   /** 被询问的玩家 */
   playerId: string;
-  /** 内部调度标签：'hook' = 重跑提问钩子；'cutIn' = 插队；'pancake' = 吐饼多阶段 */
-  kind: 'hook' | 'cutIn' | 'pancake';
+  /** 内部调度标签：'hook' = 重跑提问钩子；'cutIn' = 插队；'pancake' = 吐饼多阶段；'proxyPlay' = 讲题代打 */
+  kind: 'hook' | 'cutIn' | 'pancake' | 'proxyPlay';
   entry: HookEntry | null;
   hookName: keyof RoleHooks | null;
   args: unknown[];
@@ -153,6 +154,14 @@ export class GameEngine {
   private pancakeStage = 0;
   /** 吐饼（R.F）：本手吃饼应倒置的张数（= 实际摸到的张数 min(N, 牌堆)，阶段 2 校验用） */
   private pancakeFlipCount = 0;
+  /** 温柔（组长）：本回合的「宝贝」成员——不得响应组长的出牌（压牌/插队/吃饼等）；轮末清空 */
+  private babies = new Set<string>();
+  /** 温柔（组长）：宝贝禁响应的基准——桌面这手牌归组长所有时生效（与 tableOwnerId 比较） */
+  private babyOwnerId: string | null = null;
+  /** 尖叫（苗条）：各玩家扣置的范文/尖叫鸡牌（牌背公开张数、只有苗条可见牌面；可发给打出者、可收回） */
+  private held = new Map<string, HeldGroup[]>();
+  /** 当前桌面一手牌的实际打出者（归属改写前）——尖叫（苗条）发牌给实际打出者：打光手牌的人摸回扣置牌后才能避免获胜 */
+  private lastPlayPhysicalId: string | null = null;
 
   constructor(cfg: RuleConfig, players: EnginePlayer[], opts: EngineOptions) {
     if (players.length < cfg.players.min || players.length > cfg.players.max)
@@ -228,12 +237,15 @@ export class GameEngine {
     if (this.phase !== 'playing') return fail('游戏已结束');
     if (this.pendingAsk) return fail('等待技能响应');
     if (playerId !== this.turnPlayerId) return fail('不是你的回合');
-    if (this.activeBan.has(playerId)) return fail('【红楼梦】本回合不得出牌');
-    if (this.roundBanned.has(playerId)) return fail('【见习】本回合罚站，不得出牌');
+    if (this.playBanned(playerId)) return fail(this.banReason(playerId));
     // 响应限制（抽你）：当前桌面一手牌只能由指定玩家响应
     if (this.tableCombo && this.tableResponderRestrict && playerId !== this.tableResponderRestrict) {
       const d = this.players.find((p) => p.id === this.tableResponderRestrict);
       return fail(`【抽你】本回合只能由 ${d?.name ?? '指定玩家'} 响应`);
+    }
+    // 温柔（组长）：宝贝本回合不得响应组长的出牌（基础压牌被拒；插队/吃饼等询问门控同款守卫）
+    if (this.tableCombo && this.babies.has(playerId) && this.tableOwnerId === this.babyOwnerId) {
+      return fail('【温柔】宝贝本回合不得响应组长的出牌');
     }
     const hand = this.hands.get(playerId)!;
     if (cardIds.length === 0) return fail('请选择要出的牌');
@@ -332,6 +344,8 @@ export class GameEngine {
     }
     // 吐饼（R.F）：过牌钩子结算后立即判定获胜（2026-10-06 用户定稿）
     if (this.checkPancakeWin()) return this.ok();
+    // 空手获胜：手牌+扣置全空 → 立即判胜（同上口径，2026-10-06 用户定稿）
+    if (this.checkEmptyHandWin()) return this.ok();
     this.emit({ type: 'passed', playerId });
     this.passCount++;
     if (this.passCount >= this.activeCount() - 1) this.endRound();
@@ -343,10 +357,11 @@ export class GameEngine {
   useSkillAction(playerId: string, req: SkillActionRequest): ActionResult {
     if (this.phase !== 'playing') return fail('游戏已结束');
     if (this.pendingAsk) return fail('等待技能响应');
-    if (playerId !== this.turnPlayerId) return fail('不是你的回合');
     const role = this.roles.get(this.players.find((p) => p.id === playerId)!.roleId);
     const action = role?.skillActions?.find((a) => a.skillId === req.skillId);
     if (!role || !action) return fail('技能不存在');
+    // anyTime（尖叫收回扣置牌等）：不受「轮到出牌」限制，随时可用（有挂起询问时除外）
+    if (!action.anyTime && playerId !== this.turnPlayerId) return fail('不是你的回合');
     if (action.when === 'following' && !this.tableCombo) return fail('现在不能发动该技能');
     // 见习/反力矩（陈正）：只有拥有牌权（本回合起牌者）时才能发动
     if (action.onlyWhenLeader && this.roundLeaderId !== playerId) return fail('只有拥有牌权（起牌回合）时才能发动');
@@ -387,10 +402,11 @@ export class GameEngine {
     if (p.playerId !== playerId) return fail('不是你的技能询问');
     if (p.ask.askId !== answer.askId) return fail('询问已失效');
     this.pendingAsk = null;
-    // suspend() 会把 PendingAsk.kind 设为 'hook'/'cutIn'/'pancake'（内部调度标签），此处须看 ask.kind
+    // suspend() 会把 PendingAsk.kind 设为 'hook'/'cutIn'/'pancake'/'proxyPlay'（内部调度标签），此处须看 ask.kind
     if (p.ask.kind === 'selfFollow') {
       return this.resolveSelfFollow(playerId, answer);
     }
+    if (p.kind === 'proxyPlay') return this.resolveProxyPlay(playerId, answer, p);
     if (p.kind === 'pancake') return this.resolvePancake(playerId, answer);
     if (p.kind === 'cutIn') {
       if (answer.choice !== 'yes' || !answer.cardIds?.length) {
@@ -479,7 +495,14 @@ export class GameEngine {
         roleState: this.roleStates.get(p.id),
         /** 吐饼（R.F）：倒置成饼的张数（公开张数、牌面对所有人不可见） */
         pancakeCount: this.pancakes.get(p.id)?.length ?? 0,
+        /** 尖叫（苗条）：扣置张数（公开张数；牌面只对苗条自己可见） */
+        heldCount: (this.held.get(p.id) ?? []).reduce((s, g) => s + g.cards.length, 0),
+        held: p.id === viewerId ? (this.held.get(p.id) ?? []).map((g) => ({ kind: g.kind, cards: [...g.cards] })) : null,
       })),
+      /** 温柔（组长）：本回合被标为「宝贝」的玩家（不得响应组长的出牌；界面展示标记） */
+      babyIds: [...this.babies],
+      /** 血压（硝烟）：受高血压保护的玩家（手牌 ≥8，其余人的技能不能对其生效；界面展示标记） */
+      bpProtectedIds: this.players.filter((p) => this.bpProtected(p.id)).map((p) => p.id),
       deckCount: this.deck.length,
       discardCount: this.discarded.length,
       /** 翻牌展示区：判定牌公开，所有人都能看（角色须在动作内清空） */
@@ -563,6 +586,7 @@ export class GameEngine {
       this.tableSideHidden = [];
       this.tableRankNote = null;
       this.tableOwnerId = '';
+      this.lastPlayPhysicalId = null;
       this.tableResponderRestrict = null;
       this.prevTableOwnerId = null;
       this.prevTableSuits = new Set();
@@ -575,6 +599,8 @@ export class GameEngine {
       this.aftermathMode = 'normal';
       this.cutInVictimId = null;
       this.roundBanned.clear(); // 见习（陈正）罚站：只持续本回合，新一轮开始解除
+      this.babies.clear(); // 温柔（组长）：宝贝只持续本回合，新一轮开始解除
+      this.babyOwnerId = null;
       this.orderFlipCount = 0; // 洄游：每轮恢复正序（隐匿在轮末结算读的是本轮的计数，清零发生在结算之后）
       // 先设 turnPlayerId：死锁守卫干跑 beforePlay 时技能能识别"自己起牌"
       this.turnPlayerId = leaderId;
@@ -638,10 +664,13 @@ export class GameEngine {
     }
     // 吐饼（R.F）：回合开始钩子（反力矩被动等）结算后立即判定获胜（2026-10-06 用户定稿）
     if (this.checkPancakeWin()) return;
+    // 空手获胜：手牌+扣置全空 → 立即判胜（同上口径，2026-10-06 用户定稿）
+    if (this.checkEmptyHandWin()) return;
     // 吐饼（R.F）：吃过饼后轮到自己且没有 2/炸弹可打 → 自动过（有的话出牌，过牌会被拒）
     const pancakeForcedPass = this.pancakeNoPassId === id && this.restrictedFollows(id).length === 0;
-    // 强制过（技能效果）；红楼梦（地坛）禁出玩家同样轮到他自动过
-    if (this.forcedPass.has(id) || this.activeBan.has(id) || pancakeForcedPass) {
+    // 强制过（技能效果）；红楼梦（地坛）禁出玩家同样轮到他自动过（血压保护者豁免禁打）。
+    // 罚站（见习）不自动过：轮到其出牌但被拒，可过牌、可用自己的技能（2026-10-06 回归修复）
+    if ((this.forcedPass.has(id) || this.activeBan.has(id)) && !this.bpProtected(id) || pancakeForcedPass) {
       this.forcedPass.delete(id);
       this.emit({ type: 'passed', playerId: id });
       this.passCount++;
@@ -722,8 +751,10 @@ export class GameEngine {
   }
 
   /** 出牌执行（上一手被压的牌进弃牌堆）→ afterPlay → 打断钩子 → 获胜判定 */
-  private commitPlay(playerId: string, combo: Combo): ActionResult {
-    const effOwner = this.exciteOwnerFor(playerId, combo); // 亢奋：点数和 ≥20 打出那一刻归属惰戈
+  private commitPlay(playerId: string, combo: Combo, attrOwner?: string): ActionResult {
+    // 讲题（硝烟）：attrOwner = 代打归属改写「视作其打出」——亢奋判定按归属者（其牌 ≥20 仍可再归惰戈），
+    // 洄游等物理出牌者技能不触发；无 attrOwner 时亢奋按物理出牌者判定
+    const effOwner = attrOwner ? (this.exciteOwnerFor(attrOwner, combo) ?? attrOwner) : this.exciteOwnerFor(playerId, combo);
     const flips = this.orderFlippers.has(effOwner ?? playerId);
     this.lastPlayOrderReversed = this.orderReversed(); // 洄游先判后切：本手按切换前顺序判定（巨石触发镜像用）
     if (flips) this.orderFlipCount++; // 洄游：物理出牌即切换（先判后切，本手按切换前顺序判定）
@@ -743,6 +774,7 @@ export class GameEngine {
     this.prevTableSuits = this.prevTableOwnerId == null ? new Set<number>() : prevSuits;
     this.prevTableCombo = this.prevTableOwnerId == null ? null : prevCombo;
     this.tableOwnerId = playerId;
+    this.lastPlayPhysicalId = playerId; // 尖叫（苗条）：实际打出者（归属改写前）
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
     this.provisionalLeadId = null; // 吐饼（R.F）：有人打出新牌，吃饼暂存的起牌权作废、牌权正常更迭
@@ -787,6 +819,7 @@ export class GameEngine {
           : (parseCombo(remainder, this.cfg, this.orderReversed(), true) ?? null);
     }
     this.tableOwnerId = playerId;
+    this.lastPlayPhysicalId = playerId; // 尖叫（苗条）：翻面接也是打出，实际打出者同样记录
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
     this.provisionalLeadId = null; // 吐饼（R.F）：同上，翻面接也是打出新牌
@@ -799,11 +832,13 @@ export class GameEngine {
 
   private runAfterPlayHooks(playerId: string, combo: Combo, index: number): ActionResult {
     // 亡语门控（2026-10-05 用户定稿 + 2026-10-06 追加）：出牌者打完最后一张牌（出完即胜判定前），
-    // 或吐饼获胜条件已满足（饼数 ≥ 手牌数，宣判前不再触发别人的技能），
-    // 只有标注亡语（RoleDef.deathrattleHooks）的钩子可以触发；未标注的跳过——游戏直接结束
+    // 或吐饼获胜条件已满足（饼数 ≥ 手牌数，宣判前不再触发别人的技能），或已有玩家空手待判胜
+    // （手牌+扣置全空，法音弃置等路径），只有标注亡语（RoleDef.deathrattleHooks）的钩子可以触发；
+    // 未标注的跳过——游戏直接结束
     const finishing =
       (!this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0) ||
-      this.pancakeWinCandidate() !== null;
+      this.pancakeWinCandidate() !== null ||
+      this.emptyHandWinCandidate() !== null;
     const hooks = this.orderedHooks('afterPlay');
     for (let i = index; i < hooks.length; i++) {
       const entry = hooks[i]!;
@@ -833,11 +868,12 @@ export class GameEngine {
 
   private runInterruptHooks(playerId: string, combo: Combo, index: number): ActionResult {
     // 亡语门控（2026-10-05 用户定稿 + 2026-10-06 追加）：同上——打断钩子也是「打完牌以后」触发，
-    // 出牌者打光手牌、或吐饼获胜条件已满足（饼数 ≥ 手牌数）时，只有标注亡语的打断技能
-    // （旺旺/巨石/五连鞭/压腿）可以询问，非亡语（答疑等）不再触发
+    // 出牌者打光手牌、吐饼获胜条件已满足（饼数 ≥ 手牌数）、或已有玩家空手待判胜（手牌+扣置全空）时，
+    // 只有标注亡语的打断技能（旺旺/巨石/五连鞭/压腿）可以询问，非亡语（答疑等）不再触发
     const finishing =
       (!this.eliminated.has(playerId) && this.hands.get(playerId)!.length === 0) ||
-      this.pancakeWinCandidate() !== null;
+      this.pancakeWinCandidate() !== null ||
+      this.emptyHandWinCandidate() !== null;
     const hooks = this.orderedHooks('onPlayInterrupt');
     for (let i = index; i < hooks.length; i++) {
       const entry = hooks[i]!;
@@ -902,6 +938,9 @@ export class GameEngine {
     // 致手牌减少的路径都触发；打断钩子含亡语已全部结算完，亡语先于获胜判定。全局扫描：他人技能致
     // R.F 手牌减少同样在此获胜）。
     if (this.checkPancakeWin()) return this.ok();
+    // 空手获胜：手牌+扣置全空 → 不看来因立即判胜（法音弃置/给别人牌等路径；2026-10-06 用户定稿）。
+    // 亡语已先结算（尖叫收回扣置后手牌非空则不满足）。
+    if (this.checkEmptyHandWin()) return this.ok();
     // 贪婪（阿摩）：每次普通主动出牌后摸 1 张（从牌堆）。归属改写（亢奋：桌面视作惰戈打出）不摸；
     // 再问补打走 playSideCard 不经此流程；出完即胜已在上面先判（获胜不摸）。
     // 摸牌可能触发耀武立即获胜或超上限淘汰 → 终局则跳过后续询问。
@@ -928,7 +967,14 @@ export class GameEngine {
       this.cutInVictimId = null;
       const x = this.matchSuitDrawX();
       const owner = this.players.find((p) => p.id === ownerId);
-      if (owner && this.roles.get(owner.roleId)?.canCutIn && x > 0 && this.phase === 'playing' && !this.eliminated.has(victimId)) {
+      if (
+        owner &&
+        this.roles.get(owner.roleId)?.canCutIn &&
+        x > 0 &&
+        this.phase === 'playing' &&
+        !this.eliminated.has(victimId) &&
+        !this.bpProtected(victimId) // 血压（硝烟）：技能（含增益）不能对其生效
+      ) {
         this.drawCards(victimId, x);
         if (this.phase !== 'playing') return this.ok();
       }
@@ -942,6 +988,7 @@ export class GameEngine {
       !this.lastPlayWasCutIn &&
       this.prevTableOwnerId != null &&
       !this.eliminated.has(this.prevTableOwnerId) &&
+      !this.bpProtected(this.prevTableOwnerId) && // 血压（硝烟）：技能（含增益）不能对其生效
       this.tableCombo
     ) {
       const owner = this.players.find((p) => p.id === ownerId);
@@ -956,8 +1003,7 @@ export class GameEngine {
     if (
       this.tableCombo &&
       !this.eliminated.has(selfId) &&
-      !this.activeBan.has(selfId) &&
-      !this.roundBanned.has(selfId) &&
+      !this.playBanned(selfId) &&
       this.roles.get(this.players.find((p) => p.id === selfId)!.roleId)?.canSelfFollow &&
       listPlayable(
         this.hands.get(selfId)!,
@@ -1015,8 +1061,10 @@ export class GameEngine {
       (p) =>
         this.roles.get(p.roleId)?.pancake &&
         !this.eliminated.has(p.id) &&
-        !this.activeBan.has(p.id) &&
+        !this.playBanned(p.id) &&
         p.id !== physicalPlayerId &&
+        // 温柔（组长）：宝贝不得响应组长的出牌（吃饼算特殊响应，同样禁止）
+        !(this.babies.has(p.id) && this.tableOwnerId === this.babyOwnerId) &&
         // 抽你限制适用：吃饼算响应，非指定响应者不能吃饼
         !(this.tableResponderRestrict && p.id !== this.tableResponderRestrict)
     );
@@ -1147,6 +1195,8 @@ export class GameEngine {
     this.passCount = 0;
     // 吐饼（R.F）：饼数 ≥ 手牌数 → 立即获胜（统一判定，2026-10-06 用户定稿）
     if (this.checkPancakeWin()) return this.ok();
+    // 空手获胜：手牌+扣置全空 → 立即判胜（同上口径，2026-10-06 用户定稿）
+    if (this.checkEmptyHandWin()) return this.ok();
     this.requeue(this.afterPlayTail());
     return this.ok();
   }
@@ -1268,6 +1318,7 @@ export class GameEngine {
     this.prevTableSuits = this.prevTableOwnerId == null ? new Set<number>() : prevSuits;
     this.prevTableCombo = this.prevTableOwnerId == null ? null : prevCombo;
     this.tableOwnerId = playerId;
+    this.lastPlayPhysicalId = playerId; // 尖叫（苗条）：狂吠连压每一手都是打出，实际打出者同样记录
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
     this.provisionalLeadId = null; // 吐饼（R.F）：狂吠连压同样打出新牌
@@ -1276,6 +1327,64 @@ export class GameEngine {
     this.emit({ type: 'cards:played', playerId, combo });
     if (effOwner) this.attributeTable(effOwner); // 亢奋：狂吠连压归属惰戈
     return this.runAfterPlayHooks(playerId, combo, 0);
+  }
+
+  // ---------- 讲题（硝烟）代打 ----------
+
+  /** 讲题（硝烟）代打提交：代打者选牌出牌（归属改写，视作硝烟打出）；弃权/超时 → 重跑硝烟钩子走惩罚分支 */
+  private resolveProxyPlay(playerId: string, answer: AskAnswer, p: PendingAsk): ActionResult {
+    const ownerId = p.entry!.playerId; // 讲题发起者（硝烟）——代打视作其打出
+    if (answer.choice !== 'yes' || !answer.cardIds?.length) {
+      // 未能打出：重跑硝烟钩子（带弃权答案），由其给出「令硝烟弃一张 / 代打者摸一张」惩罚选择
+      const outcome = this.runHook(p.entry!, p.args, { answer });
+      p.resume(outcome);
+      return this.ok();
+    }
+    const hand = this.hands.get(playerId)!;
+    const cards: Card[] = [];
+    for (const id of answer.cardIds) {
+      const c = hand.find((x) => x.id === id);
+      if (!c) return this.reaskProxyPlay(p, '手牌中没有这张牌');
+      cards.push(c);
+    }
+    const rev = this.orderReversed();
+    const combo = parseCombo(cards, this.cfg, rev, this.soloJokerAllowed(playerId));
+    if (!combo) return this.reaskProxyPlay(p, '这不是合法牌型');
+    // 响应限制（抽你）：代打按正常管牌规则打——本回合只能由指定玩家响应
+    if (this.tableCombo && this.tableResponderRestrict && playerId !== this.tableResponderRestrict) {
+      return this.reaskProxyPlay(p, '【抽你】本回合只能由指定玩家响应');
+    }
+    // 温柔（组长）：宝贝代打同样不得响应组长的出牌（出牌类技能响应一并禁止）
+    if (this.tableCombo && this.babies.has(playerId) && this.tableOwnerId === this.babyOwnerId) {
+      return this.reaskProxyPlay(p, '【温柔】宝贝本回合不得响应组长的出牌');
+    }
+    const role = this.roles.get(this.players.find((x) => x.id === playerId)?.roleId ?? '');
+    const baseLegal = this.tableCombo ? canBeat(combo, this.tableCombo, this.cfg, rev) : true;
+    // 呕哑（玊）：代打者本人的技能同样可用（技能优先）
+    const ouYaLegal = !!role?.ouYa && !!this.tableCombo && ouYaCovers(combo, this.tableCombo);
+    // 留 X 禁止收尾：代打者同样不能以单 2/对 2（倒序单 3/对 3）打完自己的手牌
+    const finishSpecial =
+      cards.length === hand.length &&
+      (combo.type === 'single' || combo.type === 'pair') &&
+      combo.rank === (rev ? RANK_3 : RANK_2);
+    const r = this.runBeforePlayHooks(
+      playerId,
+      combo,
+      (baseLegal || ouYaLegal) && !finishSpecial,
+      0,
+      false,
+      finishSpecial,
+      (pid, c) => this.commitPlay(pid, c, ownerId) // 视作硝烟打出：轮转/判定/牌权基准归硝烟
+    );
+    if (!r.ok) return this.reaskProxyPlay(p, r.reason ?? '不能打出这手牌');
+    return r;
+  }
+
+  /** 讲题（硝烟）非法选牌：播报原因并重新询问代打者（可弃权走惩罚分支） */
+  private reaskProxyPlay(p: PendingAsk, reason: string): ActionResult {
+    this.emit({ type: 'game:error', playerId: p.playerId, reason });
+    this.suspend(p.playerId, p.entry, p.hookName, p.args, p.resume, { ...p.ask, askId: undefined }, 'proxyPlay');
+    return this.ok();
   }
 
   // ---------- 插队（无名） ----------
@@ -1289,9 +1398,10 @@ export class GameEngine {
       (p) =>
         this.roles.get(p.roleId)?.canCutIn &&
         !this.eliminated.has(p.id) &&
-        !this.activeBan.has(p.id) &&
-        !this.roundBanned.has(p.id) &&
+        !this.playBanned(p.id) &&
         p.id !== this.roundLastPlayerId &&
+        // 温柔（组长）：宝贝不得响应组长的出牌（插队是出牌类响应）
+        !(this.babies.has(p.id) && this.tableOwnerId === this.babyOwnerId) &&
         // 响应限制（抽你）：非指定玩家不得插队响应
         !(this.tableResponderRestrict && p.id !== this.tableResponderRestrict)
     );
@@ -1339,6 +1449,7 @@ export class GameEngine {
     this.prevTableSuits = this.prevTableOwnerId == null ? new Set<number>() : prevSuits;
     this.prevTableCombo = this.prevTableOwnerId == null ? null : prevCombo;
     this.tableOwnerId = playerId;
+    this.lastPlayPhysicalId = playerId; // 尖叫（苗条）：插队也是打出，实际打出者同样记录
     this.roundLastPlayerId = playerId;
     this.passCount = 0;
     this.provisionalLeadId = null; // 吐饼（R.F）：插队打出新牌
@@ -1380,6 +1491,8 @@ export class GameEngine {
     }
     // 吐饼（R.F）：轮末钩子（隐匿等）结算后立即判定获胜（2026-10-06 用户定稿）
     if (this.checkPancakeWin()) return;
+    // 空手获胜：手牌+扣置全空 → 立即判胜（同上口径，2026-10-06 用户定稿）
+    if (this.checkEmptyHandWin()) return;
     this.finishRoundEnd(lastId);
   }
 
@@ -1407,7 +1520,7 @@ export class GameEngine {
     let leader = drawId;
     if (this.eliminated.has(leader)) leader = this.nextSeat(leader);
     // 防御：被诅咒者不得到牌权就跳过（取而代之者被淘汰等边缘），起牌者绝不能是禁出玩家
-    if (this.activeBan.has(leader)) {
+    if (this.activeBan.has(leader) && !this.bpProtected(leader)) {
       const alt = this.players.find((p) => !this.eliminated.has(p.id) && !this.activeBan.has(p.id));
       if (alt) leader = alt.id;
     }
@@ -1540,7 +1653,10 @@ export class GameEngine {
     if (this.tableOwnerId === playerId) this.tableResponderRestrict = null;
     const hand = this.hands.get(playerId) ?? [];
     this.hands.set(playerId, []);
-    if (hand.length > 0) this.discarded.push(...hand);
+    // 尖叫（苗条）：扣置牌一并进弃牌堆（牌守恒）
+    const heldCards = (this.held.get(playerId) ?? []).flatMap((g) => g.cards);
+    this.held.delete(playerId);
+    if (hand.length > 0 || heldCards.length > 0) this.discarded.push(...hand, ...heldCards);
     this.pendingMods.delete(playerId);
     this.forcedPass.delete(playerId);
     this.activeBan.delete(playerId);
@@ -1560,11 +1676,13 @@ export class GameEngine {
     const hand = this.hands.get(playerId);
     if (!hand) return;
     const exempt = (this.handLimitExempt.get(playerId) ?? 0) + (this.handLimitExemptPrev.get(playerId) ?? 0);
+    // 尖叫（苗条）：扣置牌也算手牌（手牌 + 扣置 > 上限即淘汰；收回只是挪回手里，总数不变）
+    const heldCount = (this.held.get(playerId) ?? []).reduce((s, g) => s + g.cards.length, 0);
     // 贪婪（阿摩）：上限 30；两倍（玊）：20×2=40；超出均照常淘汰
     const limit = this.roles.get(this.players.find((p) => p.id === playerId)?.roleId ?? '')?.greedy
       ? 30
       : this.cfg.hand.limit * (this.doubleSupplyFor(playerId) ? 2 : 1);
-    if (hand.length - exempt > limit) this.eliminate(playerId, '手牌超过上限');
+    if (hand.length + heldCount - exempt > limit) this.eliminate(playerId, '手牌超过上限');
   }
 
   private activeCount(): number {
@@ -1627,6 +1745,32 @@ export class GameEngine {
       if ((this.pancakes.get(p.id)?.length ?? 0) >= (this.hands.get(p.id)?.length ?? 0)) return p;
     }
     return null;
+  }
+
+  // ---------- 空手获胜（2026-10-06 用户定稿） ----------
+
+  /** 空手获胜候选（无副作用）：手牌 + 扣置全空的未淘汰玩家。
+   *  2026-10-06 用户定稿：不看来因（同吐饼口径）——自己打光/法音弃置/给别人牌，一切致手牌与
+   *  扣置归零的路径都触发。挂在结算点判定（亡语先结算：尖叫打光自动收回扣置牌在打断钩子里已
+   *  先执行，手牌非空则不满足）；扣置牌也算手牌（苗条 0 手但有扣置 → 不判胜，可主动收回）。 */
+  private emptyHandWinCandidate(): EnginePlayer | null {
+    for (const p of this.players) {
+      if (this.eliminated.has(p.id)) continue;
+      const hand = this.hands.get(p.id)?.length ?? 0;
+      const held = (this.held.get(p.id) ?? []).reduce((s, g) => s + g.cards.length, 0);
+      if (hand + held === 0) return p;
+    }
+    return null;
+  }
+
+  /** 空手获胜统一判定：全局扫描，命中即宣布获胜。结算点同 checkPancakeWin（afterPlayCommitted
+   *  收尾 / finishPancake / finishSkillAction / runTurnStartHooks / runRoundEndHooks / pass）。 */
+  private checkEmptyHandWin(): boolean {
+    if (this.phase !== 'playing') return false;
+    const p = this.emptyHandWinCandidate();
+    if (!p) return false;
+    this.finishGame(p.id);
+    return true;
   }
 
   // ---------- 翻牌展示区 ----------
@@ -1790,8 +1934,10 @@ export class GameEngine {
         engine.emit({ type: 'cards:revealed', playerId, cards, purpose });
       },
       playForcedCombo: (combo) => {
-        // 见习（陈正）罚站：技能可用但不得打出（茄汤成炸等强制出牌在罚站中落空）
-        if (engine.roundBanned.has(playerId)) return;
+        // 见习（陈正）罚站：技能可用但不得打出（茄汤成炸等强制出牌在罚站中落空）；血压保护者豁免
+        if (engine.playBanned(playerId)) return;
+        // 温柔（组长）：宝贝不得响应组长的出牌——茄汤成炸等出牌类技能响应同样落空
+        if (engine.tableCombo && engine.babies.has(playerId) && engine.tableOwnerId === engine.babyOwnerId) return;
         // 校验后走正常出牌提交流程（含 afterPlay/打断/获胜判定/插队问询）
         // 张数下限放宽为 1（茄汤一元炸/二元炸），上限不变
         const hand = engine.hands.get(playerId) ?? [];
@@ -1824,6 +1970,19 @@ export class GameEngine {
       },
       isBannedThisRound: (id) => engine.roundBanned.has(id),
       discardCount: () => engine.discarded.length,
+      playBanned: (id) => engine.playBanned(id),
+      bpProtected: (id) => engine.bpProtected(id),
+      markBaby: (id) => {
+        engine.babies.add(id);
+        engine.babyOwnerId = playerId; // 温柔（组长）：宝贝禁响应的基准是标记者本人
+      },
+      isBaby: (id) => engine.babies.has(id),
+      tableOwnerId: () => (engine.tableOwnerId === '' ? null : engine.tableOwnerId),
+      lastPlayPhysicalId: () => engine.lastPlayPhysicalId,
+      holdCards: (kind, cardIds) => engine.holdCards(playerId, kind, cardIds),
+      takeHeldBack: (cardIds) => engine.takeHeldBack(playerId, cardIds),
+      heldGroups: () => engine.held.get(playerId) ?? [],
+      giveHeldTo: (toId, cardIds) => engine.giveHeldTo(playerId, toId, cardIds),
     };
   }
 
@@ -1906,6 +2065,74 @@ export class GameEngine {
     this.emit({ type: 'skill:peeked', viewerId, targetId });
   }
 
+  // ---------- 尖叫（苗条）扣置区 ----------
+
+  /** 扣置手牌为范文/尖叫鸡（引擎校验牌在手、扣后手牌 ≥1）；牌离开手牌进扣置区，牌背对其他人不可见 */
+  private holdCards(playerId: string, kind: 'fanwen' | 'jianjiaoji', cardIds: number[]): void {
+    const hand = this.hands.get(playerId);
+    if (!hand || cardIds.length === 0) return;
+    const cards: Card[] = [];
+    for (const id of cardIds) {
+      const c = hand.find((x) => x.id === id);
+      if (!c) throw new Error('扣置牌不在手牌中');
+      cards.push(c);
+    }
+    if (cards.length >= hand.length) throw new Error('扣置后手牌不能为空');
+    for (const c of cards) hand.splice(hand.indexOf(c), 1);
+    const groups = this.held.get(playerId) ?? [];
+    groups.push({ kind, cards });
+    this.held.set(playerId, groups);
+    this.emit({ type: 'cards:held', playerId, kind, count: cards.length });
+  }
+
+  /** 收回扣置牌到手中（缺省全部；不消耗次数）。扣置牌也算手牌（上限 = 手牌 + 扣置），
+   *  收回只是挪回手里，总数不变、不会导致超限淘汰（2026-10-06 用户确认） */
+  private takeHeldBack(playerId: string, cardIds?: number[]): void {
+    const groups = this.held.get(playerId) ?? [];
+    if (groups.length === 0) return;
+    const hand = this.hands.get(playerId);
+    if (!hand) return;
+    const ids = cardIds?.length ? new Set(cardIds) : null;
+    let back = 0;
+    const next: HeldGroup[] = [];
+    for (const g of groups) {
+      if (ids) {
+        const keep = g.cards.filter((c) => !ids.has(c.id));
+        const taken = g.cards.filter((c) => ids.has(c.id));
+        hand.push(...taken);
+        back += taken.length;
+        if (keep.length > 0) next.push({ kind: g.kind, cards: keep });
+      } else {
+        hand.push(...g.cards);
+        back += g.cards.length;
+      }
+    }
+    this.held.set(playerId, next);
+    if (back === 0) return;
+    this.emit({ type: 'cards:heldBack', playerId, count: back });
+  }
+
+  /** 把指定扣置牌发给打出者（范文按花色逐张、尖叫鸡一次发完）；接收者照常受手牌上限约束 */
+  private giveHeldTo(fromId: string, toId: string, cardIds: number[]): void {
+    const groups = this.held.get(fromId) ?? [];
+    const ids = new Set(cardIds);
+    const given: Card[] = [];
+    const next: HeldGroup[] = [];
+    for (const g of groups) {
+      const keep = g.cards.filter((c) => !ids.has(c.id));
+      given.push(...g.cards.filter((c) => ids.has(c.id)));
+      if (keep.length > 0) next.push({ kind: g.kind, cards: keep });
+    }
+    if (given.length === 0) return;
+    this.held.set(fromId, next);
+    const hand = this.hands.get(toId);
+    if (!hand) return;
+    hand.push(...given);
+    this.checkHandLimit(toId);
+    if (this.phase === 'playing') this.checkYaoWu(); // 耀武（阿摩）：收到牌后立即判定
+    this.emit({ type: 'cards:heldGiven', playerId: fromId, toPlayerId: toId, count: given.length });
+  }
+
   // ---------- 询问挂起 ----------
 
   private suspend(
@@ -1915,19 +2142,22 @@ export class GameEngine {
     args: unknown[],
     resume: (outcome: HookOutcome) => void,
     ask: SkillAsk,
-    internalKind?: 'hook' | 'cutIn' | 'pancake'
+    internalKind?: 'hook' | 'cutIn' | 'pancake' | 'proxyPlay'
   ): void {
     ask.askId = ask.askId ?? this.newAskId();
     ask.timeoutMs = ask.timeoutMs ?? this.cfg.timeout.skillAskMs;
     // 见习（陈正）罚站：被罚站的玩家不能被任何技能选为目标（2026-10-05 用户确认：不得被技能响应）
+    // 血压（硝烟）：手牌 ≥8 的保护者同样不能被技能选为目标（2026-10-06 用户确认：全挡含增益）
     if (ask.targetCandidates) {
-      ask.targetCandidates = ask.targetCandidates.filter((id) => !this.roundBanned.has(id));
+      ask.targetCandidates = ask.targetCandidates.filter((id) => !this.roundBanned.has(id) && !this.bpProtected(id));
     }
-    // 被询问者缺省为技能所有者（playerId）；「依次自选」类技能经 ask.askPlayerId 依次问其他人
+    // 被询问者缺省为技能所有者（playerId）；「依次自选」/讲题代打类技能经 ask.askPlayerId 指向其他人
+    // 讲题（硝烟）proxyPlay 询问可从任意提问钩子（回合开始）挂起：按 ask.kind 自动识别调度标签，
+    // 否则 resolveAsk 会走通用重跑路径、把代打答案误判为「未能打出」（2026-10-06 修复）
     this.pendingAsk = {
       ask,
       playerId: ask.askPlayerId ?? playerId,
-      kind: internalKind ?? (entry ? 'hook' : 'cutIn'),
+      kind: internalKind ?? (ask.kind === 'proxyPlay' ? 'proxyPlay' : entry ? 'hook' : 'cutIn'),
       entry,
       hookName,
       args,
@@ -1942,6 +2172,8 @@ export class GameEngine {
   private finishSkillAction(playerId: string): void {
     // 吐饼（R.F）：主动技（换牌/拼点等）结算后立即判定获胜（2026-10-06 用户定稿）
     if (this.checkPancakeWin()) return;
+    // 空手获胜：手牌+扣置全空 → 立即判胜（同上口径，2026-10-06 用户定稿）
+    if (this.checkEmptyHandWin()) return;
     const mods = this.pendingMods.get(playerId);
     if (mods?.endTurn) {
       delete mods.endTurn;
@@ -1981,6 +2213,8 @@ export class GameEngine {
    * 惰戈自己打出的牌不重复改写。提交路径在翻转/判定钩子之前调用，保证「打出那一刻即算惰戈出的」。
    */
   private exciteOwnerFor(playerId: string, combo: Combo): string | null {
+    // 血压（硝烟）：亢奋归属改写是技能对其生效（改变其出牌的归属/判定基准）→ 手牌 ≥8 时不归属
+    if (this.bpProtected(playerId)) return null;
     const infinite = combo.type === 'singleJoker' || combo.type === 'jokerPair';
     let sum = 0;
     if (!infinite) {
@@ -2032,10 +2266,36 @@ export class GameEngine {
     );
   }
 
+  // ---------- 血压（硝烟）与温柔（组长）守卫 ----------
+
+  /** 血压（硝烟，2026-10-06 用户确认）：手牌 ≥8 的未淘汰硝烟——其余人的技能一律不能对其生效（含增益）。
+   *  禁打（诅咒/罚站）对其无效（动态：摸到 ≥8 立即解除）。 */
+  private bpProtected(playerId: string): boolean {
+    const p = this.players.find((x) => x.id === playerId);
+    if (!p || this.eliminated.has(playerId)) return false;
+    if (!this.roles.get(p.roleId)?.bloodPressure) return false;
+    return (this.hands.get(playerId)?.length ?? 0) >= 8;
+  }
+
+  /** 该玩家当前是否被禁打（诅咒/罚站；血压保护者豁免） */
+  private playBanned(playerId: string): boolean {
+    if (this.bpProtected(playerId)) return false;
+    return this.activeBan.has(playerId) || this.roundBanned.has(playerId);
+  }
+
+  /** 禁打拒绝原因文案（按生效的禁打类型） */
+  private banReason(playerId: string): string {
+    return this.roundBanned.has(playerId)
+      ? '【见习】本回合罚站，不得出牌'
+      : '【红楼梦】本回合不得出牌';
+  }
+
   /** 可合法响应的组合：基础可管且未被 beforePlay 干跑否决（技能否决后允许过） */
   private legalResponses(playerId: string): Combo[] {
     // 见习（陈正）罚站：不得出牌 → 视为无牌可管（允许过）
-    if (this.roundBanned.has(playerId)) return [];
+    if (this.playBanned(playerId)) return [];
+    // 温柔（组长）：宝贝对组长的桌面视为无牌可管（允许过）
+    if (this.babies.has(playerId) && this.tableOwnerId === this.babyOwnerId) return [];
     // 响应限制（抽你）：非指定玩家视为无牌可管（允许过）
     if (this.tableResponderRestrict && playerId !== this.tableResponderRestrict) return [];
     let combos = listPlayable(

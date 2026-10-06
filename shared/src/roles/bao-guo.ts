@@ -87,6 +87,7 @@ function jianXiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
       t !== ctx.self.id &&
       !ctx.game.eliminated(t) &&
       !ctx.game.isBannedThisRound(t) &&
+      !ctx.game.bpProtected(t) && // 血压（硝烟）全挡：技能不能对其生效
       !(st.jianxiLastTarget === t && st.roundCount <= st.jianxiLastRound + 1);
     if (!ok) return; // 弃权/非法：不消耗次数
     st.jianxiUsed++;
@@ -149,7 +150,10 @@ function fanLiPickTarget(ctx: HookContext, st: BaoGuoState): HookResult | void {
     return { ok: false, reason: '【反力矩】手牌不足 3 张不能发动（要交出一张拼点牌并弃置一张）' };
   const others = ctx.game
     .players()
-    .filter((p) => p.id !== ctx.self.id && !ctx.game.eliminated(p.id) && !ctx.game.isBannedThisRound(p.id))
+    .filter(
+      (p) =>
+        p.id !== ctx.self.id && !ctx.game.eliminated(p.id) && !ctx.game.isBannedThisRound(p.id) && !ctx.game.bpProtected(p.id)
+    )
     .map((p) => p.id);
   if (others.length === 0) return { ok: false, reason: '【反力矩】没有可拼点的目标' };
   st.fanliStage = 'pickTarget';
@@ -184,7 +188,8 @@ function fanLiFlow(ctx: HookContext, st: BaoGuoState): HookResult | void {
     }
     case 'pickTarget': {
       const t = a?.targetPlayerId;
-      const ok = !!t && t !== ctx.self.id && !ctx.game.eliminated(t) && !ctx.game.isBannedThisRound(t);
+      const ok =
+        !!t && t !== ctx.self.id && !ctx.game.eliminated(t) && !ctx.game.isBannedThisRound(t) && !ctx.game.bpProtected(t);
       if (!ok) {
         st.fanliStage = null; // 弃权/非法：作罢
         return;
@@ -372,6 +377,7 @@ const baoGuo: RoleDef = {
       const st = ctx.state as BaoGuoState;
       const a = ctx.answer;
       const player = ctx.game.roundLastPlayerId()!;
+      if (ctx.game.bpProtected(player)) return; // 血压（硝烟）全挡：技能不能对出牌者生效（含增益）
       const name = nameOf(ctx, player);
       // 压腿适用性：别人（不含自己）打炸弹，且牌堆/弃牌堆至少一边有牌可翻
       const ytApplies =

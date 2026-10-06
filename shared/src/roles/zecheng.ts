@@ -47,6 +47,13 @@ const zecheng: RoleDef = {
         ctx.game.giveRevealed(pid, [card.id]);
         st.pool = st.pool.filter((c) => c.id !== card.id);
         st.boom.next++;
+        // 血压（硝烟）全挡：跳过新晋高血压者（摸牌可能使其 ≥8）与已淘汰者
+        while (
+          st.boom.next < st.boom.ids.length &&
+          (ctx.game.eliminated(st.boom.ids[st.boom.next]!) || ctx.game.bpProtected(st.boom.ids[st.boom.next]!))
+        ) {
+          st.boom.next++;
+        }
         if (st.boom.next < st.boom.ids.length && st.pool.length > 0) {
           // 下一位自选（弃权/超时同路径：自动拿最小并继续）
           return {
@@ -85,7 +92,11 @@ const zecheng: RoleDef = {
       const reds = top.filter((c) => cardColor(c) === 'red').length;
       if (reds > top.length - reds) {
         // 大涨：从自己开始按座位序依次自选 1 张，弃权/超时自动拿剩余最小牌，多出的弃置
-        const ids = [ctx.self.id, ...ctx.game.players().map((p) => p.id).filter((id) => id !== ctx.self.id)];
+        // 血压（硝烟）全挡：高血压者不发牌（含增益）
+        const ids = [
+          ctx.self.id,
+          ...ctx.game.players().map((p) => p.id).filter((id) => id !== ctx.self.id && !ctx.game.bpProtected(id)),
+        ];
         st.boom = { ids, next: 0 };
         return {
           ok: true,

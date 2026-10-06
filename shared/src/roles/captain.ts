@@ -125,6 +125,11 @@ const captain: RoleDef = {
           ctx.game.announce('captain', 'zai-wen', `${name} 补打一张`);
           return;
         }
+        if (ctx.game.bpProtected(beater)) {
+          // 血压（硝烟）全挡：归属改写是技能对其生效（改变其出牌的归属/判定基准）→ 不归属
+          ctx.game.announce('captain', 'zai-wen', '压牌未补打；受血压保护，不改变归属');
+          return;
+        }
         ctx.game.attributeTable(ctx.self.id);
         // 抽你联动：归属后的手牌仍是阿色的牌，响应限制照旧（被指定者淘汰/掉线限制继续有效）
         if (st.designated) ctx.game.setTableResponderRestrict(st.designated);

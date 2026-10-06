@@ -49,13 +49,16 @@ const ROLE_IDS = [
   'flashpoint',
   'guo-tt',
   'king-nan',
+  'miao-tiao',
   'patrick',
   'rf',
   'skywalker',
   'su',
   'unhumanity',
+  'xiao-yan',
   'yy-xue',
   'zecheng',
+  'zu-zhang',
 ];
 
 describe('角色注册表', () => {
@@ -108,8 +111,11 @@ describe('席位排序（seatOrder）', () => {
     'fishy',
     'guo-tt',
     'king-nan',
+    'miao-tiao',
     'rf',
     'su',
+    'xiao-yan',
+    'zu-zhang',
   ];
 
   it('listRoles 按席位顺序（首席 → 末席）排列', async () => {
@@ -196,7 +202,7 @@ describe('角色加载器', () => {
   it('node loader：默认目录自动发现全部 19 个角色（幂等）', async () => {
     clearRoles();
     expect(await loadAllRoles()).toEqual(ROLE_IDS);
-    expect(listRoles()).toHaveLength(19);
+    expect(listRoles()).toHaveLength(22);
     expect(await loadAllRoles()).toEqual([]); // 重复加载不重复注册
   });
 
@@ -224,6 +230,6 @@ export default def;
     loadAllRolesClient();
     expect(listRoles().map((r) => r.id).sort()).toEqual(ROLE_IDS);
     loadAllRolesClient(); // 幂等
-    expect(listRoles()).toHaveLength(19);
+    expect(listRoles()).toHaveLength(22);
   });
 });

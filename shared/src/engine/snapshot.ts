@@ -1,5 +1,5 @@
 import type { Card } from '../cards';
-import type { AskKind } from '../roles/types';
+import type { AskKind, HeldGroup } from '../roles/types';
 import type { Combo } from './combos';
 
 export interface SnapshotPlayer {
@@ -15,6 +15,10 @@ export interface SnapshotPlayer {
   roleState: unknown;
   /** 吐饼（R.F）：倒置成饼的张数（公开张数；牌面不可见、永久留桌） */
   pancakeCount: number;
+  /** 尖叫（苗条）：扣置的张数（公开；牌面只对苗条自己可见） */
+  heldCount: number;
+  /** 尖叫（苗条）：扣置组明细（仅查看者本人可见，其他人 null） */
+  held: HeldGroup[] | null;
 }
 
 /** 快照中的询问元信息（完整载荷经 game:skill-ask 定向发给被问者） */
@@ -49,6 +53,10 @@ export interface GameSnapshot {
   cursedPlayerIds: string[];
   /** 见习（陈正）：本回合罚站不得出牌的玩家 id（界面展示标记） */
   roundBannedIds: string[];
+  /** 温柔（组长）：本回合被标为「宝贝」的玩家 id（不得响应组长的出牌；界面展示标记） */
+  babyIds: string[];
+  /** 血压（硝烟）：受高血压保护的玩家 id（手牌 ≥8，其余人的技能不能对其生效；界面展示标记） */
+  bpProtectedIds: string[];
   turnPlayerId: string | null;
   roundLeaderId: string;
   winnerId: string | null;

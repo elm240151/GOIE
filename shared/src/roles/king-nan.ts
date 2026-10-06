@@ -61,6 +61,7 @@ const kingNan: RoleDef = {
       const owner = ctx.game.roundLastPlayerId()!;
       if (ctx.game.prevTableOwnerId() !== ctx.self.id) return; // 只对压我牌的人
       if (ctx.game.eliminated(owner)) return; // 防御：目标已不在场则不判定
+      if (ctx.game.bpProtected(owner)) return; // 血压（硝烟）全挡：技能不能对压牌者生效（含增益）
       const st = ctx.state as KingNanState;
       const a = ctx.answer;
       if (!a) {
@@ -104,6 +105,7 @@ const kingNan: RoleDef = {
       const target = ctx.game.prevTableOwnerId();
       if (target == null || target === ctx.self.id) return;
       if (ctx.game.eliminated(target)) return;
+      if (ctx.game.bpProtected(target)) return; // 血压（硝烟）全挡：技能不能对被压者生效（含增益）
       const prev = ctx.game.prevTable();
       if (!prev) return;
       const n = Math.min(3, Math.abs(comboPoints(played) - comboPoints(prev)));
