@@ -63,20 +63,35 @@ function ask(engine: GameEngine): SkillAsk {
 }
 
 describe('硝烟：讲题 + 血压', () => {
-  it('讲题成功：摸 1 张、指定代打者领出 → 视作硝烟打出（归属改写、轮转从硝烟下家）', () => {
+  it('讲题只在接牌时发动（2026-10-06 用户确认）：起牌（领出）不询问；接牌发动成功——摸 1 张、指定代打者压牌 → 视作硝烟打出（归属改写、轮转从硝烟下家）', () => {
     const hands = {
-      p0: [], // 硝烟：8 张填充牌，不出牌
-      p1: [deck[2]!], // 代打者：♠5 领出
-      p2: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // 低牌过牌
+      p0: [], // 硝烟：填充 8 张（轮 1 领出 ♠4、过后牌）
+      p1: [deck[2]!, deck[40]!], // 代打者：♠5、♦4（轮 2 压 ♠3）+ 填充
+      p2: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // ♠3♥3♣3 + ♦5（轮 1 压 ♠4 收尾、轮 2 领出 ♠3）
     };
     pad(hands, { p0: 8, p1: 8, p2: 4 }, [109, 159]);
     const engine = mkEngine(hands, { p0: xiaoYan });
 
+    // 轮 1：硝烟起牌——讲题不触发（只在接牌时发动）
+    expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
+    expect(engine.playCards('p0', [deck[109]!.id]).ok).toBe(true); // 领出 ♠4
+    expect(engine.pass('p1').ok).toBe(true);
+    expect(engine.playCards('p2', [deck[41]!.id]).ok).toBe(true); // ♦5 压 ♠4
+    // 轮到硝烟接牌：讲题询问（弃权不消耗）
+    const c1 = ask(engine);
+    expect(c1.kind).toBe('confirm');
+    expect(c1.prompt).toContain('讲题');
+    expect(engine.resolveAsk('p0', { askId: c1.askId!, choice: 'decline' }).ok).toBe(true);
+    expect(engine.pass('p0').ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true); // 轮末 last = p2
+
+    // 轮 2：p2 领出 ♠3 → 轮到硝烟接牌：讲题发动
+    expect(engine.playCards('p2', [hands.p2[0]!.id]).ok).toBe(true);
     const c = ask(engine);
     expect(c.kind).toBe('confirm');
     expect(c.prompt).toContain('讲题');
     const yes = engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' });
-    expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.handCount).toBe(9); // 8 + 1
+    expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.handCount).toBe(8); // 7 + 1
     const t = yes.ok ? (yes.pendingAsk as SkillAsk) : null;
     expect(t?.kind).toBe('pickTarget');
     const r1 = engine.resolveAsk('p0', { askId: t!.askId!, targetPlayerId: 'p1' });
@@ -84,29 +99,41 @@ describe('硝烟：讲题 + 血压', () => {
     expect(proxy?.kind).toBe('proxyPlay');
     expect(proxy?.askPlayerId).toBe('p1'); // 代打请求发给代打者
 
-    const r2 = engine.resolveAsk('p1', { askId: proxy!.askId!, choice: 'yes', cardIds: [hands.p1[0]!.id] });
+    const r2 = engine.resolveAsk('p1', { askId: proxy!.askId!, choice: 'yes', cardIds: [hands.p1[1]!.id] }); // ♦4 压 ♠3
     expect(r2.ok).toBe(true);
     expect(r2.ok && r2.events.some((e) => e.type === 'table:attributed' && e.playerId === 'p0' && e.fromPlayerId === 'p1')).toBe(true);
     const snap = engine.snapshotFor('p0');
     expect(snap.turnPlayerId).toBe('p1'); // 轮转从硝烟下家继续
     expect(snap.tableOwnerId).toBe('p0'); // 桌面归属改写为硝烟（快照公开归属者，客户端宝贝预览门控用）
     expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(7); // 8 − 1（代打者出的牌）
-    expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(9); // 硝烟一张未出
+    expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(8); // 硝烟一张未出
     assertConserved(engine);
   });
 
   it('讲题失败 → 代打者令硝烟弃置一张（硝烟自选）→ 硝烟仍可继续出牌', () => {
     const hands = {
       p0: [deck[2]!], // 硝烟：♠5（之后自选弃掉）+ 填充
-      p1: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // 代打者：无牌可打，弃权
-      p2: [deck[1]!, deck[14]!, deck[28]!, deck[42]!], // 过牌（♠4 ♥4 ♣5 ♦6）
+      p1: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // 代打者：低牌（轮 2 无牌可压弃权）
+      p2: [deck[1]!, deck[14]!, deck[28]!, deck[42]!], // ♠4♥4♣5 + ♦6（轮 1 压 ♠4 收尾、轮 2 领出 ♠4）
     };
     pad(hands, { p0: 8, p1: 4, p2: 4 }, [109, 159]);
     const engine = mkEngine(hands, { p0: xiaoYan });
 
+    // 轮 1：硝烟起牌（无讲题询问）→ 领出 ♠4；p1 过；p2 出 ♣5 压；硝烟弃权讲题后过牌
+    expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
+    expect(engine.playCards('p0', [deck[109]!.id]).ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true);
+    expect(engine.playCards('p2', [deck[28]!.id]).ok).toBe(true); // ♣5 压 ♠4
+    const c1 = ask(engine); // 硝烟接牌回合：讲题询问 → 弃权
+    expect(engine.resolveAsk('p0', { askId: c1.askId!, choice: 'decline' }).ok).toBe(true);
+    expect(engine.pass('p0').ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true); // 轮末 last = p2
+
+    // 轮 2：p2 领出 ♠4 → 硝烟讲题发动
+    expect(engine.playCards('p2', [hands.p2[0]!.id]).ok).toBe(true);
     const c = ask(engine);
     const yes = engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' });
-    expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.handCount).toBe(9);
+    expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.handCount).toBe(8); // 7 + 1
     const t = yes.ok ? (yes.pendingAsk as SkillAsk) : null;
     const r1 = engine.resolveAsk('p0', { askId: t!.askId!, targetPlayerId: 'p1' });
     const proxy = r1.ok ? (r1.pendingAsk as SkillAsk) : null;
@@ -125,21 +152,33 @@ describe('硝烟：讲题 + 血压', () => {
     expect(pick?.max).toBe(1);
     const r4 = engine.resolveAsk('p0', { askId: pick!.askId!, cardIds: [hands.p0[0]!.id] });
     expect(r4.ok && r4.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'jiang-ti')).toBe(true);
-    expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.handCount).toBe(8); // 9 − 1
+    expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.handCount).toBe(7); // 8 − 1
     expect(engine.snapshotFor('p0').turnPlayerId).toBe('p0'); // 结算后硝烟仍可出牌
-    expect(engine.playCards('p0', [deck[109]!.id]).ok).toBe(true); // 失败后仍可出牌（领出填充牌）
+    expect(engine.playCards('p0', [deck[110]!.id]).ok).toBe(true); // 失败后仍可出牌（♠5 压 ♠4）
     assertConserved(engine);
   });
 
   it('讲题失败 → 代打者从牌堆摸一张；结算后硝烟仍可继续出牌', () => {
     const hands = {
-      p0: [deck[2]!], // 硝烟：♠5 领出
+      p0: [deck[2]!], // 硝烟：♠5 + 填充
       p1: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // 代打者：无牌可打，弃权
-      p2: [deck[1]!, deck[14]!, deck[28]!, deck[42]!], // 过牌
+      p2: [deck[1]!, deck[14]!, deck[28]!, deck[42]!], // ♠4♥4♣5 + ♦6（轮 1 压、轮 2 领出 ♠4）
     };
     pad(hands, { p0: 8, p1: 4, p2: 4 }, [109, 159]);
     const engine = mkEngine(hands, { p0: xiaoYan });
 
+    // 轮 1：硝烟起牌（无讲题询问）→ 领出 ♠4；p1 过；p2 出 ♣5 压；硝烟弃权讲题后过牌
+    expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
+    expect(engine.playCards('p0', [deck[109]!.id]).ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true);
+    expect(engine.playCards('p2', [deck[28]!.id]).ok).toBe(true); // ♣5 压 ♠4
+    const c1 = ask(engine);
+    expect(engine.resolveAsk('p0', { askId: c1.askId!, choice: 'decline' }).ok).toBe(true);
+    expect(engine.pass('p0').ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true);
+
+    // 轮 2：p2 领出 ♠4 → 硝烟讲题发动 → 代打者弃权 → 选从牌堆摸一张
+    expect(engine.playCards('p2', [hands.p2[0]!.id]).ok).toBe(true);
     const c = ask(engine);
     const yes = engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' });
     const t = yes.ok ? (yes.pendingAsk as SkillAsk) : null;
@@ -151,7 +190,7 @@ describe('硝烟：讲题 + 血压', () => {
     expect(r3.ok).toBe(true);
     expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p1')!.handCount).toBe(5); // 4 + 1
     expect(engine.snapshotFor('p0').turnPlayerId).toBe('p0');
-    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true); // 失败后仍可出牌
+    expect(engine.playCards('p0', [deck[110]!.id]).ok).toBe(true); // 失败后仍可出牌（♠5 压 ♠4）
     assertConserved(engine);
   });
 
@@ -190,11 +229,23 @@ describe('硝烟：讲题 + 血压', () => {
     const hands = {
       p0: [deck[2]!], // 硝烟：♠5（之后被自动弃）
       p1: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // 代打者：无牌可打，弃权
-      p2: [deck[1]!, deck[14]!, deck[28]!, deck[42]!], // 过牌
+      p2: [deck[1]!, deck[14]!, deck[28]!, deck[42]!], // ♠4♥4♣5 + ♦6（轮 1 压、轮 2 领出 ♠4）
     };
     pad(hands, { p0: 8, p1: 4, p2: 4 }, [109, 159]);
     const engine = mkEngine(hands, { p0: xiaoYan });
 
+    // 轮 1：硝烟起牌（无讲题询问）→ 领出 ♠4；p1 过；p2 出 ♣5 压；硝烟弃权讲题后过牌
+    expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
+    expect(engine.playCards('p0', [deck[109]!.id]).ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true);
+    expect(engine.playCards('p2', [deck[28]!.id]).ok).toBe(true); // ♣5 压 ♠4
+    const c1 = ask(engine);
+    expect(engine.resolveAsk('p0', { askId: c1.askId!, choice: 'decline' }).ok).toBe(true);
+    expect(engine.pass('p0').ok).toBe(true);
+    expect(engine.pass('p1').ok).toBe(true);
+
+    // 轮 2：p2 领出 ♠4 → 硝烟讲题发动
+    expect(engine.playCards('p2', [hands.p2[0]!.id]).ok).toBe(true);
     const c = ask(engine);
     engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' });
     const t = ask(engine);
@@ -251,7 +302,7 @@ describe('硝烟：讲题 + 血压', () => {
     const h3 = { p0: [deck[3]!], p1: [deck[2]!] };
     pad(h3, { p0: 8, p1: 9 }, [109, 159]);
     const e3 = mkEngine(h3, { p0: kingNan, p1: xiaoYan }, 'p1');
-    expect(e3.resolveAsk('p1', { askId: ask(e3).askId!, choice: 'decline' }).ok).toBe(true); // 讲题弃权
+    expect(e3.snapshotFor('p0').pendingAsk).toBeNull(); // 硝烟起牌：讲题不发动（2026-10-06）
     e3.playCards('p1', [h3.p1[0]!.id]); // 硝烟领出 ♠5 → 手牌 8，血压生效
     const r3 = e3.playCards('p0', [h3.p0[0]!.id]); // 楠王压 ♠6
     expect(r3.ok).toBe(true);
@@ -295,10 +346,8 @@ describe('硝烟：讲题 + 血压', () => {
     pad(hands, { p0: 7, p1: 9, p2: 8, p3: 8 }, [109, 159]);
     const engine = mkEngine(hands, { p0: xiaoYan, p1: guoTT, p2: kingNan, p3: zecheng });
 
-    // 轮 1：讲题弃权 → 领出 345 → 地坛判定命中（牌堆顶 ♦Q ∈ {♠,♦}）→ 诅咒硝烟
-    const c = ask(engine);
-    expect(c.prompt).toContain('讲题');
-    expect(engine.resolveAsk('p0', { askId: c.askId!, choice: 'decline' }).ok).toBe(true);
+    // 轮 1：硝烟起牌（讲题不发动，2026-10-06）→ 领出 345 → 地坛判定命中（牌堆顶 ♦Q ∈ {♠,♦}）→ 诅咒硝烟
+    expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
     const r0 = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id, hands.p0[2]!.id]);
     expect(r0.ok && r0.suspended).toBe(true);
     const dt = r0.ok ? (r0.pendingAsk as SkillAsk) : null;
