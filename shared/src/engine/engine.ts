@@ -855,11 +855,11 @@ export class GameEngine {
     return this.afterPlayCommitted(playerId);
   }
 
-  /** 无名加牌 X：响应牌（当前桌面）中与被压牌同花色的真牌点数总和；0 = 无同花色 */
+  /** 无名加牌 X：响应牌（当前桌面）中与被压牌同花色的真牌点数总和（2 记 2、A 记 1，2026-10-06 用户确认）；0 = 无同花色 */
   private matchSuitDrawX(): number {
     return this.tableCombo!.cards
       .filter((c) => !isJoker(c) && this.prevTableSuits.has(c.suit))
-      .reduce((s, c) => s + c.rank, 0);
+      .reduce((s, c) => s + pointValue(c.rank), 0);
   }
 
   /** 出牌后的收尾：夺权 → 出完即胜/留2判负 → 吐饼问询（最先）→ 插队/无名加牌后续 → 插队问询/轮到下家 */
@@ -888,6 +888,12 @@ export class GameEngine {
       this.finishGame(playerId);
       return this.ok();
     }
+    // 吐饼（R.F）：主动出牌后饼数 ≥ 手牌数 → 立即获胜（与吃饼结算同口径；2026-10-06 用户实机 bug）
+    const rfRole = this.roles.get(this.players.find((p) => p.id === playerId)?.roleId ?? '');
+    if (rfRole?.pancake && (this.pancakes.get(playerId)?.length ?? 0) >= this.hands.get(playerId)!.length) {
+      this.finishGame(playerId);
+      return this.ok();
+    }
     // 贪婪（阿摩）：每次普通主动出牌后摸 1 张（从牌堆）。归属改写（亢奋：桌面视作惰戈打出）不摸；
     // 再问补打走 playSideCard 不经此流程；出完即胜已在上面先判（获胜不摸）。
     // 摸牌可能触发耀武立即获胜或超上限淘汰 → 终局则跳过后续询问。
@@ -906,13 +912,18 @@ export class GameEngine {
   private afterPlayTail(): ActionResult {
     if (this.phase !== 'playing') return this.ok();
     const ownerId = this.roundLastPlayerId!;
-    // 插队后续（无名）：受害者摸 X 张，轮转从无名的下家继续（插队跳过了中间的人）
+    // 插队后续（无名）：受害者摸 X 张，轮转从无名的下家继续（插队跳过了中间的人）；
+    // 归属改写（亢奋）：桌面视作惰戈打出 → 无名技能不触发（与普通响应分支同口径，2026-10-06 用户实机 bug）
     if (this.aftermathMode === 'cutIn') {
       this.aftermathMode = 'normal';
       const victimId = this.cutInVictimId!;
       this.cutInVictimId = null;
       const x = this.matchSuitDrawX();
-      if (this.phase === 'playing' && !this.eliminated.has(victimId)) this.drawCards(victimId, x);
+      const owner = this.players.find((p) => p.id === ownerId);
+      if (owner && this.roles.get(owner.roleId)?.canCutIn && x > 0 && this.phase === 'playing' && !this.eliminated.has(victimId)) {
+        this.drawCards(victimId, x);
+        if (this.phase !== 'playing') return this.ok();
+      }
       if (this.phase !== 'playing') return this.ok();
       this.turnPlayerId = this.nextSeat(ownerId);
       this.beginTurn();

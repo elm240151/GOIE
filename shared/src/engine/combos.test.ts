@@ -326,6 +326,22 @@ describe('listPlayable 可出牌枚举', () => {
     expect(combos).toEqual([]);
   });
 
+  it('跟牌枚举含炸弹（2026-10-06：炸弹炸一切非炸弹桌面）——单/对/顺/连对/倒序', () => {
+    // 跟单K：只剩炸弹也可压
+    expect(listPlayable([mk(9), mk(9), mk(9)], parse([13])!, cfg).map(comboKey)).toEqual(['bomb:9:3']);
+    // 跟对5：各张数炸弹都在候选
+    expect(listPlayable([mk(9), mk(9), mk(9), mk(9)], parse([5, 5])!, cfg).map(comboKey)).toEqual(['bomb:9:3', 'bomb:9:4']);
+    // 跟顺子/连对
+    expect(listPlayable([mk(9), mk(9), mk(9)], parse([3, 4, 5])!, cfg).map(comboKey)).toEqual(['bomb:9:3']);
+    expect(listPlayable([mk(9), mk(9), mk(9)], parse([3, 3, 4, 4])!, cfg).map(comboKey)).toEqual(['bomb:9:3']);
+    // 倒序同样（炸弹压一切不分正倒序）
+    expect(listPlayable([mk(9), mk(9), mk(9)], parseCombo([mk(5)], cfg, true)!, cfg, true).map(comboKey)).toEqual([
+      'bomb:9:3',
+    ]);
+    // 2 炸打光手牌也可出（留2禁止收尾只拦单2/对2）
+    expect(listPlayable([mk(15), mk(15), mk(15)], parse([5])!, cfg).map(comboKey)).toEqual(['single:15:1', 'bomb:15:3']);
+  });
+
   it('往返性质：随机手牌枚举出的每个组合都能重新解析为相同规范形', () => {
     let seed = 12345;
     const rnd = () => {
@@ -594,8 +610,8 @@ describe('单王（橐驼诅咒）：singleJoker 牌型', () => {
       'jokerPair:16:2',
     ]);
     const hand = [W(), W(), mk(5)];
-    // 跟对子：对王压一切对子
-    expect(listPlayable(hand, parse([5, 5])!, cfg, false, true).map(comboKey)).toEqual(['jokerPair:16:2']);
+    // 跟对子：对王压一切对子；炸弹也炸一切（2026-10-06：跟牌枚举补炸弹）
+    expect(listPlayable(hand, parse([5, 5])!, cfg, false, true).map(comboKey)).toEqual(['jokerPair:16:2', 'bomb:5:3']);
     // 跟对王：只有炸弹能压
     expect(listPlayable(hand, jp(), cfg, false, true).map(comboKey)).toEqual(['bomb:5:3']);
     // 单张桌面不吃对王（跨牌型）

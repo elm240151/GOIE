@@ -388,4 +388,45 @@ describe('修勾（狂吠）', () => {
     expect(snap.tableRankNote).toBeNull(); // 换桌清除改点
     expect(snap.turnPlayerId).toBe('p1'); // 单9 压不了对10
   });
+
+  it('出对子后手牌只剩炸弹：狂吠照常询问，炸接自己获胜（2026-10-06 用户实机 bug：跟牌枚举漏炸弹）', () => {
+    const hands = {
+      p0: [...byRank(5, 2), ...byRank(9, 4)], // 修勾：对5 + 炸9999
+      p1: [...byRank(13, 5)],
+    };
+    const engine = mkEngine(hands, { p0: doggie });
+    const r0 = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id]); // 对5
+    expect(r0.ok && r0.suspended).toBe(true);
+    // 先问答疑（对子 ≥2 张）→ 弃权 → 狂吠照常问（手牌只剩炸弹也可压）
+    const ask1 = r0.ok ? (r0.pendingAsk as SkillAsk) : null;
+    expect(ask1?.kind).toBe('choice');
+    const a1 = engine.resolveAsk('p0', { askId: ask1!.askId!, choice: '放弃' });
+    expect(a1.ok && a1.suspended).toBe(true);
+    const ask2 = a1.ok ? (a1.pendingAsk as SkillAsk) : null;
+    expect(ask2?.kind).toBe('selfFollow');
+    const a2 = engine.resolveAsk('p0', { askId: ask2!.askId!, choice: 'yes', cardIds: hands.p0.slice(2, 6).map((c) => c.id) }); // 炸9999
+    expect(a2.ok).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.table?.type).toBe('bomb');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p0');
+  });
+
+  it('出单张后手牌只剩炸弹：同样照常狂吠（2026-10-06 排查：单张桌面漏炸弹同根因）', () => {
+    const hands = {
+      p0: [...byRank(13, 1), ...byRank(9, 4)], // 修勾：单K + 炸9999
+      p1: [...byRank(10, 5)],
+    };
+    const engine = mkEngine(hands, { p0: doggie });
+    const r0 = engine.playCards('p0', [hands.p0[0]!.id]); // 单K（不触发答疑）
+    expect(r0.ok && r0.suspended).toBe(true);
+    const ask = r0.ok ? (r0.pendingAsk as SkillAsk) : null;
+    expect(ask?.kind).toBe('selfFollow');
+    const a = engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'yes', cardIds: hands.p0.slice(1, 5).map((c) => c.id) }); // 炸9999
+    expect(a.ok).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.table?.type).toBe('bomb');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p0');
+  });
 });

@@ -399,6 +399,8 @@ export function relabelCombo(combo: Combo, rank: Rank, rev: boolean): Combo {
  * 枚举手牌当前可出的所有组合（候选间互斥，王可被重复计入不同候选）。
  * rev = 倒序；留 X 禁止收尾：打出后手牌清空的单/对（正序 2 / 倒序 3）直接排除。
  * allowSoloJoker = 单王单独打出候选（橐驼诅咒）。
+ * 跟牌枚举含炸弹（2026-10-06：炸弹炸一切非炸弹桌面——狂吠/插队/吐饼限制/自动过等
+ * 依赖此枚举的判断此前会漏掉「只剩炸弹可压」的情况）。
  */
 export function listPlayable(
   hand: readonly Card[],
@@ -438,6 +440,16 @@ function pairOf(cards: Card[], rank: Rank): Combo {
 function bombOf(realCards: Card[], jokers: Card[], rank: Rank, len: number): Combo {
   const cards = [...realCards.slice(0, Math.min(realCards.length, len)), ...jokers.slice(0, Math.max(0, len - realCards.length))];
   return buildCombo('bomb', cards, rank, cards.map((c) => ({ cardId: c.id, rank })), `炸弹 ${len}×${rankLabel(rank)}`);
+}
+
+/** 全部炸弹候选（各点数 × 张数 minSize~maxLen）——炸弹炸一切非炸弹桌面（2026-10-06：跟牌枚举补炸弹） */
+function allBombCombos(info: HandInfo, cfg: RuleConfig): Combo[] {
+  const out: Combo[] = [];
+  for (const [r, cs] of info.realByRank) {
+    const maxLen = Math.min(cs.length + info.totalJokers, cfg.bomb.maxSize);
+    for (let len = cfg.bomb.minSize; len <= maxLen; len++) out.push(bombOf(cs, info.jokers, r, len));
+  }
+  return out;
 }
 
 /** 窗口点数（展示序）：正序 [s..s+len-1] 升序；倒序 [s..s-len+1] 降序（s = 最高点） */
@@ -581,11 +593,7 @@ function listFollowing(
 
   if (table.type === 'singleJoker' || table.type === 'jokerPair' || table.type === 'gap') {
     // 只有炸弹能压王/对王（诅咒）与翻面接（端庄）：任意炸弹均可（无 length/rank 可比，不走炸弹比较分支）
-    for (const r of ranks) {
-      const cs = info.realByRank.get(r)!;
-      const maxLen = Math.min(cs.length + info.totalJokers, cfg.bomb.maxSize);
-      for (let len = cfg.bomb.minSize; len <= maxLen; len++) out.push(bombOf(cs, info.jokers, r, len));
-    }
+    out.push(...allBombCombos(info, cfg));
     return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
   }
 
@@ -615,6 +623,7 @@ function listFollowing(
       if (table.rank !== RANK_2 && cfg.follow.singlePair.twoBeatsAll && info.realByRank.has(RANK_2))
         out.push(singleOf(info.realByRank.get(RANK_2)![0]!));
     }
+    out.push(...allBombCombos(info, cfg)); // 炸弹炸一切非炸弹桌面
     return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
   }
 
@@ -648,6 +657,7 @@ function listFollowing(
           out.push(pairOf([twos[0]!, info.jokers[0]!], RANK_2));
       }
     }
+    out.push(...allBombCombos(info, cfg)); // 炸弹炸一切非炸弹桌面
     return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
   }
 
@@ -660,6 +670,7 @@ function listFollowing(
       if (windowExcluded(s, len, cfg.straight.exclude, rev)) continue;
       if (straightMissing(s, len, info, rev) <= info.totalJokers) out.push(straightOf(s, len, info, rev));
     }
+    out.push(...allBombCombos(info, cfg)); // 炸弹炸一切非炸弹桌面
     return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
   }
 
@@ -671,6 +682,7 @@ function listFollowing(
     if (windowExcluded(s, pairs, cfg.consecutivePairs.exclude, rev)) continue;
     if (cpMissing(s, pairs, info, rev) <= info.totalJokers) out.push(consecutivePairsOf(s, pairs, info, rev));
   }
+  out.push(...allBombCombos(info, cfg)); // 炸弹炸一切非炸弹桌面
   return out.filter((c) => verified(c, cfg, rev, allowSoloJoker) !== null);
 }
 

@@ -199,6 +199,39 @@ describe('兰登·费夫 R.F：吐饼', () => {
     expect(engine.snapshotFor('p0').winnerId).toBe('p1');
   });
 
+  it('主动出牌后饼数 ≥ 手牌数 → 立即获胜（2026-10-06 用户实机 bug：获胜只在吃饼结算处检查）', () => {
+    const hands = {
+      p0: byRank(5, 5), // 起对5（留 3 张兜底，避免出完即胜抢跑）
+      p1: [pick(6, 0), pick(6, 1), pick(9, 0)], // R.F：对6 恰好接对5 + 单9
+      p2: byRank(4, 5),
+    };
+    const engine = mkEngine(hands, { p1: rf });
+    const r = engine.playCards('p0', [hands.p0[0]!.id, hands.p0[1]!.id]);
+    const ask = askOf(r);
+    expect(ask?.kind).toBe('confirm');
+    // 亮对6 → 摸 2 → 倒置摸到的 2 张成饼（对6 留手中）→ 饼 2、手牌 3：吃饼时 2 < 3 不获胜
+    const a1 = engine.resolveAsk('p1', { askId: ask!.askId!, choice: 'yes' });
+    const pick1 = askOf(a1);
+    const a2 = engine.resolveAsk('p1', { askId: pick1!.askId!, cardIds: [hands.p1[0]!.id, hands.p1[1]!.id] });
+    const pick2 = askOf(a2);
+    expect(pick2?.cards?.length).toBe(5); // 3 + 摸 2
+    const a3 = engine.resolveAsk('p1', { askId: pick2!.askId!, cardIds: [pick2!.cards![3]!.id, pick2!.cards![4]!.id] });
+    expect(a3.ok).toBe(true);
+    expect(pancakeOf(engine, 'p1')).toBe(2);
+    expect(handOf(engine, 'p1')).toBe(3);
+    expect(engine.snapshotFor('p1').phase).toBe('playing'); // 吃饼时未获胜
+    // 轮末：p1 自动过（无 2/炸）、p2 过 → R.F 获得起牌权摸 1 → 主动出对6 → 手牌 2 = 饼 2 → 立即获胜
+    expect(engine.pass('p2').ok).toBe(true);
+    expect(engine.snapshotFor('p1').roundLeaderId).toBe('p1');
+    expect(handOf(engine, 'p1')).toBe(4);
+    const r2 = engine.playCards('p1', [hands.p1[0]!.id, hands.p1[1]!.id]); // 主动出对6
+    expect(r2.ok).toBe(true);
+    const snap = engine.snapshotFor('p1');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p1');
+    expect(totalCards(engine)).toBe(162); // 饼参与守恒
+  });
+
   it('吃饼摸牌超手牌上限 → 淘汰（不进入倒置阶段）', () => {
     const hands = {
       p0: byRank(5, 5),

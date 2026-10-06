@@ -65,11 +65,12 @@ describe('第七席 圣帕特里克（无名）', () => {
   });
 
   it('响应牌与被压牌无同花色：不触发插队询问', () => {
-    // 无名只有 ♥4♦4（被压 ♠3♣3 无 ♥/♦ 之外的花色）：无同花色牌 → 无插队询问
+    // 无名只有 ♥4♦4 + 3 张 ♥/♦ 10（被压 ♠3♣3 无 ♥/♦ 之外的花色）：
+    // 无同花色牌（炸弹也无同花色，2026-10-06 跟牌枚举含炸弹）→ 无插队询问
     const hands2 = {
       p0: [byRank(3, 2)[0]!, deck.filter((c) => c.rank === 3)[2]!, ...byRank(9, 3)], // ♠3♣3
       p1: byRank(13, 5),
-      p2: [suitOf(4, 1, 1)[0]!, suitOf(4, 3, 1)[0]!, ...byRank(10, 3)], // ♥4♦4
+      p2: [suitOf(4, 1, 1)[0]!, suitOf(4, 3, 1)[0]!, ...suitOf(10, 1, 2), ...suitOf(10, 3, 1)], // ♥4♦4 + 3×10（♥♥♦）
     };
     const engine = mkEngine(hands2, { p2: patrick });
     const r = engine.playCards('p0', [hands2.p0[0]!.id, hands2.p0[1]!.id]);
@@ -146,6 +147,27 @@ describe('第七席 圣帕特里克（无名）', () => {
     expect(snap.turnPlayerId).toBe('p0');
     expect(snap.players[0]!.handCount).toBe(5 - 1 + 4); // p0 摸 X = 4
     expect(snap.players[1]!.handCount).toBe(4);
+  });
+
+  it('A 记 1、2 记 2（2026-10-06 用户确认）：对A 响应 → 被响应者摸 1+1；对2 响应 → 摸 2+2', () => {
+    // 对A：p0 起 ♠K♠K → 无名 ♠A♠A 恰好接 → p0 摸 X = 1+1 = 2（不再是 14+14）
+    const hA = {
+      p0: [...suitOf(13, 0, 2), ...byRank(9, 3)],
+      p1: [...suitOf(14, 0, 2), ...byRank(10, 3)],
+    };
+    const eA = mkEngine(hA, { p1: patrick });
+    expect(eA.playCards('p0', [hA.p0[0]!.id, hA.p0[1]!.id]).ok).toBe(true);
+    expect(eA.playCards('p1', [hA.p1[0]!.id, hA.p1[1]!.id]).ok).toBe(true);
+    expect(eA.snapshotFor('p0').players[0]!.handCount).toBe(5 - 2 + 2);
+    // 对2：p0 起 ♠A♠A → 无名 ♠2♠2 压一切 → p0 摸 X = 2+2 = 4（不再是 15+15）
+    const h2 = {
+      p0: [...suitOf(14, 0, 2), ...byRank(9, 3)],
+      p1: [...suitOf(15, 0, 2), ...byRank(10, 3)],
+    };
+    const e2 = mkEngine(h2, { p1: patrick });
+    expect(e2.playCards('p0', [h2.p0[0]!.id, h2.p0[1]!.id]).ok).toBe(true);
+    expect(e2.playCards('p1', [h2.p1[0]!.id, h2.p1[1]!.id]).ok).toBe(true);
+    expect(e2.snapshotFor('p0').players[0]!.handCount).toBe(5 - 2 + 4);
   });
 
   it('单张不同花色响应：不触发', () => {

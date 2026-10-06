@@ -387,8 +387,9 @@ describe('惰戈（亢奋/法音）', () => {
     const p0Before = engine.snapshotFor('p0').players[0]!.handCount;
     const r2 = engine.resolveAsk('p2', { askId: cut!.askId!, choice: 'yes', cardIds: hands.p2.slice(0, 2).map((c) => c.id) });
     expect(r2.ok).toBe(true);
-    // 插队受害者 = 被压手归属者 = 惰戈：摸 X = 响应牌中与被压牌同花色（♠）的真牌点数总和（A♠ = 14，A♥ 不计）
-    expect(engine.snapshotFor('p0').players[0]!.handCount).toBe(p0Before + 14);
+    // 插队受害者 = 被压手归属者 = 惰戈：摸 X = 响应牌中与被压牌同花色（♠）的真牌点数总和
+    // （A 记 1，2026-10-06 用户确认；A♠ = 1，A♥ 花色不符不计）
+    expect(engine.snapshotFor('p0').players[0]!.handCount).toBe(p0Before + 1);
     // 轮转从插队者（无名）的下家继续——若插队手也归属惰戈则应为惰戈下家 p1
     expect(engine.snapshotFor('p0').turnPlayerId).toBe('p0');
   });
@@ -410,8 +411,8 @@ describe('惰戈（亢奋/法音）', () => {
     const faYin = askOf(r2);
     expect(faYin?.prompt).toContain('法音'); // 插队归属同样联动二技能
     const a2 = engine.resolveAsk('p0', { askId: faYin!.askId!, choice: 'decline' });
-    // 受害者 = 被压手所有者（归属改写前捕获 = 惰戈）：摸 X = 同花色真牌点数（10♠ = 10，10♥ 花色不符不计）
-    expect(engine.snapshotFor('p0').players[0]!.handCount).toBe(3 + 10);
+    // 插队手（对10 = 20）归属惰戈 → 视作惰戈打出，无名加牌不触发（2026-10-06 用户确认：不摸牌）
+    expect(engine.snapshotFor('p0').players[0]!.handCount).toBe(3);
     expect(engine.snapshotFor('p0').turnPlayerId).toBe('p1'); // 轮转从惰戈下家（p1）继续
   });
 
