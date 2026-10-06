@@ -93,7 +93,7 @@ const duoGe: RoleDef = {
           };
         }
       }
-      // 阶段三：被弃者自选一张弃（目标是自己则问自己；弃权/超时无事发生）
+      // 阶段三：被弃者自选一张弃（目标是自己则问自己；弃权/超时自动弃第一张）
       if (!a.cardIds) {
         const hand = ctx.game.handOf(st.target);
         if (hand.length === 0) {
@@ -104,11 +104,12 @@ const duoGe: RoleDef = {
           ok: true,
           ask: {
             kind: 'pickCards',
-            prompt: '【法音】请弃置一张牌（弃权/超时则无事发生）',
+            prompt: '【法音】请弃置一张牌（超时自动弃置第一张）',
             cards: [...hand],
             min: 1,
             max: 1,
             askPlayerId: st.target,
+            declineAllowed: false, // 弃牌效果必须执行（2026-10-06 用户确认：对别人产生的效果不能弃权；超时自动弃第一张）
           },
         };
       }

@@ -4,7 +4,9 @@
 //   接牌时压桌面牌）；打出则视作硝烟打出（归属改写：轮转从硝烟下家继续、判定对硝烟生效）；
 //   未能打出（弃权/超时）→ 代打者选择一项：令硝烟弃置一张牌（硝烟自选弃哪张）或其从牌堆摸一张牌。
 //   结算后硝烟仍可继续出牌（讲题不算硝烟出牌动作；失败后仍可出）。
-//   引擎 proxyPlay 守卫：被诅咒/罚站者仍可代打（讲题强制代打优先于禁打）；温柔「宝贝」不得代打组长的牌。
+//   讲题本质是硝烟出牌（2026-10-06 用户确认）：硝烟本人被禁打/抽你限制/为宝贝时不能发动
+//   （stage-0 与引擎 resolveProxyPlay 均走 playGateBlocked）；代打者本人被诅咒/罚站仍可代打
+//   （讲题强制代打优先于禁打）；温柔「宝贝」也不得代打组长的牌（resolveProxyPlay 守卫）。
 // 【血压】锁定技（引擎守卫 RoleDef.bloodPressure）：手牌 ≥8 时其余人的技能一律不能对硝烟生效
 //   （含增益，引擎各技能守卫 bpProtected）；禁打对其无效（playBanned 豁免）；动态生效。
 import type { RoleDef } from './types';
@@ -79,6 +81,7 @@ const xiaoYan: RoleDef = {
             askPlayerId: st.proxyId,
             prompt: `【讲题】${proxyName()} 未能替你出牌，选择一项：`,
             options: [`令${selfName}弃置一张牌（由其自选）`, '你从牌堆摸一张牌'],
+            declineAllowed: false, // 惩罚二选一必须作答（2026-10-06 用户确认：对别人产生的效果不能弃权；超时按第一项）
           },
         };
       }
@@ -97,10 +100,11 @@ const xiaoYan: RoleDef = {
             ok: true,
             ask: {
               kind: 'pickCards',
-              prompt: `【讲题】${proxyName()} 选择令你弃置一张牌——自选要弃的牌：`,
+              prompt: `【讲题】${proxyName()} 选择令你弃置一张牌——自选要弃的牌（超时自动弃置第一张）：`,
               cards: hand,
               min: 1,
               max: 1,
+              declineAllowed: false, // 惩罚弃牌必须执行（2026-10-06 用户确认；超时自动弃第一张）
             },
           };
         }
@@ -123,7 +127,9 @@ const xiaoYan: RoleDef = {
       }
       // 阶段 0：询问是否发动
       if (st.jiangtiUsed) return;
-      if (ctx.game.playBanned(ctx.self.id)) return; // 禁打不能发动（血压 ≥8 自动豁免禁打）
+      // 讲题本质是硝烟出牌（2026-10-06 用户确认）：硝烟本人被技能影响不允许出牌则不能发动——
+      // 禁打（血压 ≥8 自动豁免）/抽你响应限制/宝贝守卫统一走引擎出牌门控
+      if (ctx.game.playGateBlocked(ctx.self.id)) return;
       if (!a) {
         return {
           ok: true,

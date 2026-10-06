@@ -155,12 +155,16 @@ export default function SkillAskModal() {
       body = <PickGrid cards={myHand} picked={picked} onToggle={toggle} />;
       canSubmit = picked.length > 0;
       break;
+    case 'proxyPlay':
+      // 讲题（硝烟）代打：从自己手牌选牌打出（视作硝烟打出）；不出 = 弃权走惩罚
+      body = <PickGrid cards={myHand} picked={picked} onToggle={toggle} />;
+      canSubmit = picked.length > 0;
+      break;
   }
 
-  // pickCards 也可弃权（再问补打「打不出」、观股大跌放弃等）；suit/choice 同样可弃权（巨石花色判定、答疑点数、骚骚换 1/2 张——服务端均支持 decline）
-  const showDecline =
-    last.kind === 'confirm' || last.kind === 'cutIn' || last.kind === 'selfFollow' || last.kind === 'pickCards' ||
-    last.kind === 'suit' || last.kind === 'choice';
+  // pickTarget 无弃权按钮（历史行为）；declineAllowed: false 的询问（讲题惩罚、法音弃牌、处分等
+  // 对别人产生的效果）不可弃权——服务端同样按默认作答兜底（2026-10-06 用户确认）
+  const showDecline = last.kind !== 'pickTarget' && last.declineAllowed !== false;
 
   return (
     <div className={`modal-overlay overlay-in ${closing ? 'overlay-closing' : ''}`}>
@@ -172,6 +176,7 @@ export default function SkillAskModal() {
         <p className="ask-prompt">{last.prompt}</p>
         {last.kind === 'cutIn' && <p className="ask-hint">{STR.game.cutInHint}</p>}
         {last.kind === 'selfFollow' && <p className="ask-hint">{STR.game.selfFollowHint}</p>}
+        {last.kind === 'proxyPlay' && <p className="ask-hint">{STR.game.proxyPlayHint}</p>}
         {last.kind === 'pickCards' && (
           <p className="ask-hint">
             {(last.hidden ? STR.game.pickHiddenHint : STR.game.pickHint)
@@ -184,7 +189,7 @@ export default function SkillAskModal() {
         <div className="ask-actions">
           {showDecline && (
             <button className="btn btn-secondary" onClick={() => answer({ choice: 'decline' })}>
-              {STR.game.decline}
+              {last.kind === 'proxyPlay' ? STR.game.declineProxy : STR.game.decline}
             </button>
           )}
           {last.kind === 'confirm' && (
@@ -192,12 +197,7 @@ export default function SkillAskModal() {
               {STR.game.confirm}
             </button>
           )}
-          {last.kind === 'cutIn' && (
-            <button className="btn btn-primary" disabled={!canSubmit} onClick={() => answer({ choice: 'yes', cardIds: picked })}>
-              {STR.game.confirm}
-            </button>
-          )}
-          {last.kind === 'selfFollow' && (
+          {(last.kind === 'cutIn' || last.kind === 'selfFollow' || last.kind === 'proxyPlay') && (
             <button className="btn btn-primary" disabled={!canSubmit} onClick={() => answer({ choice: 'yes', cardIds: picked })}>
               {STR.game.confirm}
             </button>

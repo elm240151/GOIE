@@ -98,6 +98,7 @@ describe('组长：处分 + 温柔', () => {
     expect(cf?.kind).toBe('choice');
     expect(cf?.prompt).toContain('处分');
     expect(cf?.options).toHaveLength(3); // 检讨/休学/放弃
+    expect(cf?.declineAllowed).toBe(false); // 放弃已是显式选项，不可额外弃权（2026-10-06 用户确认）
     expect(engine.resolveAsk('p0', { askId: cf!.askId!, choice: '放弃' }).ok).toBe(true);
     expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p2')!.handCount).toBe(4); // 5 − 1
     assertConserved(engine);

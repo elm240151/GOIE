@@ -237,16 +237,10 @@ export class GameEngine {
     if (this.phase !== 'playing') return fail('游戏已结束');
     if (this.pendingAsk) return fail('等待技能响应');
     if (playerId !== this.turnPlayerId) return fail('不是你的回合');
-    if (this.playBanned(playerId)) return fail(this.banReason(playerId));
-    // 响应限制（抽你）：当前桌面一手牌只能由指定玩家响应
-    if (this.tableCombo && this.tableResponderRestrict && playerId !== this.tableResponderRestrict) {
-      const d = this.players.find((p) => p.id === this.tableResponderRestrict);
-      return fail(`【抽你】本回合只能由 ${d?.name ?? '指定玩家'} 响应`);
-    }
-    // 温柔（组长）：宝贝本回合不得响应组长的出牌（基础压牌被拒；插队/吃饼等询问门控同款守卫）
-    if (this.tableCombo && this.babies.has(playerId) && this.tableOwnerId === this.babyOwnerId) {
-      return fail('【温柔】宝贝本回合不得响应组长的出牌');
-    }
+    // 统一出牌门控：禁打（罚站/诅咒，血压豁免）→ 抽你响应限制 → 宝贝守卫（温柔）；
+    // 讲题（硝烟）发动门控复用同一口径——「让人替他出牌本质是硝烟出牌」（2026-10-06 用户确认）
+    const gate = this.playGateBlocked(playerId);
+    if (gate) return fail(gate);
     const hand = this.hands.get(playerId)!;
     if (cardIds.length === 0) return fail('请选择要出的牌');
     const cards: Card[] = [];
@@ -458,9 +452,26 @@ export class GameEngine {
       this.requeue(this.commitCutIn(playerId, combo));
       return this.ok();
     }
-    const outcome = this.runHook(p.entry!, p.args, { answer });
+    // 不可弃权询问（declineAllowed: false）：弃权（含超时自动弃权、客户端旧版强发）按默认作答，
+    // 保证技能效果不被跳过（2026-10-06 用户确认：对别人产生的效果不能弃权）
+    const outcome = this.runHook(p.entry!, p.args, { answer: this.effectiveAnswer(p.ask, answer) });
     p.resume(outcome);
     return this.ok();
+  }
+
+  /** 不可弃权询问的默认作答：choice/suit 取第一项，pickCards 取最前的牌（张数取 min） */
+  private effectiveAnswer(ask: SkillAsk, answer: AskAnswer): AskAnswer {
+    if (answer.choice !== 'decline' || ask.declineAllowed !== false) return answer;
+    if ((ask.kind === 'choice' || ask.kind === 'suit') && ask.options?.[0]) {
+      return { ...answer, choice: ask.options[0] };
+    }
+    if (ask.kind === 'pickCards' && ask.cards?.length) {
+      const n = Math.max(ask.min ?? 1, 1);
+      // 清除 choice='decline'：角色钩子多以 a.choice === 'decline' 提前返回（如法音），
+      // 保留会绕过「自动弃第一张」的默认作答
+      return { ...answer, choice: undefined, cardIds: ask.cards.slice(0, n).map((c) => c.id) };
+    }
+    return answer;
   }
 
   /** 当前挂起的完整询问（服务端重连时重发给被询问者；非本人返回 null） */
@@ -501,6 +512,8 @@ export class GameEngine {
       })),
       /** 温柔（组长）：本回合被标为「宝贝」的玩家（不得响应组长的出牌；界面展示标记） */
       babyIds: [...this.babies],
+      /** 标宝贝者（组长本人）；宝贝响应桌面牌时与 tableOwnerId 同值即被拒（客户端预览门控用） */
+      babyOwnerId: this.babyOwnerId,
       /** 血压（硝烟）：受高血压保护的玩家（手牌 ≥8，其余人的技能不能对其生效；界面展示标记） */
       bpProtectedIds: this.players.filter((p) => this.bpProtected(p.id)).map((p) => p.id),
       deckCount: this.deck.length,
@@ -508,6 +521,8 @@ export class GameEngine {
       /** 翻牌展示区：判定牌公开，所有人都能看（角色须在动作内清空） */
       revealed: [...this.revealedPool],
       table: this.tableCombo,
+      /** 桌面一手牌的归属者（含亢奋/再问归属改写；起牌前为 null；客户端宝贝预览门控用） */
+      tableOwnerId: this.tableOwnerId === '' ? null : this.tableOwnerId,
       /** 端庄（轴承）翻面：预览与正常出牌共用（情况一接上一手用） */
       prevTable: this.prevTableCombo,
       tableSide: [...this.tableSide],
@@ -1334,6 +1349,10 @@ export class GameEngine {
   /** 讲题（硝烟）代打提交：代打者选牌出牌（归属改写，视作硝烟打出）；弃权/超时 → 重跑硝烟钩子走惩罚分支 */
   private resolveProxyPlay(playerId: string, answer: AskAnswer, p: PendingAsk): ActionResult {
     const ownerId = p.entry!.playerId; // 讲题发起者（硝烟）——代打视作其打出
+    // 讲题本质是硝烟出牌（2026-10-06 用户确认）：硝烟本人此刻被禁打/抽你限制/为宝贝 → 代打一并禁止
+    // （正常流程讲题 stage-0 已门控，此处为防御：询问挂起期间门控状态变化的兜底）
+    const ownerGate = this.playGateBlocked(ownerId);
+    if (ownerGate) return this.reaskProxyPlay(p, ownerGate);
     if (answer.choice !== 'yes' || !answer.cardIds?.length) {
       // 未能打出：重跑硝烟钩子（带弃权答案），由其给出「令硝烟弃一张 / 代打者摸一张」惩罚选择
       const outcome = this.runHook(p.entry!, p.args, { answer });
@@ -1971,6 +1990,7 @@ export class GameEngine {
       isBannedThisRound: (id) => engine.roundBanned.has(id),
       discardCount: () => engine.discarded.length,
       playBanned: (id) => engine.playBanned(id),
+      playGateBlocked: (id) => engine.playGateBlocked(id),
       bpProtected: (id) => engine.bpProtected(id),
       markBaby: (id) => {
         engine.babies.add(id);
@@ -2281,6 +2301,24 @@ export class GameEngine {
   private playBanned(playerId: string): boolean {
     if (this.bpProtected(playerId)) return false;
     return this.activeBan.has(playerId) || this.roundBanned.has(playerId);
+  }
+
+  /**
+   * 出牌门控：该玩家此刻能否正常出牌（领出或响应桌面牌）。null = 可正常出牌。
+   * 禁打（罚站/诅咒，血压豁免）→ 抽你响应限制 → 宝贝守卫（温柔）。
+   * playCards 入口与讲题（硝烟）发动门控共用（2026-10-06 用户确认：讲题本质是硝烟出牌，
+   * 硝烟本人被技能影响不允许出牌则讲题不能发动）。
+   */
+  private playGateBlocked(playerId: string): string | null {
+    if (this.playBanned(playerId)) return this.banReason(playerId);
+    if (this.tableCombo && this.tableResponderRestrict && playerId !== this.tableResponderRestrict) {
+      const d = this.players.find((p) => p.id === this.tableResponderRestrict);
+      return `【抽你】本回合只能由 ${d?.name ?? '指定玩家'} 响应`;
+    }
+    if (this.tableCombo && this.babies.has(playerId) && this.tableOwnerId === this.babyOwnerId) {
+      return '【温柔】宝贝本回合不得响应组长的出牌';
+    }
+    return null;
   }
 
   /** 禁打拒绝原因文案（按生效的禁打类型） */

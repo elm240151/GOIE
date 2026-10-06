@@ -89,6 +89,7 @@ describe('硝烟：讲题 + 血压', () => {
     expect(r2.ok && r2.events.some((e) => e.type === 'table:attributed' && e.playerId === 'p0' && e.fromPlayerId === 'p1')).toBe(true);
     const snap = engine.snapshotFor('p0');
     expect(snap.turnPlayerId).toBe('p1'); // 轮转从硝烟下家继续
+    expect(snap.tableOwnerId).toBe('p0'); // 桌面归属改写为硝烟（快照公开归属者，客户端宝贝预览门控用）
     expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(7); // 8 − 1（代打者出的牌）
     expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(9); // 硝烟一张未出
     assertConserved(engine);
@@ -151,6 +152,76 @@ describe('硝烟：讲题 + 血压', () => {
     expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p1')!.handCount).toBe(5); // 4 + 1
     expect(engine.snapshotFor('p0').turnPlayerId).toBe('p0');
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true); // 失败后仍可出牌
+    assertConserved(engine);
+  });
+
+  it('宝贝硝烟不能讲题（2026-10-06 用户确认：讲题本质是硝烟出牌）：被组长标为宝贝后无讲题询问、出牌被拒、可过牌', () => {
+    const hands = {
+      p0: [deck[2]!], // 组长：♠5 领出
+      p1: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // 硝烟（宝贝）：低牌
+      p2: [deck[1]!, deck[14]!, deck[28]!, deck[42]!], // 过牌
+    };
+    pad(hands, { p0: 4, p1: 4, p2: 4 }, [109, 159]);
+    const engine = mkEngine(hands, { p0: zuZhang, p1: xiaoYan });
+    // 温柔：确认 → Y=1 → 标 p1（硝烟）
+    const c = ask(engine);
+    engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' });
+    const y = ask(engine);
+    engine.resolveAsk('p0', { askId: y.askId!, choice: '1' });
+    const t = ask(engine);
+    engine.resolveAsk('p0', { askId: t.askId!, targetPlayerId: 'p1' });
+    expect(engine.snapshotFor('p0').babyIds).toEqual(['p1']);
+    expect(engine.snapshotFor('p0').babyOwnerId).toBe('p0');
+    // 组长出 ♠5
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
+    expect(engine.snapshotFor('p0').tableOwnerId).toBe('p0');
+    // 轮到硝烟：出牌门控生效——讲题不询问（宝贝不得响应组长的牌）
+    expect(engine.snapshotFor('p0').pendingAsk).toBeNull();
+    // 硝烟出牌被拒、可过牌 → 轮到 p2
+    const blocked = engine.playCards('p1', [hands.p1[0]!.id]);
+    expect(blocked.ok).toBe(false);
+    expect((blocked as { reason: string }).reason).toContain('宝贝');
+    expect(engine.pass('p1').ok).toBe(true);
+    expect(engine.snapshotFor('p0').turnPlayerId).toBe('p2');
+    assertConserved(engine);
+  });
+
+  it('讲题惩罚不可弃权（2026-10-06 用户确认）：declineAllowed=false，弃权/超时按默认作答（惩罚第一项、弃牌第一张）', () => {
+    const hands = {
+      p0: [deck[2]!], // 硝烟：♠5（之后被自动弃）
+      p1: [deck[0]!, deck[13]!, deck[27]!, deck[41]!], // 代打者：无牌可打，弃权
+      p2: [deck[1]!, deck[14]!, deck[28]!, deck[42]!], // 过牌
+    };
+    pad(hands, { p0: 8, p1: 4, p2: 4 }, [109, 159]);
+    const engine = mkEngine(hands, { p0: xiaoYan });
+
+    const c = ask(engine);
+    engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' });
+    const t = ask(engine);
+    engine.resolveAsk('p0', { askId: t.askId!, targetPlayerId: 'p1' });
+    const proxy = ask(engine);
+    expect(proxy?.kind).toBe('proxyPlay');
+    // 代打者弃权（未能打出）→ 惩罚二选一
+    const r2 = engine.resolveAsk('p1', { askId: proxy!.askId!, choice: 'decline' });
+    const punish = r2.ok ? (r2.pendingAsk as SkillAsk) : null;
+    expect(punish?.kind).toBe('choice');
+    expect(punish?.askPlayerId).toBe('p1');
+    expect(punish?.declineAllowed).toBe(false);
+    // 代打者弃权（模拟超时自动弃权）→ 引擎按第一项作答：令硝烟弃置一张 → 问硝烟自选
+    const r3 = engine.resolveAsk('p1', { askId: punish!.askId!, choice: 'decline' });
+    const pick = r3.ok ? (r3.pendingAsk as SkillAsk) : null;
+    expect(pick?.kind).toBe('pickCards');
+    expect(pick?.declineAllowed).toBe(false);
+    // 硝烟弃权（模拟超时）→ 引擎自动弃第一张
+    const before = engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.handCount;
+    const r4 = engine.resolveAsk('p0', { askId: pick!.askId!, choice: 'decline' });
+    expect(r4.ok).toBe(true);
+    expect(
+      (r4 as { events: { type: string; text: string }[] }).events.some(
+        (e) => e.type === 'skill:triggered' && /硝烟弃置了一张牌/.test(e.text)
+      )
+    ).toBe(true);
+    expect(engine.snapshotFor('p0').players.find((p) => p.id === 'p0')!.handCount).toBe(before - 1);
     assertConserved(engine);
   });
 

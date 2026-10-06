@@ -298,6 +298,35 @@ describe('惰戈（亢奋/法音）', () => {
     expect(total(engine)).toBe(before);
   });
 
+  it('法音弃牌不可弃权（2026-10-06 用户确认）：declineAllowed=false，弃权/超时自动弃第一张', () => {
+    const hands = {
+      p0: [pick(3, 0), pick(4, 1), pick(5, 2), pick(6, 3), pick(7, 0), pick(8, 1), pick(9, 2), pick(10, 3), pick(11, 0)],
+      p1: byRank(5, 3),
+      p2: byRank(4, 3),
+    };
+    const engine = mkEngine(hands, { p0: duoGe });
+    const r = engine.playCards('p0', hands.p0.slice(0, 5).map((c) => c.id)); // 34567 四花色（25）
+    expect(r.ok).toBe(true);
+    const confirm = askOf(r);
+    const a1 = engine.resolveAsk('p0', { askId: confirm!.askId!, choice: 'yes' });
+    const pickT = askOf(a1);
+    const a2 = engine.resolveAsk('p0', { askId: pickT!.askId!, targetPlayerId: 'p1' });
+    const pickC = askOf(a2);
+    expect(pickC?.kind).toBe('pickCards');
+    expect(pickC?.askPlayerId).toBe('p1');
+    expect(pickC?.declineAllowed).toBe(false);
+    // p1 弃权（模拟超时自动弃权）→ 引擎按默认作答：自动弃其第一张
+    const done = engine.resolveAsk('p1', { askId: pickC!.askId!, choice: 'decline' });
+    expect(done.ok).toBe(true);
+    expect(
+      (done as { events: { type: string; text: string }[] }).events.some(
+        (e) => e.type === 'skill:triggered' && /玩家1 弃置一张牌/.test(e.text)
+      )
+    ).toBe(true);
+    expect(engine.snapshotFor('p0').players[1]!.handCount).toBe(2); // 3 − 1
+    expect(askOf(done)).toBeNull(); // 流水线继续，无残留询问
+  });
+
   it('空手判胜（2026-10-06 用户定稿）：法音弃置目标最后一张牌 → 目标立即获胜（不看来因）', () => {
     const hands = {
       p0: [pick(3, 0), pick(4, 1), pick(5, 2), pick(6, 3), pick(7, 0), pick(8, 1)], // 惰戈：34567 四花色 + 闲牌

@@ -61,6 +61,10 @@ export interface SkillAsk {
   askPlayerId?: string;
   /** 超时自动拒绝（服务端计时） */
   timeoutMs?: number;
+  /** 是否允许弃权（缺省 true）；false = 被问者必须作答——弃权/超时由引擎按默认处理
+   *  （choice/suit 取第一项、pickCards 取最前的牌），用于「对别人产生的效果不能弃权」类询问
+   *  （讲题惩罚、法音弃牌、处分等，2026-10-06 用户确认）；客户端据此隐藏「放弃」按钮 */
+  declineAllowed?: boolean;
 }
 
 /** 客户端对询问的回答（game:useSkill 载荷） */
@@ -174,6 +178,10 @@ export interface EngineFacade {
   discardCount(): number;
   /** 该玩家当前是否被禁打（诅咒/罚站；血压保护者豁免）——讲题（硝烟）自查能否发动 */
   playBanned(playerId: string): boolean;
+  /** 出牌门控：该玩家此刻能否正常出牌（领出或响应桌面牌），null = 可出。
+   *  禁打（血压豁免）→ 抽你响应限制 → 宝贝守卫（温柔）。
+   *  讲题（硝烟）发动门控与代打（resolveProxyPlay 归属门控）共用：讲题本质是硝烟出牌（2026-10-06 用户确认） */
+  playGateBlocked(playerId: string): string | null;
   /** 当前桌面一手牌的实际打出者（归属改写前）——尖叫（苗条）发牌给实际打出者：打光手牌的人摸回后才能避免获胜 */
   lastPlayPhysicalId(): string | null;
   /** 血压（硝烟）：该玩家是否受高血压保护（手牌 ≥8 的未淘汰硝烟）——其余人的技能不能对其生效 */

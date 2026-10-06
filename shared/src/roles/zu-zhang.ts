@@ -59,6 +59,7 @@ const zuZhang: RoleDef = {
             kind: 'choice',
             prompt: `【处分】${name} 压了你的牌，选择一项：`,
             options,
+            declineAllowed: false, // 放弃已是显式选项，去掉多余弃权按钮（2026-10-06 用户确认；超时按第一项）
           },
         };
       }

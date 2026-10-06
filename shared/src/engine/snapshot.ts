@@ -39,6 +39,8 @@ export interface GameSnapshot {
   /** 翻牌展示区（判定牌等公开牌，所有人可见；动作内须清空） */
   revealed: Card[];
   table: Combo | null;
+  /** 桌面一手牌的归属者（含亢奋/再问归属改写；起牌前为 null；客户端宝贝预览门控用） */
+  tableOwnerId: string | null;
   /** 上一手被压的牌型（端庄情况一接上一手、预览用；起牌时 null） */
   prevTable: Combo | null;
   /** 明置桌旁的边牌（再问补打等：随当前一手牌一起弃置，公开） */
@@ -55,6 +57,8 @@ export interface GameSnapshot {
   roundBannedIds: string[];
   /** 温柔（组长）：本回合被标为「宝贝」的玩家 id（不得响应组长的出牌；界面展示标记） */
   babyIds: string[];
+  /** 标宝贝者（组长本人）；宝贝响应桌面牌时与 tableOwnerId 同值即被拒 */
+  babyOwnerId: string | null;
   /** 血压（硝烟）：受高血压保护的玩家 id（手牌 ≥8，其余人的技能不能对其生效；界面展示标记） */
   bpProtectedIds: string[];
   turnPlayerId: string | null;

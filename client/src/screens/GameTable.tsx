@@ -116,6 +116,14 @@ export default function GameTable() {
     pancake?: boolean;
   } => {
     const selected = myHand.filter((c) => selectedCardIds.includes(c.id));
+    // 温柔（组长）：我是宝贝且桌面是组长的牌 → 不能出（服务端同口径拒绝；预览提示、出牌按钮禁用）
+    const babyBlocked =
+      myTurn &&
+      !!snap?.table &&
+      snap.babyIds.includes(myId) &&
+      snap.tableOwnerId != null &&
+      snap.tableOwnerId === snap.babyOwnerId;
+    if (babyBlocked) return { selected, combo: null, hint: STR.game.preview.babyBlocked };
     if (flippedCardId != null && snap?.table) {
       if (selected.length === 0) return { selected, combo: null, hint: STR.game.flipPickCards };
       const res = validateFlipResponse(
@@ -153,7 +161,7 @@ export default function GameTable() {
     // 压不过但端庄可翻面 → 附翻面提示（防止没点桌面牌直接出导致「用不出」）
     const tip = warn && canFlip ? STR.game.flipSuggest : '';
     return { selected, combo, hint: warn ? STR.game.beatWarn.replace('{hint}', warn) + tip : null };
-  }, [myHand, selectedCardIds, flippedCardId, snap?.table, snap?.prevTable, rev, myRole, canFlip, tablePlayerId]);
+  }, [myHand, selectedCardIds, flippedCardId, snap?.table, snap?.prevTable, rev, myRole, canFlip, tablePlayerId, myTurn, myId, snap?.babyIds, snap?.babyOwnerId, snap?.tableOwnerId]);
 
   // 答疑改点：桌面牌型标签已按新点数重写（金色主显），小标展示原牌型（按实体牌重解析）
   const originalTableLabel =
