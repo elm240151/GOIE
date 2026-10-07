@@ -1,0 +1,3 @@
+# Replit 启动配置（2026-10-07）：生产模式——装依赖 → 构建 client/dist + server → 单端口托管
+# Replit 会把 3000 端口经 https 代理暴露（网址见端口面板）。
+run = "npm install && npm run build && npm start"
