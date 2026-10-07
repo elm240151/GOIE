@@ -169,6 +169,7 @@ export const STR = {
     flipSuggest: '｜端庄：点桌面一张牌翻面再出',
     peekedToast: '{name} 查看了你的手牌',
     ouYaHint: '【呕哑】已包含桌面所有点数，无视管牌规则',
+    danShenHint: '【蛋神】你的 Q 压一切，可以打出',
     rfRestrict: '【吐饼】无牌权时只能打出 {rank} 或炸弹（恰好接上的牌请走吃饼询问）',
     rfNoPass: '【吐饼】吃过饼不能过：只能打 {rank} 或炸弹',
     pancakeBadge: '🍪{n}',

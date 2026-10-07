@@ -5,6 +5,7 @@ import { buildDeck } from '../engine/deck';
 import { GameEngine, type EnginePlayer } from '../engine/engine';
 import { mulberry32 } from '../engine/rng';
 import type { RoleDef, RoleRegistry } from './types';
+import fishy from './fishy';
 import skywalker from './skywalker';
 
 const deck = buildDeck(3);
@@ -41,7 +42,7 @@ describe('首席 杰杰一世（蛋神/仁德）', () => {
     expect(engine.snapshotFor('p0').table!.rank).toBe(12);
   });
 
-  it('蛋神：Q 压不了单 2（2 只有炸弹能压）', () => {
+  it('蛋神：单 Q 可以压单 2（压一切，含 2——2026-10-07 用户澄清）', () => {
     const hands = {
       p0: [byRank(15, 1)[0]!, ...byRank(10, 4)],
       p1: [byRank(12, 1)[0]!, ...byRank(8, 4)],
@@ -49,8 +50,52 @@ describe('首席 杰杰一世（蛋神/仁德）', () => {
     const engine = mkEngine(hands, { p1: skywalker });
     expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true);
     const r = engine.playCards('p1', [hands.p1[0]!.id]);
-    expect(r.ok).toBe(false);
-    expect((r as { reason: string }).reason).toContain('炸弹');
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'dan-shen')).toBe(true);
+    expect(engine.snapshotFor('p0').table!.rank).toBe(12);
+  });
+
+  it('蛋神：对 Q 可以压对 2（对 Q 压一切对子——2026-10-07 用户澄清）', () => {
+    const hands = {
+      p0: [...byRank(15, 2), ...byRank(10, 3)],
+      p1: [...byRank(12, 2), ...byRank(8, 3)], // 对Q + 余牌（非收尾，避开仁德禁收尾）
+    };
+    const engine = mkEngine(hands, { p1: skywalker });
+    expect(engine.playCards('p0', hands.p0.slice(0, 2).map((c) => c.id)).ok).toBe(true);
+    const r = engine.playCards('p1', hands.p1.slice(0, 2).map((c) => c.id));
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'dan-shen')).toBe(true);
+    expect(engine.snapshotFor('p0').table!.rank).toBe(12);
+  });
+
+  it('蛋神：倒序下单 Q 压单 3，压完后照常被 J 压（2026-10-07 用户澄清）', () => {
+    const hands = {
+      p0: [byRank(5, 1)[0]!, byRank(11, 1)[0]!, ...byRank(8, 3)], // 海棠：先起 5 切倒序，再出 J 压 Q
+      p1: [byRank(3, 1)[0]!, ...byRank(9, 4)], // 倒序 3 压一切
+      p2: [byRank(12, 1)[0]!, ...byRank(7, 4)], // 杰杰：单Q 压 3
+    };
+    const engine = mkEngine(hands, { p0: fishy, p2: skywalker });
+    expect(engine.playCards('p0', [hands.p0[0]!.id]).ok).toBe(true); // 海棠起 5 → 倒序
+    expect(engine.playCards('p1', [hands.p1[0]!.id]).ok).toBe(true); // 倒序 3 压一切
+    const r = engine.playCards('p2', [hands.p2[0]!.id]); // 单Q 压 3（蛋神）
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'dan-shen')).toBe(true);
+    const rj = engine.playCards('p0', [hands.p0[1]!.id]); // 倒序 J 照常压 Q
+    expect(rj.ok).toBe(true);
+  });
+
+  it('蛋神：倒序下对 Q 压对 3（对 Q 压一切对子，倒序镜像）', () => {
+    const hands = {
+      p0: [...byRank(5, 2), ...byRank(8, 3)], // 海棠：起对 5 切倒序
+      p1: [...byRank(3, 2), ...byRank(9, 3)], // 倒序对 3 压一切对子
+      p2: [...byRank(12, 2), ...byRank(7, 3)], // 杰杰：对Q 压对 3
+    };
+    const engine = mkEngine(hands, { p0: fishy, p2: skywalker });
+    expect(engine.playCards('p0', hands.p0.slice(0, 2).map((c) => c.id)).ok).toBe(true);
+    expect(engine.playCards('p1', hands.p1.slice(0, 2).map((c) => c.id)).ok).toBe(true);
+    const r = engine.playCards('p2', hands.p2.slice(0, 2).map((c) => c.id));
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'dan-shen')).toBe(true);
   });
 
   it('仁德：单 3 可以压单 2', () => {

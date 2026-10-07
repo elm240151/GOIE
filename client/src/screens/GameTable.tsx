@@ -120,6 +120,7 @@ export default function GameTable() {
     hint: string | null;
     ouYa?: boolean;
     pancake?: boolean;
+    danShen?: boolean;
   } => {
     const selected = myHand.filter((c) => selectedCardIds.includes(c.id));
     // 温柔（组长）：我是宝贝且桌面是组长的牌 → 不能出（服务端同口径拒绝；预览提示、出牌按钮禁用）
@@ -152,6 +153,18 @@ export default function GameTable() {
     // 呕哑（玊）：接牌时包含桌面全部实际点数的任意合法牌型——无视管牌规则，「压不过」不再是警告
     if (warn && !finish && myRole?.ouYa && snap?.table && ouYaCovers(combo, snap.table)) {
       return { selected, combo, hint: STR.game.ouYaHint, ouYa: true };
+    }
+    // 蛋神（首席 杰杰一世）：单 Q 压一切单牌、对 Q 压一切对子——「压不过」不再是警告
+    if (
+      warn &&
+      !finish &&
+      myRole?.id === 'skywalker' &&
+      snap?.table &&
+      combo.type === snap.table.type &&
+      (combo.type === 'single' || combo.type === 'pair') &&
+      combo.rank === 12
+    ) {
+      return { selected, combo, hint: STR.game.danShenHint, danShen: true };
     }
     // 吐饼（R.F）：无牌权响应时只能打 2/3 或炸弹——恰好接上的牌请走吃饼询问（金色 = 技能提示）
     const rfRank = rev ? 3 : 15;
@@ -487,7 +500,7 @@ export default function GameTable() {
             <>
               <ComboBadge combo={preview.combo} small />
               {preview.hint && (
-                <span className={preview.ouYa || preview.pancake ? 'preview-ouya' : 'preview-warn'}>{preview.hint}</span>
+                <span className={preview.ouYa || preview.pancake || preview.danShen ? 'preview-ouya' : 'preview-warn'}>{preview.hint}</span>
               )}
             </>
           ) : preview.hint ? (

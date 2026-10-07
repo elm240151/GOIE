@@ -1,5 +1,6 @@
 // 角色：首席 杰杰一世 —— 双技能【蛋神】+【仁德】。
-// 蛋神：你的 Q 可以压任何单牌（但 2 仍需炸弹压）。
+// 蛋神：你的单 Q 压一切单牌、对 Q 压一切对子（2026-10-07 用户澄清：原文「Q 压任何一张单牌」无 2 除外，
+// 倒序照常压 3；对 Q 为本次新增，压完照常被压——正序被 K/2、倒序被 J）。
 // 仁德：单 2 可以被 3 响应；你最后一张手牌不可为单 Q / 对 Q（含 Q 的顺子等照常可打出）。
 import type { RoleDef } from './types';
 
@@ -8,7 +9,7 @@ const skywalker: RoleDef = {
   seatOrder: 1,
   name: '首席 杰杰一世',
   skills: [
-    { id: 'dan-shen', name: '蛋神', description: '你的 Q 可以压任何单牌（2 除外）。' },
+    { id: 'dan-shen', name: '蛋神', description: '你的单 Q 可以压任何单牌、对 Q 可以压任何对子（压完后照常被压）。' },
     { id: 'ren-de', name: '仁德', description: '你的单 2 可以被 3 响应；你最后一张手牌不可为单 Q / 对 Q。', locked: true },
   ],
   hooks: {
@@ -37,9 +38,9 @@ const skywalker: RoleDef = {
       ) {
         return { ok: false, reason: '【仁德】最后一张手牌不可为 Q' };
       }
-      // 蛋神：自己的 Q 压任何单牌（2 除外，2 只有炸弹能压）
-      if (table && table.type === 'single' && table.rank !== 15 && combo.type === 'single' && combo.rank === 12) {
-        ctx.game.announce('skywalker', 'dan-shen', '【蛋神】Q 压一切单牌！');
+      // 蛋神：自己的单 Q 压一切单牌、对 Q 压一切对子（正倒序一致，压完后照常被压——2026-10-07 用户澄清）
+      if (table && combo.type === table.type && (combo.type === 'single' || combo.type === 'pair') && combo.rank === 12) {
+        ctx.game.announce('skywalker', 'dan-shen', '【蛋神】Q 压一切！');
         return { ok: true, allowAnyway: true };
       }
     },
