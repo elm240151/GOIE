@@ -434,7 +434,14 @@ const baoGuo: RoleDef = {
     };
   },
   skillActions: [
-    { skillId: 'jian-xi', when: 'myTurn', onlyWhenLeader: true, label: '见习' },
+    {
+      skillId: 'jian-xi',
+      when: 'myTurn',
+      onlyWhenLeader: true,
+      label: '见习',
+      // 本局至多（玩家人数 + 2）次（2026-10-07 用户反馈：按钮直接标剩余次数）
+      remaining: (state, playerCount) => playerCount + 2 - (state as BaoGuoState).jianxiUsed,
+    },
     { skillId: 'fan-li-ju', when: 'myTurn', onlyWhenLeader: true, label: '反力矩' },
   ],
   hooks: {

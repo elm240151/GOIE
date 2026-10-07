@@ -100,6 +100,8 @@ export interface SkillActionDef {
   anyTime?: boolean;
   /** 不在主动技按钮行渲染（苗条查看/收回扣置牌改由手牌上方扣置区弹窗承担；引擎动作入口仍保留） */
   hidden?: boolean;
+  /** 剩余次数（2026-10-07 用户反馈：按钮直接标次数）：null = 不显示；0 = 灰显禁用；n>0 = 「（剩 n）」 */
+  remaining?: (state: unknown, playerCount: number) => number | null;
   label: string;
 }
 

@@ -32,7 +32,15 @@ const button: RoleDef = {
       description: '轮到自己时（每轮一次）可私密查看一名玩家的手牌；对方会收到提示。',
     },
   ],
-  skillActions: [{ skillId: 'qie-xiao', when: 'myTurn', label: '窃笑' }],
+  skillActions: [
+    {
+      skillId: 'qie-xiao',
+      when: 'myTurn',
+      label: '窃笑',
+      // 每轮一次（2026-10-07 用户反馈：按钮直接标次数）：已用则灰显
+      remaining: (state) => ((state as ButtonState).peekedThisRound ? 0 : null),
+    },
+  ],
   setup(): ButtonState {
     return { peekedThisRound: false, gate: null };
   },

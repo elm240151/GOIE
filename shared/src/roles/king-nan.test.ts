@@ -375,8 +375,12 @@ describe('楠王：旺旺（亡语）+ 回味', () => {
     expect(a.ok && a.suspended).toBe(true); // 旺旺判定成功 +3 后，巨石接着问
     expect(a.ok && a.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'wang-wang' && /成功/.test(e.text))).toBe(true);
     const ask2 = a.ok ? (a.pendingAsk as SkillAsk) : null;
-    expect(ask2?.kind).toBe('suit');
-    const d = engine.resolveAsk('p2', { askId: ask2!.askId!, choice: '♦' }); // 旺旺翻走 160 后顶 = 156 ♦Q
+    expect(ask2?.kind).toBe('confirm'); // 2026-10-07：巨石先问是否发动
+    const y = engine.resolveAsk('p2', { askId: ask2!.askId!, choice: 'yes' });
+    expect(y.ok).toBe(true);
+    const suit = y.ok ? (y.pendingAsk as SkillAsk) : null;
+    expect(suit?.kind).toBe('suit');
+    const d = engine.resolveAsk('p2', { askId: suit!.askId!, choice: '♦' }); // 旺旺翻走 160 后顶 = 156 ♦Q
     expect(d.ok).toBe(true);
     expect(d.ok && d.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'ju-shi')).toBe(true);
     expect(d.ok && d.events.some((e) => e.type === 'player:eliminated' && e.playerId === 'p1')).toBe(true);
@@ -404,8 +408,12 @@ describe('楠王：旺旺（亡语）+ 回味', () => {
     const a = engine.resolveAsk('p0', { askId: ask1!.askId!, choice: 'decline' }); // 旺旺弃权
     expect(a.ok && a.suspended).toBe(true); // 巨石照常询问
     const ask2 = a.ok ? (a.pendingAsk as SkillAsk) : null;
-    expect(ask2?.kind).toBe('suit');
-    const d = engine.resolveAsk('p2', { askId: ask2!.askId!, choice: '♠' }); // 160 小王 ♠♣ → 命中
+    expect(ask2?.kind).toBe('confirm'); // 2026-10-07：巨石先问是否发动
+    const y = engine.resolveAsk('p2', { askId: ask2!.askId!, choice: 'yes' });
+    expect(y.ok).toBe(true);
+    const suit = y.ok ? (y.pendingAsk as SkillAsk) : null;
+    expect(suit?.kind).toBe('suit');
+    const d = engine.resolveAsk('p2', { askId: suit!.askId!, choice: '♠' }); // 160 小王 ♠♣ → 命中
     expect(d.ok && d.events.some((e) => e.type === 'player:eliminated' && e.playerId === 'p1')).toBe(true);
     expect(engine.snapshotFor('p0').winnerId).toBeNull();
   });

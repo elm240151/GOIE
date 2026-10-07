@@ -552,11 +552,23 @@ export default function GameTable() {
 
         {skillActions.length > 0 && (
           <div className="skill-actions">
-            {skillActions.map((a) => (
-              <button key={a.skillId} className="btn btn-gold" onClick={() => void useSkillAction(a.skillId)}>
-                ⚡{a.label}
-              </button>
-            ))}
+            {skillActions.map((a) => {
+              // 次数类技能（2026-10-07 用户反馈）：按钮直接标剩余次数；用尽灰显
+              const remaining = a.remaining ? a.remaining(me!.roleState, players.length) : null;
+              const exhausted = remaining === 0;
+              return (
+                <button
+                  key={a.skillId}
+                  className="btn btn-gold"
+                  disabled={exhausted}
+                  title={exhausted ? STR.game.skillUsedUp : undefined}
+                  onClick={() => void useSkillAction(a.skillId)}
+                >
+                  ⚡{a.label}
+                  {remaining != null && remaining > 0 ? STR.game.skillLeft.replace('{n}', String(remaining)) : ''}
+                </button>
+              );
+            })}
           </div>
         )}
       </div>

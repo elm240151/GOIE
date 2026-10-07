@@ -201,8 +201,12 @@ describe('修勾（答疑）', () => {
     expect(a.ok).toBe(true);
     expect(a.ok && a.suspended).toBe(true); // 改点后巨石接着问
     const ask2 = a.ok ? (a.pendingAsk as SkillAsk) : null;
-    expect(ask2?.kind).toBe('suit');
-    const d = engine.resolveAsk('p2', { askId: ask2!.askId!, choice: 'decline' });
+    expect(ask2?.kind).toBe('confirm'); // 2026-10-07：巨石先问是否发动
+    const y = engine.resolveAsk('p2', { askId: ask2!.askId!, choice: 'yes' });
+    expect(y.ok).toBe(true);
+    const suit = y.ok ? (y.pendingAsk as SkillAsk) : null;
+    expect(suit?.kind).toBe('suit');
+    const d = engine.resolveAsk('p2', { askId: suit!.askId!, choice: 'decline' });
     expect(d.ok).toBe(true);
     const snap = engine.snapshotFor('p2');
     expect(snap.table?.rank).toBe(9); // 改点生效

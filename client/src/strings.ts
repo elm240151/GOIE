@@ -112,6 +112,8 @@ export const STR = {
       babyBlocked: '【温柔】宝贝本回合不得响应组长的出牌',
     },
     skillToast: '【{skill}】{text}',
+    skillLeft: '（剩 {n}）',
+    skillUsedUp: '次数已用尽',
     roundEndToast: '无人能管，{name} 摸 {n} 张继续出',
     curseBadge: '红楼梦',
     curseTakeover: '【地坛】{name} 取而代之，摸 {n} 张继续出',

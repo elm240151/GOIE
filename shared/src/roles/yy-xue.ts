@@ -5,17 +5,20 @@
 // 每场游戏至多判定（玩家人数 + 2）次。可选发动；判定优先于该出牌者获胜。
 // 触发按实体牌判定（答疑改点不影响触发）；倒序镜像按"打出这一手时"的牌序（洄游先判后切）。
 // 判定中的王按颜色算双花色（小王 ♠♣、大王 ♥♦，2026-10-03 用户确认）。
+// 询问顺序（2026-10-07 用户反馈）：先确认是否发动 → 障目猜手牌数 → 再声明花色 → 最后翻牌判定。
 import { isJoker, jokerSuits, RANK_2, RANK_3, SUITS } from '../cards';
 import type { HookContext, HookResult, RoleDef } from './types';
 
 interface YyXueState {
   /** 已使用判定次数（每场游戏上限：玩家人数 + 2） */
   used: number;
-  /** 障目再入：待门控的技能、目标与已声明的花色 */
-  gate: { skillId: 'ju-shi'; targetId: string; suit: string } | null;
+  /** 障目再入：待门控的技能与目标（花色在门控通过后另行询问） */
+  gate: { skillId: 'ju-shi'; targetId: string } | null;
+  /** 花色询问挂起：确认发动 + 障目通过后，待声明花色 */
+  suitPending: { targetId: string } | null;
 }
 
-/** 巨石判定流程（障目门控通过后执行）：翻牌对花色，成功驱逐该出牌者并夺权 */
+/** 巨石判定流程（确认发动 + 障目门控 + 花色声明之后执行）：翻牌对花色，成功驱逐该出牌者并夺权 */
 function juShiJudge(ctx: HookContext, st: YyXueState, owner: string, choice: string): HookResult | void {
   st.used++;
   const top = ctx.game.revealTop(1, '巨石判定');
@@ -36,6 +39,20 @@ function juShiJudge(ctx: HookContext, st: YyXueState, owner: string, choice: str
   ctx.game.announce('yy-xue', 'ju-shi', '【巨石】判定失败，判定牌摸回');
 }
 
+/** 巨石花色询问（确认发动且障目通过后）：声明花色进行判定，弃权不消耗判定次数 */
+function juShiAskSuit(ctx: HookContext, st: YyXueState, owner: string): HookResult | void {
+  const ownerName = ctx.game.players().find((p) => p.id === owner)?.name ?? owner;
+  st.suitPending = { targetId: owner };
+  return {
+    ok: true,
+    ask: {
+      kind: 'suit',
+      prompt: `【巨石】请声明花色驱逐 ${ownerName}（翻到该花色即驱逐；弃权不消耗判定次数，本场还可判定 ${ctx.game.players().length + 2 - st.used} 次）`,
+      options: [...SUITS],
+    },
+  };
+}
+
 const yyXue: RoleDef = {
   id: 'yy-xue',
   seatOrder: 5,
@@ -51,18 +68,18 @@ const yyXue: RoleDef = {
     },
   ],
   setup(): YyXueState {
-    return { used: 0, gate: null };
+    return { used: 0, gate: null, suitPending: null };
   },
   hooks: {
     onPlayInterrupt(ctx, played) {
       const owner = ctx.game.roundLastPlayerId()!;
       const st = ctx.state as YyXueState;
-      // 障目再入（巨石猜牌/摸牌答案）：门控通过后照常判定
+      // 障目再入（巨石猜牌/摸牌答案）：门控通过后先声明花色再判定（2026-10-07 用户反馈）
       if (st.gate?.skillId === 'ju-shi') {
-        const { targetId, suit } = st.gate;
+        const { targetId } = st.gate;
         const g = ctx.game.zhangMuCheck(ctx.self.id, targetId, 'ju-shi', () => {
           st.gate = null;
-          return juShiJudge(ctx, st, targetId, suit);
+          return juShiAskSuit(ctx, st, targetId);
         });
         if (g) {
           if (st.gate && !('ask' in g)) st.gate = null; // 障目猜错/已封锁：清残留门控（防下次钩子误入再问）
@@ -70,6 +87,14 @@ const yyXue: RoleDef = {
         }
         st.gate = null;
         return; // 防御
+      }
+      // 花色答案再入：校验后执行判定（弃权/非法不消耗次数）
+      if (st.suitPending) {
+        const { targetId } = st.suitPending;
+        st.suitPending = null;
+        const choice = ctx.answer?.choice ?? '';
+        if (choice === 'decline' || !(SUITS as readonly string[]).includes(choice)) return;
+        return juShiJudge(ctx, st, targetId, choice);
       }
       if (owner === ctx.self.id) return;
       if (ctx.game.bpProtected(owner)) return; // 血压（硝烟）全挡：技能不能对打出者生效（含驱逐）
@@ -90,29 +115,28 @@ const yyXue: RoleDef = {
       if (!trigger) return;
       if (st.used >= ctx.game.players().length + 2) return; // 判定次数用尽
       if (!ctx.answer) {
+        // 2026-10-07 用户反馈：先问是否发动，发动后（障目猜牌）再声明花色，最后才翻牌判定
         return {
           ok: true,
           ask: {
-            kind: 'suit',
-            prompt: `是否发动【巨石】驱逐 ${ownerName}？请声明花色（翻到该花色即驱逐，弃权不消耗次数，本场还可判定 ${ctx.game.players().length + 2 - st.used} 次）`,
-            options: [...SUITS],
+            kind: 'confirm',
+            prompt: `是否发动【巨石】驱逐 ${ownerName}？（发动后先声明花色再翻牌判定，翻到该花色即驱逐；本场还可判定 ${ctx.game.players().length + 2 - st.used} 次，弃权不消耗）`,
           },
         };
       }
-      const choice = ctx.answer.choice ?? '';
-      if (choice === 'decline' || !(SUITS as readonly string[]).includes(choice)) return; // 放弃/非法
+      if (ctx.answer.choice !== 'yes') return; // 放弃：不消耗判定次数
       // 障目门控（指向性：判定对象为辛歼时先猜手牌数；猜错不消耗判定次数）
-      st.gate = { skillId: 'ju-shi', targetId: owner, suit: choice };
+      st.gate = { skillId: 'ju-shi', targetId: owner };
       const g = ctx.game.zhangMuCheck(ctx.self.id, owner, 'ju-shi', () => {
         st.gate = null;
-        return juShiJudge(ctx, st, owner, choice);
+        return juShiAskSuit(ctx, st, owner);
       });
       if (g) {
         if (st.gate && !('ask' in g)) st.gate = null; // 障目已封锁（猜错后对他人发动）：清残留门控
         return g;
       }
       st.gate = null;
-      return juShiJudge(ctx, st, owner, choice); // 直接放行
+      return juShiAskSuit(ctx, st, owner); // 直接放行
     },
   },
 };

@@ -650,7 +650,11 @@ export const useStore = create<AppStore>((set, get) => ({
       case 'skill:triggered': {
         const role = getRole(e.roleId as string);
         const skillName = role?.skills.find((s) => s.id === e.skillId)?.name ?? (e.skillId as string);
-        toast('skill', STR.game.skillToast.replace('{skill}', skillName).replace('{text}', e.text as string));
+        // 引擎播报多数自带【技能名】前缀，去掉重复部分（2026-10-07 用户反馈：弹窗技能名写了两次）
+        let text = e.text as string;
+        const prefix = `【${skillName}】`;
+        if (text.startsWith(prefix)) text = text.slice(prefix.length);
+        toast('skill', STR.game.skillToast.replace('{skill}', skillName).replace('{text}', text));
         break;
       }
       case 'deck:recycled': {

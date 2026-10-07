@@ -536,12 +536,16 @@ describe('陈正（见习/反力矩/五连鞭/压腿）', () => {
     expect(a.ok && a.events.some((e) => e.type === 'skill:triggered' && /摸 1 张/.test(e.text))).toBe(true);
     ask = a.ok ? (a.pendingAsk as SkillAsk) : null;
     expect(ask?.prompt).toContain('炸弹');
-    // ④ 巨石（priority 0）最后问
+    // ④ 巨石（priority 0）最后问：2026-10-07 起先确认发动、再声明花色
     a = engine.resolveAsk('p1', { askId: ask!.askId!, choice: 'decline' });
     expect(a.ok).toBe(true);
     ask = a.ok ? (a.pendingAsk as SkillAsk) : null;
-    expect(ask?.kind).toBe('suit');
+    expect(ask?.kind).toBe('confirm');
     expect(ask?.prompt).toContain('巨石');
+    a = engine.resolveAsk('p3', { askId: ask!.askId!, choice: 'yes' });
+    expect(a.ok).toBe(true);
+    ask = a.ok ? (a.pendingAsk as SkillAsk) : null;
+    expect(ask?.kind).toBe('suit');
     a = engine.resolveAsk('p3', { askId: ask!.askId!, choice: 'decline' });
     expect(a.ok).toBe(true);
     expect(a.ok && !a.pendingAsk).toBe(true);

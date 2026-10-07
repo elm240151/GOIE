@@ -113,7 +113,8 @@ const zuZhang: RoleDef = {
       if (ctx.game.bpProtected(owner)) return; // 血压（硝烟）全挡：技能不能对压牌者生效
       const x = ctx.game.players().length;
       const options = ['检讨：压牌者摸 2 张手牌'];
-      if (st.xiuxueUsed < x) options.push('休学：压牌者下回合整轮不得出牌');
+      // 2026-10-07 用户反馈：次数类选项补剩余次数（本局还可休学 N 次）
+      if (st.xiuxueUsed < x) options.push(`休学：压牌者下回合整轮不得出牌（本局还可 ${x - st.xiuxueUsed} 次）`);
       options.push('放弃');
       const name = ctx.game.players().find((p) => p.id === owner)?.name ?? owner;
       if (!a) {

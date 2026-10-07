@@ -238,9 +238,13 @@ describe('玊：两倍（锁定技）+ 呕哑', () => {
     const r = engine.playCards('p1', hands.p1.map((c) => c.id)); // 呕哑接炸弹（含5）
     expect(r.ok).toBe(true);
     const ask = askOf(r);
-    expect(ask?.kind).toBe('suit');
+    expect(ask?.kind).toBe('confirm'); // 2026-10-07：巨石先问是否发动
     expect(ask?.prompt).toContain('驱逐 玩家1'); // 判定对象是玊（无归属改写）
-    decline(engine, 'p2', ask);
+    const y = engine.resolveAsk('p2', { askId: ask!.askId!, choice: 'yes' });
+    expect(y.ok).toBe(true);
+    const suit = askOf(y);
+    expect(suit?.kind).toBe('suit');
+    decline(engine, 'p2', suit);
   });
 
   it('呕哑：倒序（海棠在场）下同样可用', () => {

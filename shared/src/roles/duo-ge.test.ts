@@ -192,9 +192,12 @@ describe('惰戈（亢奋/法音）', () => {
     const a1 = engine.resolveAsk('p0', { askId: faYin!.askId!, choice: 'decline' });
     expect(attributed(a1)).toBe(true); // 缓冲事件随第一次恢复一起返回（挂起期间 events 为空）
     const juShi = askOf(a1);
-    expect(juShi?.kind).toBe('suit');
+    expect(juShi?.kind).toBe('confirm'); // 2026-10-07：巨石先问是否发动
     expect(juShi?.prompt).toContain('驱逐 玩家0'); // 判定对象 = 惰戈（prompt 用玩家名，不用原始 id）
-    const a2 = engine.resolveAsk('p2', { askId: juShi!.askId!, choice: 'decline' });
+    const y = engine.resolveAsk('p2', { askId: juShi!.askId!, choice: 'yes' });
+    const suit = askOf(y);
+    expect(suit?.kind).toBe('suit');
+    const a2 = engine.resolveAsk('p2', { askId: suit!.askId!, choice: 'decline' });
     expect(engine.snapshotFor('p0').turnPlayerId).toBe('p1'); // 轮转从惰戈下家
   });
 
