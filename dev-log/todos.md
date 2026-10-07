@@ -15,7 +15,7 @@
 - [x] 【功能】人机系统（2026-10-07 用户需求第一半，四项决策 AskUserQuestion 确认：房主按钮补齐/无技能白板/能管就管+起最小/Elm 摸牌范围=全部摸牌场景）：座位 isBot 无 socket 由 Room 定时器驱动（botTurnMs 800/botAskMs 400）；addBot/removeBot 房主 lobby 专用；listPlayable 候选逐个试 playCards → pass → abortGame 兜底；被询问短延迟自动 decline → effectiveAnswer 默认作答；rematch 自动投票、房主让位跳过人机、只剩人机房间自清；客户端「机」标+加入/移除按钮+牌桌角色列「人机」；room.test +6（fake timers 固定手牌：策略/自动过/观股询问/权限/整局模拟）；shared 445 + server 39 = 484 全绿、三包 tsc + build、15× 稳定、烟测通过、3000 生产服务已重启；**已推送 GitHub**（2026-10-07 第六次批准，cf11898..e014dca）
 - [x] 【推送】2026-10-07 用户批准「你先推送吧」：5c84090..8f61f08 共 14 提交已推 origin/main（含 10-06 深夜以来全部用户反馈修正：约等亡语/障目播报/回退牌权/摸牌时机/判定询问顺序/Toast 去重/次数显示）
 - [x] 【推送】2026-10-07 用户批准「可以推送了」：cf11898..e014dca 共 4 提交已推 origin/main——人机系统 6bb1bf0、Elm 开发者 ID c3ebbd7、换牌私密化 73a74f2、仁德修复 e014dca（本阶段两个功能 + 两个反馈修正全部同步远端）
-- [x] 【部署】Replit 配置（2026-10-07 用户需求）：.replit 启动配置（install+build+start 生产模式）+ engines 放宽 >=20（Replit 默认 Node 可用）+ docs/07 Replit 节（import 步骤/闲置冷启动/战绩持久/更新 Pull）；零运行代码变更、验收全绿、3000 无需重启；**未推送 GitHub**（待用户批准——Replit import 后建议等推送再 Pull）
+- [x] 【部署】Replit 配置（2026-10-07 用户需求）：.replit 启动配置（install+build+start 生产模式）+ engines 放宽 >=20（Replit 默认 Node 可用）+ docs/07 Replit 节（import 步骤/闲置冷启动/战绩持久/更新 Pull）；零运行代码变更、验收全绿、3000 无需重启；**已推送 GitHub**（2026-10-07 第七次批准，71be5ca..3d97d1b）
 - [ ] 【部署】Replit 待用户实操验证（2026-10-07）：①Replit import GOIE → Run 出「干瞪眼服务器已启动」②端口面板 3000 监听 ③打开网址进大厅、可建房开玩 ④朋友外网访问（国内速度体验）⑤闲置停止后冷启动体验；验证后回填本条目
 - [ ] 【待办】客户端一件（2026-10-06）：座位徽章 babyIds（宝贝）/ bpProtectedIds（高血压）
 - [ ] 【待办】服务端兜底（2026-10-06）：autoPass/掉线兜底（reconnect.ts）宝贝守卫检查
