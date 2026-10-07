@@ -98,6 +98,19 @@ describe('首席 杰杰一世（蛋神/仁德）', () => {
     expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'dan-shen')).toBe(true);
   });
 
+  it('仁德：对 3 可以压对 2（2026-10-07 用户类推确认）', () => {
+    const hands = {
+      p0: [...byRank(15, 2), ...byRank(10, 3)], // 首席出对2
+      p1: [...byRank(3, 2), ...byRank(8, 3)],
+    };
+    const engine = mkEngine(hands, { p0: skywalker });
+    expect(engine.playCards('p0', hands.p0.slice(0, 2).map((c) => c.id)).ok).toBe(true);
+    const r = engine.playCards('p1', hands.p1.slice(0, 2).map((c) => c.id)); // 对3 压对2
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.events.some((e) => e.type === 'skill:triggered' && e.skillId === 'ren-de')).toBe(true);
+    expect(engine.snapshotFor('p0').table!.rank).toBe(3);
+  });
+
   it('仁德：单 3 可以压单 2', () => {
     const hands = {
       p0: [byRank(15, 1)[0]!, ...byRank(10, 4)], // 首席出单2
