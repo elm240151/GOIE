@@ -1184,6 +1184,17 @@ body {
   font-size: 10px;
   animation: pulse 0.8s infinite alternate;
 }
+.my-skill-left {
+  font-style: normal;
+  margin-left: 4px;
+  color: var(--gold-deep);
+  font-size: 10px;
+  font-weight: 700;
+}
+.my-skill-exhausted {
+  filter: grayscale(0.7) opacity(0.55);
+  cursor: not-allowed;
+}
 .my-skill-locked {
   font-style: normal;
   margin-left: 4px;

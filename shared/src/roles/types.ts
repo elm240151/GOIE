@@ -292,6 +292,9 @@ export interface SkillDef {
   description: string;
   /** 锁定技（前端徽标显示） */
   locked?: boolean;
+  /** 剩余次数（2026-10-07 用户反馈）：被动技（无按钮）在「我的技能」chip 上直接标——
+   *  null = 不显示；0 = 灰显禁用；n>0 = 「（剩 n）」。与 SkillActionDef.remaining 同语义 */
+  remaining?: (state: unknown, playerCount: number) => number | null;
 }
 
 export interface RoleDef {

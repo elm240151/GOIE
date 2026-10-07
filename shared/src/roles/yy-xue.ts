@@ -65,6 +65,8 @@ const yyXue: RoleDef = {
       name: '巨石',
       description:
         '有人打出压一切的牌（正序 2/对 2、倒序 3/对 3、炸弹、首席的 Q、橐驼的单王与对王）时可声明花色判定，翻到该花色即驱逐该玩家并夺权，失败则判定牌摸回。判定中的王按颜色算 ♠♣/♥♦。',
+      // 2026-10-07 用户反馈：被动技没有按钮，「我的技能」chip 直接标本场剩余判定次数
+      remaining: (state, playerCount) => playerCount + 2 - (state as YyXueState).used,
     },
   ],
   setup(): YyXueState {

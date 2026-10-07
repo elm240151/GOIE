@@ -445,14 +445,21 @@ export default function GameTable() {
             {myRole.skills.map((s) => {
               const active = !finished && activeSkillIds.has(s.id);
               const expanded = expandedSkill === s.id;
+              // 被动技（无按钮）剩余次数：chip 直接标（2026-10-07 用户反馈），0 = 灰显
+              const remaining = s.remaining ? s.remaining(me!.roleState, players.length) : null;
+              const exhausted = remaining === 0;
               return (
                 <div key={s.id} className={`my-skill ${active ? 'my-skill-active' : ''}`}>
                   <button
                     type="button"
-                    className="my-skill-chip"
+                    className={`my-skill-chip ${exhausted ? 'my-skill-exhausted' : ''}`}
+                    title={exhausted ? STR.game.skillUsedUp : undefined}
                     onClick={() => setExpandedSkill(expanded ? null : s.id)}
                   >
                     【{s.name}】
+                    {remaining != null && remaining > 0 && (
+                      <em className="my-skill-left">{STR.game.skillLeft.replace('{n}', String(remaining))}</em>
+                    )}
                     {active && <em className="my-skill-ready">{STR.game.skillReady}</em>}
                     {s.locked && <em className="my-skill-locked">{STR.room.lockedSkill}</em>}
                   </button>
