@@ -19,7 +19,7 @@ export type GameEventData =
   | { type: 'cards:heldGiven'; playerId: string; toPlayerId: string; count: number }
   | { type: 'deck:recycled'; count: number }
   | { type: 'player:eliminated'; playerId: string; reason: string }
-  | { type: 'skill:triggered'; playerId: string; roleId: string; skillId: string; text: string }
+  | { type: 'skill:triggered'; playerId: string; roleId: string; skillId: string; text: string; privateTo?: string }
   | { type: 'skill:peek'; viewerId: string; targetId: string; cards: Card[] }
   | { type: 'skill:peeked'; viewerId: string; targetId: string }
   | { type: 'game:error'; playerId: string; reason: string }

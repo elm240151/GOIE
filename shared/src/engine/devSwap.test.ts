@@ -78,12 +78,15 @@ describe('自定义摸牌（Elm 开发者账号）', () => {
     const r1 = engine.resolveAsk('p0', { askId: ask1.askId!, swapSpec: spec });
     expect(r1.ok).toBe(true);
     if (r1.ok) {
-      // 换牌播报（skill:triggered roleId=dev）
-      expect(r1.events.some((e) => e.type === 'skill:triggered' && e.playerId === 'p0')).toBe(true);
+      // 换牌播报（skill:triggered roleId=dev）只发本人（privateTo）
+      expect(r1.events.some((e) => e.type === 'skill:triggered' && e.playerId === 'p0' && e.privateTo === 'p0')).toBe(true);
     }
     const hand1 = handOf(engine, 'p0');
     expect(hand1.some((c) => c.id === target.id)).toBe(true);
     expect(hand1.some((c) => c.id === p0Drawn[0]!.id)).toBe(false);
+    // 私密：询问只对被询问者可见——对方快照 pendingAsk 为 null（2026-10-07 用户反馈）
+    expect(engine.snapshotFor('p0').pendingAsk).not.toBeNull();
+    expect(engine.snapshotFor('p1').pendingAsk).toBeNull();
     // 下一张挂起
     const ask2 = engine.currentAsk('p0')!;
     expect(ask2.kind).toBe('devSwap');

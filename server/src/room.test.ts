@@ -1442,9 +1442,13 @@ describe('自定义摸牌（Elm 开发者账号）', () => {
     expect(ask2.kind).toBe('devSwap');
     expect(ask2.swapIndex).toBe(1);
     expect(ask2.cards![0]!.id).toBe(p0Drawn[1]!.id);
-    // 换牌播报（skill:triggered roleId=dev 广播）
+    // 换牌播报只发本人（2026-10-07 用户反馈：不让别人看到换了什么）
     const evs = emittedEvents(s.sockets[0]!);
-    expect(evs.some((e) => e.type === 'skill:triggered' && e.playerId === s.ids[0])).toBe(true);
+    expect(evs.some((e) => e.type === 'skill:triggered' && e.playerId === s.ids[0] && e.privateTo === s.ids[0])).toBe(true);
+    expect(emittedEvents(s.sockets[1]!).some((e) => e.type === 'skill:triggered' && e.skillId === 'dev-draw')).toBe(false);
+    // 对方快照看不到 devSwap 询问（无「询问中」标记、不泄露摸到的牌面）
+    const peerSnap = lastEmit<GameSnapshot>(s.sockets[1]!, SERVER_EVENTS.snapshot)!;
+    expect(peerSnap.pendingAsk).toBeNull();
     // 剩余全部保持 → 开局
     s.mgr.useSkill(s.sockets[0]!.id, { askId: ask2.askId, choice: 'restKeep' });
     const snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;

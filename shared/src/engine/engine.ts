@@ -639,15 +639,18 @@ export class GameEngine {
       winnerId: this.winnerId,
       scoreDeltas: this.phase === 'finished' ? this.scoreDeltas : null,
       totals: { ...this.scores },
-      pendingAsk: this.pendingAsk
-        ? {
-            askId: this.pendingAsk.ask.askId!,
-            playerId: this.pendingAsk.playerId,
-            kind: this.pendingAsk.ask.kind,
-            prompt: this.pendingAsk.ask.prompt,
-            timeoutMs: this.pendingAsk.ask.timeoutMs!,
-          }
-        : null,
+      pendingAsk:
+        this.pendingAsk &&
+        // 私密：devSwap（Elm 自定义摸牌）询问只对被询问者可见——别人看不到询问、也看不到「刚摸到 X」的 prompt
+        (this.pendingAsk.ask.kind !== 'devSwap' || viewerId === this.pendingAsk.playerId)
+          ? {
+              askId: this.pendingAsk.ask.askId!,
+              playerId: this.pendingAsk.playerId,
+              kind: this.pendingAsk.ask.kind,
+              prompt: this.pendingAsk.ask.prompt,
+              timeoutMs: this.pendingAsk.ask.timeoutMs!,
+            }
+          : null,
     };
   }
 
@@ -2633,6 +2636,8 @@ export class GameEngine {
       roleId: 'dev',
       skillId: 'dev-draw',
       text: `【自定义摸牌】${this.cardFaceLabel(oldCard)} → ${this.cardFaceLabel(newCard)}`,
+      // 私密：换牌只给本人看（2026-10-07 用户反馈：不需要让别人看到换了什么）
+      privateTo: playerId,
     });
     if (this.phase === 'playing') this.checkYaoWu(); // 耀武（阿摩）：换牌后立即判定（可能集齐 13 点数获胜）
   }
