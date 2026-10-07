@@ -2541,7 +2541,7 @@ export class GameEngine {
           playerId: mystic,
           roleId: 'xin-jian',
           skillId: 'zhang-mu',
-          text: `【障目】猜错了（手牌数是 ${actual}）：此次技能失效，本回合不能再对其他人发动`,
+          text: `【障目】猜错了：此次技能失效，本回合不能再对其他人发动`,
         });
         return { ok: true }; // 效果跳过
       }
