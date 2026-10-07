@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 import {
   buildDeck,
   clearRoles,
@@ -24,11 +24,11 @@ import type { RoomOptions } from './room';
 
 interface FakeSocket {
   id: string;
-  emit: ReturnType<typeof vi.fn>;
+  emit: Mock<(ev: string, payload: unknown) => unknown>;
 }
 
 function mkSocket(id: string): FakeSocket {
-  return { id, emit: vi.fn() };
+  return { id, emit: vi.fn<(ev: string, payload: unknown) => unknown>() };
 }
 
 /** 取某个 socket 收到的最近一次指定事件载荷 */
