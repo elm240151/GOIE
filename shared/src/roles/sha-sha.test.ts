@@ -86,6 +86,30 @@ describe('煞蔱：约等 + 直播', () => {
     assertConserved(engine);
   });
 
+  it('约等回退后牌权归煞蔱（2026-10-07 用户反馈）：对面接不上 → 煞蔱起牌', () => {
+    const hands = {
+      p0: [deck[4]!, deck[17]!, deck[30]!, deck[43]!, deck[1]!], // 煞蔱：4×7 炸弹压对2、♠4 留手（留手才会问约等）
+      p1: [deck[12]!, deck[25]!, deck[0]!], // 对面：对 2 领出、♠3 留手（均分后拿 3 张也组不出对2/炸弹）
+    };
+    const engine = mkEngine(hands, { p0: shaSha }, 'p1');
+    expect(engine.playCards('p1', [deck[12]!.id, deck[25]!.id]).ok).toBe(true); // 对面领出对 2
+    const r = engine.playCards('p0', [deck[4]!.id, deck[17]!.id, deck[30]!.id, deck[43]!.id]); // 煞蔱炸弹压
+    expect(r.ok).toBe(true);
+    const a = ask(engine);
+    expect(a.prompt).toContain('约等');
+    expect(engine.resolveAsk('p0', { askId: a.askId!, choice: 'yes' }).ok).toBe(true);
+    // 回退后：桌面 = 对 2、轮到对面接牌
+    let s = engine.snapshotFor('p0');
+    expect(s.turnPlayerId).toBe('p1');
+    expect(s.table?.cards.length).toBe(2);
+    // 对面接不上（3 张无对 2/炸弹）→ 过 → 牌权回煞蔱：她重新起牌
+    expect(engine.pass('p1').ok).toBe(true);
+    s = engine.snapshotFor('p0');
+    expect(s.table).toBeNull();
+    expect(s.turnPlayerId).toBe('p0');
+    assertConserved(engine);
+  });
+
   it('约等触发 B：拥有牌权时收回起牌手、不用摸牌，桌面空则重新起牌', () => {
     const hands = {
       p0: [deck[2]!, deck[11]!], // 煞蔱：♠5 领出（收回）、♠A 陪洗

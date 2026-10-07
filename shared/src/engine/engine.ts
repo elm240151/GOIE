@@ -1038,7 +1038,9 @@ export class GameEngine {
     this.tableRankNote = null;
     this.tableResponderRestrict = null;
     this.lastPlayPhysicalId = null;
-    this.roundLastPlayerId = this.tableOwnerId === '' ? ownerId : this.tableOwnerId;
+    // 牌权仍归煞蔱（约等 = 该回合出了 0 张牌、牌权不转移）：下家接不上（全过）→ 轮末由煞蔱起牌
+    // （2026-10-07 用户反馈：之前归回退那手牌的主人，做成了对面的牌权）
+    this.roundLastPlayerId = ownerId;
     // 均分：合洗随机分，她拿 ⌊X/2⌋、对方拿其余（奇数时对方多 1）
     const other = this.hands.get(targetId) ?? [];
     const pool = shuffle([...hand, ...other], this.rng);
