@@ -84,4 +84,32 @@ describe('首席 杰杰一世（蛋神/仁德）', () => {
     expect(snap.turnPlayerId).toBe('p1');
     expect(snap.table).toBeNull();
   });
+
+  it('仁德：最后一张不可为 Q 只禁单 Q/对 Q——含 Q 的顺子、炸弹收尾照常可打出（2026-10-07 用户澄清）', () => {
+    // 含 Q 的顺子 10JQKA 收尾 → 可打出并获胜
+    const hands = {
+      p0: [byRank(10, 1)[0]!, byRank(11, 1)[0]!, byRank(12, 1)[0]!, byRank(13, 1)[0]!, byRank(14, 1)[0]!],
+      p1: byRank(8, 5),
+    };
+    const engine = mkEngine(hands, { p0: skywalker });
+    const r = engine.playCards('p0', hands.p0.map((c) => c.id));
+    expect(r.ok).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe('p0');
+
+    // 对 Q 收尾 → 仍被否决
+    const hands2 = { p0: byRank(12, 2), p1: byRank(8, 5) };
+    const e2 = mkEngine(hands2, { p0: skywalker });
+    const r2 = e2.playCards('p0', hands2.p0.map((c) => c.id));
+    expect(r2.ok).toBe(false);
+    expect((r2 as { reason: string }).reason).toContain('仁德');
+
+    // 炸弹 QQQ 收尾 → 可打出并获胜
+    const hands3 = { p0: byRank(12, 3), p1: byRank(8, 5) };
+    const e3 = mkEngine(hands3, { p0: skywalker });
+    const r3 = e3.playCards('p0', hands3.p0.map((c) => c.id));
+    expect(r3.ok).toBe(true);
+    expect(e3.snapshotFor('p0').winnerId).toBe('p0');
+  });
 });
