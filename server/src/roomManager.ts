@@ -9,12 +9,23 @@ export class RoomManager {
   private readonly roles: RoleRegistry;
   private readonly scoreStore: ScoreStore;
   private readonly autoPassMs: number;
+  private readonly botTurnMs: number;
+  private readonly botAskMs: number;
   private readonly engineFactory: RoomOptions['engineFactory'];
 
-  constructor(opts: { roles: RoleRegistry; scoreStore: ScoreStore; autoPassMs?: number; engineFactory?: RoomOptions['engineFactory'] }) {
+  constructor(opts: {
+    roles: RoleRegistry;
+    scoreStore: ScoreStore;
+    autoPassMs?: number;
+    botTurnMs?: number;
+    botAskMs?: number;
+    engineFactory?: RoomOptions['engineFactory'];
+  }) {
     this.roles = opts.roles;
     this.scoreStore = opts.scoreStore;
     this.autoPassMs = opts.autoPassMs ?? 30_000;
+    this.botTurnMs = opts.botTurnMs ?? 800;
+    this.botAskMs = opts.botAskMs ?? 400;
     this.engineFactory = opts.engineFactory;
   }
 
@@ -24,6 +35,8 @@ export class RoomManager {
       roles: this.roles,
       scoreStore: this.scoreStore,
       autoPassMs: this.autoPassMs,
+      botTurnMs: this.botTurnMs,
+      botAskMs: this.botAskMs,
       engineFactory: this.engineFactory,
     });
     const seat = room.addPlayer(name, socket, true);
@@ -82,6 +95,16 @@ export class RoomManager {
   rematch(socketId: string): void {
     const { room, playerId } = this.locate(socketId);
     room.rematch(playerId);
+  }
+
+  addBot(socketId: string): void {
+    const { room, playerId } = this.locate(socketId);
+    room.addBot(playerId);
+  }
+
+  removeBot(socketId: string, botId: string): void {
+    const { room, playerId } = this.locate(socketId);
+    room.removeBot(playerId, botId);
   }
 
   leave(socketId: string): void {

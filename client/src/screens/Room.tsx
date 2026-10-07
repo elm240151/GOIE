@@ -11,12 +11,15 @@ export default function Room() {
   const setReady = useStore((s) => s.setReady);
   const startGame = useStore((s) => s.startGame);
   const leaveRoom = useStore((s) => s.leaveRoom);
+  const addBot = useStore((s) => s.addBot);
+  const removeBot = useStore((s) => s.removeBot);
   const toast = useStore((s) => s.toast);
 
   if (!room) return null;
   const me = room.players.find((p) => p.id === myId);
   const roles = listRoles();
-  const allReady = room.players.length >= 2 && room.players.every((p) => p.ready && p.roleId);
+  // 人机白板自动准备、免选角色
+  const allReady = room.players.length >= 2 && room.players.every((p) => p.ready && (p.roleId || p.isBot));
 
   const copyCode = () => {
     void navigator.clipboard.writeText(room.code).then(() => toast('info', STR.room.copied));
@@ -50,11 +53,19 @@ export default function Room() {
               {p.name}
               {p.isHost && <em className="tag">{STR.room.host}</em>}
               {p.id === myId && <em className="tag">{STR.room.you}</em>}
+              {p.isBot && <em className="tag room-tag-bot">{STR.room.botTag}</em>}
             </span>
-            <span className="room-seat-role">{roles.find((r) => r.id === p.roleId)?.name ?? STR.room.noRole}</span>
+            <span className="room-seat-role">
+              {p.isBot ? STR.room.bot : roles.find((r) => r.id === p.roleId)?.name ?? STR.room.noRole}
+            </span>
             <span className={`room-seat-ready ${p.ready ? 'ready-on' : ''}`}>
               {p.ready ? STR.room.readyState : '—'}
               {!p.connected && <em className="tag">{STR.room.offlineBadge}</em>}
+              {me?.isHost && room.phase === 'lobby' && p.isBot && (
+                <button type="button" className="btn btn-ghost room-seat-remove" onClick={() => void removeBot(p.id)}>
+                  {STR.room.removeBot}
+                </button>
+              )}
             </span>
           </div>
         ))}
@@ -84,6 +95,15 @@ export default function Room() {
         >
           {!me?.roleId ? STR.room.needRoleFirst : me?.ready ? STR.room.cancelReady : STR.room.ready}
         </button>
+        {me?.isHost && (
+          <button
+            className="btn btn-secondary btn-big"
+            disabled={room.phase !== 'lobby' || room.players.length >= 6}
+            onClick={() => void addBot()}
+          >
+            {STR.room.addBot}
+          </button>
+        )}
         {me?.isHost && (
           <button
             className="btn btn-primary btn-big"

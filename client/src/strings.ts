@@ -40,6 +40,10 @@ export const STR = {
     host: '房主',
     offlineBadge: '掉线',
     mySeat: '我的座位',
+    addBot: '加入人机',
+    removeBot: '移除',
+    bot: '人机',
+    botTag: '机',
   },
   game: {
     yourTurn: '你的回合',

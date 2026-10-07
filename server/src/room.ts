@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import {
   defaultRules,
   GameEngine,
+  listPlayable,
   mulberry32,
   SERVER_EVENTS,
   type ActionResult,
@@ -30,6 +31,8 @@ interface Seat {
   ready: boolean;
   connected: boolean;
   isHost: boolean;
+  /** 人机：无 socket、无角色、自动行动（测试注入时缩小延迟） */
+  isBot: boolean;
   secret: string;
   socketId: string | null;
 }
@@ -39,6 +42,10 @@ export interface RoomOptions {
   roles: RoleRegistry;
   scoreStore: ScoreStore;
   autoPassMs: number;
+  /** 人机出牌/过牌延迟（毫秒，缺省 800） */
+  botTurnMs?: number;
+  /** 人机被技能询问时的自动作答延迟（毫秒，缺省 400） */
+  botAskMs?: number;
   /** 测试注入：自定义引擎（如指定手牌）；不传则正常随机发牌 */
   engineFactory?: (opts: { players: EnginePlayer[]; startPlayerId: string; scores: Record<string, number> }) => GameEngine;
 }
@@ -52,6 +59,8 @@ export class Room {
   private readonly roles: RoleRegistry;
   private readonly scoreStore: ScoreStore;
   private readonly autoPassMs: number;
+  private readonly botTurnMs: number;
+  private readonly botAskMs: number;
   private readonly engineFactory: RoomOptions['engineFactory'];
   private engine: GameEngine | null = null;
   private totals: Record<string, number> = {};
@@ -60,12 +69,15 @@ export class Room {
   private rematchVotes = new Set<string>();
   private autoPassTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private askTimer: ReturnType<typeof setTimeout> | null = null;
+  private botTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(opts: RoomOptions) {
     this.code = opts.code;
     this.roles = opts.roles;
     this.scoreStore = opts.scoreStore;
     this.autoPassMs = opts.autoPassMs;
+    this.botTurnMs = opts.botTurnMs ?? 800;
+    this.botAskMs = opts.botAskMs ?? 400;
     this.engineFactory = opts.engineFactory;
   }
 
@@ -85,6 +97,7 @@ export class Room {
         ready: s.ready,
         connected: s.connected,
         isHost: s.isHost,
+        isBot: s.isBot,
       })),
       winnerId: this.lastWinnerId,
       scoreDeltas: this.lastDeltas,
@@ -103,10 +116,55 @@ export class Room {
     if (this.seats.some((s) => s.name === name)) throw new Error('名字已被使用');
     const playerId = randomUUID();
     const secret = generatePlayerSecret();
-    this.seats.push({ id: playerId, name, roleId: '', ready: false, connected: true, isHost, secret, socketId: socket.id });
+    this.seats.push({
+      id: playerId,
+      name,
+      roleId: '',
+      ready: false,
+      connected: true,
+      isHost,
+      isBot: false,
+      secret,
+      socketId: socket.id,
+    });
     this.sockets.set(playerId, socket);
     if (isHost) this.hostId = playerId;
     return { playerId, secret };
+  }
+
+  /** 房主加人机：按一次加一个；白板（无角色、自动准备），无 socket 由房间自动驱动 */
+  addBot(playerId: string): void {
+    if (this.phase !== 'lobby') throw new Error('游戏已开始，无法加入人机');
+    if (playerId !== this.hostId) throw new Error('只有房主可以加入人机');
+    if (this.seats.length >= 6) throw new Error('房间已满（最多 6 人）');
+    let maxN = 0;
+    for (const s of this.seats) {
+      const m = s.isBot ? /^人机 (\d+)$/.exec(s.name) : null;
+      if (m) maxN = Math.max(maxN, Number(m[1]));
+    }
+    this.seats.push({
+      id: randomUUID(),
+      name: `人机 ${maxN + 1}`,
+      roleId: '',
+      ready: true,
+      connected: true,
+      isHost: false,
+      isBot: true,
+      secret: generatePlayerSecret(),
+      socketId: null,
+    });
+    this.broadcastState();
+  }
+
+  /** 房主移除指定人机（仅大厅） */
+  removeBot(playerId: string, botId: string): void {
+    if (this.phase !== 'lobby') throw new Error('游戏中不能移除人机');
+    if (playerId !== this.hostId) throw new Error('只有房主可以移除人机');
+    const seat = this.seats.find((s) => s.id === botId);
+    if (!seat) throw new Error('该座位不存在');
+    if (!seat.isBot) throw new Error('只能移除人机座位');
+    this.seats.splice(this.seats.indexOf(seat), 1);
+    this.broadcastState();
   }
 
   rejoin(playerId: string, secret: string, socket: RoomSocket): void {
@@ -149,10 +207,10 @@ export class Room {
     if (hostId !== this.hostId) throw new Error('只有房主可以开始游戏');
     if (this.seats.length < 2) throw new Error('至少需要 2 名玩家');
     if (!this.seats.every((s) => s.connected)) throw new Error('有玩家掉线，无法开始');
-    if (!this.seats.every((s) => s.roleId)) throw new Error('还有玩家未选角色');
+    if (!this.seats.every((s) => s.roleId || s.isBot)) throw new Error('还有玩家未选角色');
     if (!this.seats.every((s) => s.ready)) throw new Error('还有玩家未准备');
     for (const s of this.seats) {
-      if (!this.roles.has(s.roleId)) throw new Error('存在未注册的角色');
+      if (!s.isBot && !this.roles.has(s.roleId)) throw new Error('存在未注册的角色');
     }
     // 先手：上局赢家；首局房主
     const startPlayerId =
@@ -173,6 +231,7 @@ export class Room {
     this.dispatchEvents(this.engine.drainEvents());
     this.syncSnapshots();
     this.handlePendingAsk(); // 开局整备询问（如阿色首回合抽你）：直达被询问者 + 超时定时器
+    this.scheduleBotTurn(); // 先手是人机（如上局赢家）→ 自动行动
     this.broadcastState();
   }
 
@@ -239,13 +298,15 @@ export class Room {
   rematch(playerId: string): void {
     if (this.phase !== 'finished') throw new Error('当前不能发起再来一局');
     this.rematchVotes.add(playerId);
+    // 人机自动同意再来一局
+    for (const s of this.seats) if (s.isBot) this.rematchVotes.add(s.id);
     this.broadcastState();
     // 全员投票 → 回到房间，可重新选角色、重新准备（房主开局；先手仍给上局赢家）
     if (this.rematchVotes.size >= this.seats.length) {
       this.rematchVotes.clear();
       this.phase = 'lobby';
       this.engine = null;
-      for (const s of this.seats) s.ready = false;
+      for (const s of this.seats) if (!s.isBot) s.ready = false; // 人机保持自动准备
       this.broadcastState();
     }
   }
@@ -262,12 +323,14 @@ export class Room {
     this.rematchVotes.delete(seat.id);
     this.seats.splice(this.seats.indexOf(seat), 1);
     if (this.hostId === seat.id) {
-      const next = this.seats[0];
+      const next = this.seats.find((s) => !s.isBot); // 房主让位跳过人机
       if (next) {
         next.isHost = true;
         this.hostId = next.id;
       }
     }
+    // 只剩人机：清空座位，房间随人数归零被回收
+    if (!this.seats.some((s) => !s.isBot)) this.seats.splice(0, this.seats.length);
     this.broadcastState();
   }
 
@@ -289,6 +352,7 @@ export class Room {
     for (const t of this.autoPassTimers.values()) clearTimeout(t);
     this.autoPassTimers.clear();
     this.cancelAskTimer();
+    this.cancelBotTurn();
   }
 
   // ---------- 内部 ----------
@@ -323,6 +387,7 @@ export class Room {
     this.dispatchEvents(r.events);
     this.syncSnapshots();
     this.handlePendingAsk();
+    this.scheduleBotTurn();
     if (this.engine!.snapshotFor(this.seats[0]!.id).phase === 'finished') void this.onFinished();
   }
 
@@ -336,6 +401,9 @@ export class Room {
     const ask = engine.currentAsk(askedId);
     if (!ask) return;
     this.sendTo(askedId, SERVER_EVENTS.skillAsk, ask);
+    // 被问者是人机：快速自动作答（弃权；不可弃权询问由引擎按默认处理——choice 取第一项、pickCards 取最前牌）
+    const askedSeat = this.seats.find((s) => s.id === askedId);
+    const timeoutMs = askedSeat?.isBot ? this.botAskMs : ask.timeoutMs ?? defaultRules.timeout.skillAskMs;
     this.askTimer = setTimeout(() => {
       this.askTimer = null;
       try {
@@ -346,7 +414,7 @@ export class Room {
       } catch (e) {
         this.abortGame(e);
       }
-    }, ask.timeoutMs ?? defaultRules.timeout.skillAskMs);
+    }, timeoutMs);
   }
 
   private cancelAskTimer(): void {
@@ -406,6 +474,68 @@ export class Room {
     if (t) {
       clearTimeout(t);
       this.autoPassTimers.delete(playerId);
+    }
+  }
+
+  // ---------- 人机 ----------
+
+  /** 每次动作结算后：轮到人机则排定时器自动行动 */
+  private scheduleBotTurn(): void {
+    this.cancelBotTurn();
+    if (!this.engine || this.phase !== 'playing') return;
+    const turnId = this.engine.snapshotFor(this.seats[0]!.id).turnPlayerId;
+    if (!turnId) return;
+    const seat = this.seats.find((s) => s.id === turnId);
+    if (!seat?.isBot) return;
+    this.botTimer = setTimeout(() => {
+      this.botTimer = null;
+      this.botAct(turnId);
+    }, this.botTurnMs);
+  }
+
+  /** 人机行动：能管就管（最小组合逐个尝试，规避留 2 禁收尾等拒绝），管不了就过
+   *  （吃过饼不能过、起牌必须出等由引擎兜底） */
+  private botAct(botId: string): void {
+    const engine = this.engine;
+    if (!engine || this.phase !== 'playing') return;
+    // 技能询问挂起：动作被拦，询问了结后 afterAction 会重排（此处兜底自愈）
+    if (engine.pendingAskPlayerId) {
+      this.scheduleBotTurn();
+      return;
+    }
+    if (engine.snapshotFor(this.seats[0]!.id).turnPlayerId !== botId) return;
+    const mySnap = engine.snapshotFor(botId);
+    const hand = mySnap.players.find((p) => p.id === botId)?.hand ?? [];
+    const combos = listPlayable(
+      hand,
+      mySnap.table,
+      defaultRules,
+      mySnap.orderReversed,
+      engine.soloJokerAllowed(botId)
+    );
+    let r: ActionResult | null = null;
+    for (const combo of combos) {
+      const t = engine.playCards(botId, combo.cards.map((c) => c.id));
+      if (t.ok) {
+        r = t;
+        break;
+      }
+    }
+    if (!r) {
+      const p = engine.pass(botId);
+      if (!p.ok) {
+        this.abortGame(new Error('人机无牌可出且不能过（引擎死锁守卫未兜住）'));
+        return;
+      }
+      r = p;
+    }
+    this.afterAction(r);
+  }
+
+  private cancelBotTurn(): void {
+    if (this.botTimer) {
+      clearTimeout(this.botTimer);
+      this.botTimer = null;
     }
   }
 

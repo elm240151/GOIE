@@ -306,6 +306,17 @@ body {
 .room-seat-ready {
   font-size: 12px;
   color: var(--text-dim);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.room-seat-remove {
+  padding: 2px 8px;
+  font-size: 12px;
+}
+.room-tag-bot {
+  background: var(--ink-10);
+  color: var(--text-dim);
 }
 .ready-on {
   color: var(--accent);
@@ -499,6 +510,16 @@ body {
 .seat-you {
   font-style: normal;
   color: var(--gold);
+  margin-left: 2px;
+}
+/* 人机标记 */
+.seat-bot {
+  font-style: normal;
+  color: var(--text-dim);
+  background: var(--ink-10);
+  border-radius: 3px;
+  padding: 0 3px;
+  font-size: 10px;
   margin-left: 2px;
 }
 .seat-meta {

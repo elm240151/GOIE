@@ -1123,6 +1123,221 @@ describe('引擎异常安全网', () => {
   });
 });
 
+/** 人机局（固定手牌或随机）：房主 = 真人，其余 = 人机（按 addBot 顺序） */
+function mkBotSetup(opts: { hands?: number[][]; startIdx?: number; hostRole?: string; botCount?: number } = {}): {
+  manager: RoomManager;
+  sockets: FakeSocket[];
+  hostId: string;
+  botIds: string[];
+  code: string;
+} {
+  const registry: RoleRegistry = new Map(listRoles().map((r) => [r.id, r]));
+  const deck = buildDeck(3);
+  const factory: RoomOptions['engineFactory'] = ({ players, startPlayerId }) =>
+    new GameEngine(defaultRules, players, {
+      rng: mulberry32(42),
+      startPlayerId: opts.startIdx != null ? players[opts.startIdx]!.id : startPlayerId,
+      roles: registry,
+      scores: {},
+      handsOverride: opts.hands
+        ? Object.fromEntries(players.map((p, i) => [p.id, opts.hands![i]!.map((id) => deck[id]!)]))
+        : undefined,
+    });
+  const mgr = new RoomManager({
+    roles: registry,
+    scoreStore: new MemoryScoreStore(),
+    autoPassMs: 30_000,
+    botTurnMs: 100,
+    botAskMs: 50,
+    engineFactory: factory,
+  });
+  const sockets = [mkSocket('s0')];
+  const { code, playerId: hostId } = mgr.create('房主', sockets[0]!);
+  const botCount = opts.hands ? opts.hands.length - 1 : opts.botCount ?? 1;
+  for (let i = 0; i < botCount; i++) mgr.addBot(sockets[0]!.id);
+  mgr.selectRole(sockets[0]!.id, opts.hostRole ?? 'flashpoint');
+  mgr.setReady(sockets[0]!.id, true);
+  const st = lastEmit<RoomState>(sockets[0]!, SERVER_EVENTS.roomUpdated)!;
+  const botIds = st.players.filter((p) => p.isBot).map((p) => p.id);
+  return { manager: mgr, sockets, hostId, botIds, code };
+}
+
+/** 推进到终局：人机由定时器自动行动，真人出最小可出组合、技能询问弃权 */
+function runBotGame(s: ReturnType<typeof mkBotSetup>): RoomState {
+  let guard = 0;
+  while (true) {
+    if (++guard > 5000) throw new Error('人机局模拟未收敛');
+    const st = lastEmit<RoomState>(s.sockets[0]!, SERVER_EVENTS.roomUpdated)!;
+    if (st.phase === 'finished') return st;
+    const snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    if (snap.pendingAsk) {
+      const asked = snap.pendingAsk.playerId;
+      if (s.botIds.includes(asked)) {
+        vi.advanceTimersByTime(100); // 人机询问自动作答
+      } else {
+        s.manager.useSkill(s.sockets[0]!.id, { askId: snap.pendingAsk.askId, choice: 'decline' });
+      }
+      continue;
+    }
+    const turnId = snap.turnPlayerId!;
+    if (s.botIds.includes(turnId)) {
+      vi.advanceTimersByTime(200); // 人机自动出牌/过牌
+      continue;
+    }
+    const me = snap.players.find((p) => p.id === turnId)!;
+    const combos = listPlayable(me.hand!, snap.table, defaultRules, snap.orderReversed);
+    if (combos.length === 0) {
+      s.manager.pass(s.sockets[0]!.id);
+      continue;
+    }
+    let moved = false;
+    for (const combo of combos) {
+      s.manager.play(s.sockets[0]!.id, combo.cards.map((c) => c.id));
+      const s2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+      if (s2.pendingAsk || s2.turnPlayerId !== turnId) {
+        moved = true;
+        break;
+      }
+    }
+    if (!moved) s.manager.pass(s.sockets[0]!.id);
+  }
+}
+
+describe('人机系统', () => {
+  it('大厅：房主逐次加入人机（白板自动准备），非房主/满员拒绝；可移除', () => {
+    const host = mkSocket('s0');
+    const { code } = manager.create('房主', host);
+    const p1 = mkSocket('s1');
+    manager.join(code, '玩家2', p1);
+    expect(() => manager.addBot(p1.id)).toThrow('只有房主');
+    manager.addBot(host.id);
+    let st = lastEmit<RoomState>(host, SERVER_EVENTS.roomUpdated)!;
+    expect(st.players).toHaveLength(3);
+    const bot = st.players[2]!;
+    expect(bot.isBot).toBe(true);
+    expect(bot.name).toBe('人机 1');
+    expect(bot.ready).toBe(true);
+    expect(bot.roleId).toBe('');
+    manager.addBot(host.id);
+    st = lastEmit<RoomState>(host, SERVER_EVENTS.roomUpdated)!;
+    expect(st.players[3]!.name).toBe('人机 2');
+    manager.join(code, '玩家3', mkSocket('s2'));
+    manager.join(code, '玩家4', mkSocket('s3'));
+    expect(() => manager.addBot(host.id)).toThrow('房间已满');
+    // 移除：非房主/非人机座位拒绝
+    expect(() => manager.removeBot(p1.id, bot.id)).toThrow('只有房主');
+    expect(() => manager.removeBot(host.id, st.players[0]!.id)).toThrow('只能移除人机');
+    manager.removeBot(host.id, bot.id);
+    st = lastEmit<RoomState>(host, SERVER_EVENTS.roomUpdated)!;
+    expect(st.players.some((p) => p.id === bot.id)).toBe(false);
+  });
+
+  it('人机白板自动行动：先手人机起最小单张、能管就管、打光获胜', () => {
+    vi.useFakeTimers();
+    const s = mkBotSetup({ hands: [[1, 6], [0, 2]], startIdx: 1 }); // 房主 [♠4,♠9]；人机 [♠3,♠5] 先手
+    s.manager.startGame(s.sockets[0]!.id);
+    let snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.turnPlayerId).toBe(s.botIds[0]);
+    vi.advanceTimersByTime(150); // 人机行动延迟
+    snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.table?.rank).toBe(3); // 起最小单张 ♠3
+    expect(snap.turnPlayerId).toBe(s.hostId);
+    // 房主恰好大一级压 ♠4 → 人机 ♠5 管上并打光 → 获胜
+    const hostHand = snap.players.find((p) => p.id === s.hostId)!.hand!;
+    s.manager.play(s.sockets[0]!.id, [hostHand.find((c) => c.rank === 4)!.id]);
+    snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.table?.rank).toBe(4);
+    vi.advanceTimersByTime(150);
+    snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.phase).toBe('finished');
+    expect(snap.winnerId).toBe(s.botIds[0]);
+  });
+
+  it('人机管不了就过：轮末对方补摸起牌', () => {
+    vi.useFakeTimers();
+    const s = mkBotSetup({ hands: [[1, 5], [0, 3]], startIdx: 1 }); // 房主 [♠4,♠8]；人机 [♠3,♠6] 先手
+    s.manager.startGame(s.sockets[0]!.id);
+    vi.advanceTimersByTime(150); // 人机起 ♠3
+    const snap0 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap0.table?.rank).toBe(3);
+    // 房主恰好大一级压 ♠4 → 人机 ♠6 压不了 → 自动过 → 轮末房主补摸起牌
+    s.manager.play(s.sockets[0]!.id, [1]);
+    vi.advanceTimersByTime(150);
+    const snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(emittedEvents(s.sockets[0]!).some((e) => e.type === 'passed' && e.playerId === s.botIds[0])).toBe(true);
+    expect(snap.table).toBeNull();
+    expect(snap.turnPlayerId).toBe(s.hostId);
+    expect(snap.players.find((p) => p.id === s.hostId)!.handCount).toBe(2); // 1 + 补摸 1
+  });
+
+  it('人机被技能询问（观股大涨自选）：短延迟自动拿最小牌', () => {
+    vi.useFakeTimers();
+    // 房主（观股）[3♠,9♠,10♠,J♠,Q♠]；人机 [3♥,3♣,5♠,8♠,6♥] 无 4/2/炸弹压不了
+    const s = mkBotSetup({ hands: [[0, 6, 7, 8, 9], [13, 26, 2, 5, 18]], hostRole: 'zecheng' });
+    s.manager.startGame(s.sockets[0]!.id);
+    s.manager.play(s.sockets[0]!.id, [0]); // 房主出单3 → 人机自动过 → 轮末观股询问房主
+    vi.advanceTimersByTime(150);
+    const mid = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid.pendingAsk?.playerId).toBe(s.hostId);
+    const ask = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask.kind).toBe('confirm');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask.askId!, choice: 'yes' });
+    // 大涨自选：先问房主 → 再问人机（无 socket，短延迟自动作答）
+    const ask1 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask1.kind).toBe('pickCards');
+    s.manager.useSkill(s.sockets[0]!.id, { askId: ask1.askId!, cardIds: [ask1.cards![0]!.id] });
+    const mid2 = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(mid2.pendingAsk?.playerId).toBe(s.botIds[0]);
+    vi.advanceTimersByTime(100); // 人机询问延迟 50ms → 自动拿最小
+    const after = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(after.pendingAsk).toBeNull();
+    expect(after.players.find((p) => p.id === s.hostId)!.handCount).toBe(5); // 4 + 大涨 1
+    expect(after.players.find((p) => p.id === s.botIds[0])!.handCount).toBe(6); // 5 + 大涨 1
+    expect(after.deckCount).toBe(147); // 162 − 发牌 10 − 亮 5
+  });
+
+  it('对局中不能加入/移除人机', () => {
+    vi.useFakeTimers();
+    const s = mkBotSetup({ hands: [[3, 4], [0, 7]], startIdx: 1 });
+    s.manager.startGame(s.sockets[0]!.id);
+    expect(() => s.manager.addBot(s.sockets[0]!.id)).toThrow('游戏已开始');
+    expect(() => s.manager.removeBot(s.sockets[0]!.id, s.botIds[0]!)).toThrow('游戏中不能移除人机');
+  });
+
+  it('整局模拟：人机自动打完随机局，战绩落盘、再来一局人机自动投票', async () => {
+    vi.useFakeTimers();
+    const s = mkBotSetup({ botCount: 2 }); // 1 真人 + 2 人机，随机手牌
+    s.manager.startGame(s.sockets[0]!.id);
+    let st = runBotGame(s);
+    for (let draws = 0; !st.winnerId && draws < 5; draws++) {
+      // 极小概率流局：人机自动投票回房间再来
+      s.manager.rematch(s.sockets[0]!.id);
+      s.manager.setReady(s.sockets[0]!.id, true);
+      s.manager.startGame(s.sockets[0]!.id);
+      st = runBotGame(s);
+    }
+    expect(st.phase).toBe('finished');
+    expect(st.winnerId).toBeTruthy();
+    const deltas = st.scoreDeltas!;
+    expect([s.hostId, ...s.botIds].reduce((sum, id) => sum + deltas[id]!, 0)).toBe(0); // 零和
+    // 战绩落盘含人机
+    const records = await s.manager.listScores();
+    const last = records[records.length - 1]!;
+    expect(last.players).toHaveLength(3);
+    expect(last.players.some((p) => p.name.startsWith('人机'))).toBe(true);
+    // 再来一局：人机自动投票 → 房主一票即回房间；人机保持自动准备，可直接开局
+    s.manager.rematch(s.sockets[0]!.id);
+    const st2 = lastEmit<RoomState>(s.sockets[0]!, SERVER_EVENTS.roomUpdated)!;
+    expect(st2.phase).toBe('lobby');
+    expect(st2.players.filter((p) => p.isBot).every((p) => p.ready)).toBe(true);
+    expect(st2.players.find((p) => p.id === s.hostId)!.ready).toBe(false);
+    s.manager.setReady(s.sockets[0]!.id, true);
+    s.manager.startGame(s.sockets[0]!.id);
+    const snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.roundLeaderId).toBe(st.winnerId); // 先手给上局赢家（可能是人机 → 自动行动）
+  });
+});
+
 describe('私密事件路由（窃笑）', () => {
   it('skill:peek 只发查看者、skill:peeked 只发被查看者，其余玩家两者都不收', () => {
     const s = setupRoom(3);

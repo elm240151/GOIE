@@ -22,6 +22,8 @@ export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
   const curseActiveIds = useStore((s) => s.curseActiveIds);
   const isTurn = snap?.turnPlayerId === player.id && snap?.phase === 'playing';
   const role = getRole(player.roleId);
+  // 人机标记（房态里有 isBot；快照不含此字段）
+  const isBot = useStore((s) => s.room?.players.find((p) => p.id === player.id)?.isBot ?? false);
 
   // 过牌气泡两阶段：入场弹起 → 2.2s 淡出 → 2.6s 卸载
   const passedTs = passedAt[player.id];
@@ -102,9 +104,10 @@ export default function PlayerSeat({ player, isMe, turnLeft, onView }: Props) {
       <div className="seat-name">
         {player.name}
         {isMe && <em className="seat-you">{STR.room.you}</em>}
+        {isBot && <em className="seat-bot">{STR.room.botTag}</em>}
       </div>
       <div className="seat-meta">
-        <span className="seat-role">{role?.name ?? STR.game.seatRoleUnknown}</span>
+        <span className="seat-role">{isBot ? STR.room.bot : role?.name ?? STR.game.seatRoleUnknown}</span>
         <span className={`seat-handcount ${drawnPop ? 'seat-handcount-pop' : ''}`}>
           {player.handCount >= 0 ? `×${player.handCount}/${handLimitOf(player.roleId)}` : `×${STR.game.handUnknown}`}
         </span>

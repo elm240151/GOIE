@@ -9,6 +9,8 @@ export const CLIENT_EVENTS = {
   roomStart: 'room:start',
   roomRematch: 'room:rematch',
   roomLeave: 'room:leave',
+  roomAddBot: 'room:addBot',
+  roomRemoveBot: 'room:removeBot',
   gamePlay: 'game:play',
   gamePass: 'game:pass',
   gameUseSkill: 'game:useSkill',
@@ -56,6 +58,11 @@ export interface ReadyPayload {
   ready: boolean;
 }
 
+/** 房主移除指定人机座位 */
+export interface RoomRemoveBotPayload {
+  playerId: string;
+}
+
 export interface PlayPayload {
   cardIds: number[];
   /** 端庄（轴承）翻面：翻面的桌面牌 id（缺省 = 普通出牌） */
@@ -81,6 +88,8 @@ export interface RoomPlayerView {
   ready: boolean;
   connected: boolean;
   isHost: boolean;
+  /** 人机（白板无角色，房主可加入/移除） */
+  isBot: boolean;
 }
 
 export interface RoomState {

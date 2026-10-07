@@ -156,6 +156,8 @@ interface AppStore {
   setReady(ready: boolean): Promise<void>;
   startGame(): Promise<void>;
   rematch(): Promise<void>;
+  addBot(): Promise<void>;
+  removeBot(playerId: string): Promise<void>;
   fetchScores(): Promise<void>;
 
   // 出牌
@@ -384,6 +386,16 @@ export const useStore = create<AppStore>((set, get) => ({
 
   async rematch() {
     const res = await emitAck(CLIENT_EVENTS.roomRematch);
+    if (!res.ok) get().toast('error', (res as { error: string }).error);
+  },
+
+  async addBot() {
+    const res = await emitAck(CLIENT_EVENTS.roomAddBot);
+    if (!res.ok) get().toast('error', (res as { error: string }).error);
+  },
+
+  async removeBot(playerId) {
+    const res = await emitAck(CLIENT_EVENTS.roomRemoveBot, { playerId });
     if (!res.ok) get().toast('error', (res as { error: string }).error);
   },
 

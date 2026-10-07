@@ -10,6 +10,7 @@ import {
   type RoomCreatePayload,
   type RoomJoinPayload,
   type RoomRejoinPayload,
+  type RoomRemoveBotPayload,
   type ScoreListAck,
   type SkillUsePayload,
 } from '@gdys/shared';
@@ -76,6 +77,24 @@ export function registerHandlers(io: Server, rooms: RoomManager): void {
     socket.on(CLIENT_EVENTS.roomRematch, (_payload: unknown, ack?: (res: AckResult) => void) => {
       try {
         rooms.rematch(socket.id);
+        ack?.({ ok: true });
+      } catch (e) {
+        ack?.({ ok: false, error: messageOf(e) });
+      }
+    });
+
+    socket.on(CLIENT_EVENTS.roomAddBot, (_payload: unknown, ack?: (res: AckResult) => void) => {
+      try {
+        rooms.addBot(socket.id);
+        ack?.({ ok: true });
+      } catch (e) {
+        ack?.({ ok: false, error: messageOf(e) });
+      }
+    });
+
+    socket.on(CLIENT_EVENTS.roomRemoveBot, (payload: RoomRemoveBotPayload | undefined, ack?: (res: AckResult) => void) => {
+      try {
+        rooms.removeBot(socket.id, String(payload?.playerId ?? ''));
         ack?.({ ok: true });
       } catch (e) {
         ack?.({ ok: false, error: messageOf(e) });
