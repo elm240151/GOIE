@@ -137,7 +137,7 @@ export const STR = {
     confirm: '确定',
     decline: '放弃',
     submit: '提交',
-    cutInHint: '选择接牌组合（需含与被压牌相同花色的真牌）',
+    cutInHint: '选择接牌组合（需含与被压牌相同花色的牌，王按颜色算）',
     selfFollowHint: '选择要压的牌（按正常管牌规则，可连压）',
     proxyPlayHint: '选择要打的牌（按正常管牌规则，打出视作硝烟打出）',
     devSwapTitle: '自定义摸牌',

@@ -4,6 +4,7 @@ import { defaultRules } from '../config';
 import { buildDeck } from '../engine/deck';
 import { GameEngine, type EnginePlayer } from '../engine/engine';
 import { mulberry32 } from '../engine/rng';
+import guoTT from './guo-tt';
 import patrick from './patrick';
 import type { RoleDef, RoleRegistry, SkillAsk } from './types';
 
@@ -220,5 +221,81 @@ describe('第七席 圣帕特里克（无名）', () => {
     expect(snap.table?.rank).toBe(4);
     expect(snap.turnPlayerId).toBe('p0');
     expect(snap.players[0]!.handCount).toBe(5 - 1 + 4); // X = ♠4 = 4
+  });
+
+  it('王按颜色双花色计入 X（2026-10-07 用户修正）：被压 ♠3♠3，无名 [♠4 + 小王当4] → X = 4 + 4 = 8', () => {
+    const hands2 = {
+      p0: [...suitOf(3, 0, 2), ...byRank(9, 3)],
+      p1: [suitOf(4, 0, 1)[0]!, byRank(16, 1)[0]!, ...byRank(10, 3)], // ♠4 + 小王
+    };
+    const engine = mkEngine(hands2, { p1: patrick });
+    expect(engine.playCards('p0', [hands2.p0[0]!.id, hands2.p0[1]!.id]).ok).toBe(true);
+    const r2 = engine.playCards('p1', [hands2.p1[0]!.id, hands2.p1[1]!.id]); // 对4（♠4 + 小王当4）压对3
+    expect(r2.ok).toBe(true);
+    const events = r2.ok ? r2.events : [];
+    expect(events.some((e) => e.type === 'skill:triggered' && e.skillId === 'wu-ming')).toBe(true);
+    // X = ♠4 4（真牌命中）+ 小王 4（黑 ♠♣ 与 ♠ 相交，按所当点数 4）= 8
+    expect(engine.snapshotFor('p1').players[0]!.handCount).toBe(5 - 2 + 8);
+  });
+
+  it('王颜色不命中不计入：被压 ♥3♥3，无名 [♥4 + 小王当4] → X = 4（小王黑，不命中 ♥）', () => {
+    const hands2 = {
+      p0: [...suitOf(3, 1, 2), ...byRank(9, 3)],
+      p1: [suitOf(4, 1, 1)[0]!, byRank(16, 1)[0]!, ...byRank(10, 3)], // ♥4 + 小王
+    };
+    const engine = mkEngine(hands2, { p1: patrick });
+    expect(engine.playCards('p0', [hands2.p0[0]!.id, hands2.p0[1]!.id]).ok).toBe(true);
+    const r2 = engine.playCards('p1', [hands2.p1[0]!.id, hands2.p1[1]!.id]); // 对4（♥4 + 小王当4）
+    expect(r2.ok).toBe(true);
+    const events = r2.ok ? r2.events : [];
+    expect(events.some((e) => e.type === 'skill:triggered' && e.skillId === 'wu-ming')).toBe(true);
+    // X = ♥4 = 4；小王（黑 ♠♣）与被压 {♥} 不相交，不计
+    expect(engine.snapshotFor('p1').players[0]!.handCount).toBe(5 - 2 + 4);
+  });
+
+  it('插队资格与答案校验按王双花色：被压 ♠3♣3，无名 [♦4 + 小王当4]（唯一黑牌是王）→ 插队询问 + X = 4', () => {
+    const hands2 = {
+      p0: [byRank(3, 2)[0]!, deck.filter((c) => c.rank === 3)[2]!, ...byRank(9, 3)], // ♠3♣3
+      p1: byRank(13, 5), // 中间人无牌可接
+      p2: [suitOf(4, 3, 1)[0]!, byRank(16, 1)[0]!, ...suitOf(10, 1, 2), ...suitOf(10, 3, 1)], // ♦4 + 小王 + 3×10（♥♥♦，无 ♠♣）
+    };
+    const engine = mkEngine(hands2, { p2: patrick });
+    const r = engine.playCards('p0', [hands2.p0[0]!.id, hands2.p0[1]!.id]);
+    expect(r.ok).toBe(true);
+    expect(r.ok && r.suspended).toBe(true); // 王双花色命中 → 插队询问
+    const ask = r.ok ? (r.pendingAsk as SkillAsk) : null;
+    expect(ask?.kind).toBe('cutIn');
+    const a = engine.resolveAsk('p2', {
+      askId: ask!.askId!,
+      choice: 'yes',
+      cardIds: [hands2.p2[0]!.id, hands2.p2[1]!.id],
+    });
+    expect(a.ok).toBe(true);
+    const snap = engine.snapshotFor('p2');
+    expect(snap.table?.rank).toBe(4);
+    expect(snap.turnPlayerId).toBe('p0');
+    expect(snap.players[0]!.handCount).toBe(5 - 2 + 4); // X = 小王当 4 = 4（♦ 不命中 ♠♣）
+  });
+
+  it('被压牌是王（诅咒单王响应）：王双花色进被压花色集合 → 炸弹 ♥7♦7+双王 → X = 小王 7', () => {
+    const hands2 = {
+      p0: [suitOf(3, 0, 1)[0]!, byRank(16, 1)[0]!, ...byRank(9, 2)], // 橐驼：♠3 起牌，单王响应
+      p1: [suitOf(4, 0, 1)[0]!, suitOf(7, 1, 1)[0]!, suitOf(7, 3, 1)[0]!, byRank(16, 2)[1]!, byRank(17, 1)[0]!, suitOf(8, 1, 1)[0]!], // 无名：♠4 响应 + 炸弹 ♥7♦7+双王 + 余牌
+    };
+    const engine = mkEngine(hands2, { p0: guoTT, p1: patrick });
+    expect(engine.playCards('p0', [hands2.p0[0]!.id]).ok).toBe(true); // 起 ♠3
+    expect(engine.playCards('p1', [hands2.p1[0]!.id]).ok).toBe(true); // ♠4 响应 → p0 摸 4
+    expect(engine.playCards('p0', [hands2.p0[1]!.id]).ok).toBe(true); // 单王响应 ♠4
+    const r2 = engine.playCards('p1', hands2.p1.slice(1, 5).map((c) => c.id)); // 炸弹 ♥7♦7+双王 压单王
+    expect(r2.ok).toBe(true);
+    // 橐驼地坛判定（炸弹 ≥3 张）先挂起——弃权后无名加牌照常结算
+    const ask = r2.ok ? (r2.pendingAsk as SkillAsk) : null;
+    expect(ask?.kind).toBe('confirm');
+    const a = engine.resolveAsk('p0', { askId: ask!.askId!, choice: 'decline' });
+    expect(a.ok).toBe(true);
+    const events = a.ok ? a.events : [];
+    expect(events.some((e) => e.type === 'skill:triggered' && e.skillId === 'wu-ming')).toBe(true);
+    // 被压单王黑 ♠♣：只有小王（当 7）命中 → X = 7；大王红、♥7♦7 不命中
+    expect(engine.snapshotFor('p1').players[0]!.handCount).toBe(4 - 1 + 4 - 1 + 7);
   });
 });

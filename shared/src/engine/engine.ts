@@ -5,7 +5,7 @@
 // - 技能优先：每个判定点 = 基础规则校验 → 角色钩子覆写（allowAnyway 放行 / ok:false 否决）
 // - 角色只能通过 EngineFacade + ActionMods 有界改牌，无法破坏引擎不变量
 // - 技能询问：钩子可返回 ask 挂起动作，服务端询问玩家后 resolveAsk 重跑提问钩子（钩子须纯：返回 ask 前不得改状态）
-import { JOKER_BIG, RANK_2, RANK_3, RANK_A, SUITS, isJoker, isRank, pointValue, rankLabel, type Card, type Rank } from '../cards';
+import { JOKER_BIG, RANK_2, RANK_3, RANK_A, SUITS, isJoker, isRank, jokerSuits, pointValue, rankLabel, type Card, type Rank } from '../cards';
 import { type RuleConfig } from '../config';
 import { canBeat, exactFollows, isExactFollow, listPlayable, ouYaCovers, parseCombo, relabelCombo, validateFlipResponse, yaoWuCovers, type Combo } from './combos';
 import { buildDeck, shuffle } from './deck';
@@ -520,13 +520,11 @@ export class GameEngine {
         this.advanceTurn();
         return fail(`【抽你】本回合只能由指定玩家响应`);
       }
-      const playedSuits = new Set(
-        this.tableCombo!.cards.filter((c) => !isJoker(c)).map((c) => c.suit)
-      );
-      const sameSuit = combo.cards.some((c) => !isJoker(c) && playedSuits.has(c.suit));
+      const playedSuits = this.suitsOf(this.tableCombo!.cards);
+      const sameSuit = combo.cards.some((c) => this.suitsMatch(playedSuits, c));
       if (!sameSuit) {
         this.advanceTurn();
-        return fail('响应牌中需要与被压的牌相同花色的真牌');
+        return fail('响应牌中需要与被压的牌相同花色的牌（王按颜色算）');
       }
       this.requeue(this.commitCutIn(playerId, combo));
       return this.ok();
@@ -889,9 +887,7 @@ export class GameEngine {
     this.tableSideHidden = [];
     this.tableResponderRestrict = null;
     this.tableRankNote = null;
-    const prevSuits: Set<number> = this.tableCombo
-      ? new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit))
-      : new Set();
+    const prevSuits: Set<number> = this.tableCombo ? this.suitsOf(this.tableCombo.cards) : new Set();
     const prevCombo = this.tableCombo;
     this.tableCombo = combo;
     if (flips) this.resyncTableOrder(); // 洄游：切换后桌面按新牌序重新解析（rank 约定反转）
@@ -937,7 +933,7 @@ export class GameEngine {
     if (flips) this.resyncTableOrder(); // 洄游：切换后桌面按新牌序重新解析
     if (pressedKind === 'top') {
       this.prevTableOwnerId = this.tableOwnerId === '' ? null : this.tableOwnerId;
-      this.prevTableSuits = new Set(remainder.filter((c) => !isJoker(c)).map((c) => c.suit));
+      this.prevTableSuits = this.suitsOf(remainder);
       this.prevTableCombo =
         this.prevTableOwnerId == null
           ? null
@@ -1028,11 +1024,26 @@ export class GameEngine {
     return this.afterPlayCommitted(playerId);
   }
 
-  /** 无名加牌 X：响应牌（当前桌面）中与被压牌同花色的真牌点数总和（2 记 2、A 记 1，2026-10-06 用户确认）；0 = 无同花色 */
+  /** 一手牌的花色集合：王按颜色双花色展开（小王 ♠♣、大王 ♥♦）。
+   *  无名同花色判定统一入口（2026-10-07 用户修正：王的点数按包含该颜色的两个花色算）。 */
+  private suitsOf(cards: Card[]): Set<number> {
+    return new Set(cards.flatMap((c) => (isJoker(c) ? jokerSuits(c) : [c.suit])));
+  }
+
+  /** 牌是否属于某花色集合（王按颜色双花色命中） */
+  private suitsMatch(suits: Set<number>, c: Card): boolean {
+    return isJoker(c) ? jokerSuits(c).some((s) => suits.has(s)) : suits.has(c.suit);
+  }
+
+  /** 无名加牌 X：响应牌（当前桌面）中与被压牌同花色的牌点数总和（2 记 2、A 记 1，2026-10-06 用户确认；
+   *  王按颜色双花色（小王 ♠♣、大王 ♥♦）计入所当点数——2026-10-07 用户修正）；0 = 无同花色 */
   private matchSuitDrawX(): number {
     return this.tableCombo!.cards
-      .filter((c) => !isJoker(c) && this.prevTableSuits.has(c.suit))
-      .reduce((s, c) => s + pointValue(c.rank), 0);
+      .filter((c) => this.suitsMatch(this.prevTableSuits, c))
+      .reduce(
+        (s, c) => s + pointValue(this.tableCombo!.resolved.find((r) => r.cardId === c.id)?.rank ?? c.rank),
+        0
+      );
   }
 
   /** 出牌后的收尾：夺权 → 出完即胜/留2判负 → 吐饼问询（最先）→ 插队/无名加牌后续 → 插队问询/轮到下家 */
@@ -1537,9 +1548,7 @@ export class GameEngine {
     this.tableSideHidden = [];
     this.tableResponderRestrict = null;
     this.tableRankNote = null;
-    const prevSuits: Set<number> = this.tableCombo
-      ? new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit))
-      : new Set();
+    const prevSuits: Set<number> = this.tableCombo ? this.suitsOf(this.tableCombo.cards) : new Set();
     const prevCombo = this.tableCombo;
     this.tableCombo = combo;
     if (flips) this.resyncTableOrder();
@@ -1648,7 +1657,7 @@ export class GameEngine {
       this.advanceTurn();
       return this.ok();
     }
-    const playedSuits = new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit));
+    const playedSuits = this.suitsOf(this.tableCombo.cards);
     const qualifying = listPlayable(
       this.hands.get(cutter.id)!,
       this.tableCombo,
@@ -1656,7 +1665,7 @@ export class GameEngine {
       this.orderReversed(),
       this.soloJokerAllowed(cutter.id),
       this.liu2ExemptFor(cutter.id)
-    ).some((c) => c.cards.some((card) => !isJoker(card) && playedSuits.has(card.suit)));
+    ).some((c) => c.cards.some((card) => this.suitsMatch(playedSuits, card)));
     if (!qualifying) {
       this.advanceTurn();
       return this.ok();
@@ -1672,9 +1681,7 @@ export class GameEngine {
     this.aftermathMode = 'cutIn';
     this.cutInVictimId = this.tableOwnerId;
     this.removeCards(playerId, combo.cards);
-    const prevSuits: Set<number> = this.tableCombo
-      ? new Set(this.tableCombo.cards.filter((c) => !isJoker(c)).map((c) => c.suit))
-      : new Set();
+    const prevSuits: Set<number> = this.tableCombo ? this.suitsOf(this.tableCombo.cards) : new Set();
     if (this.tableCombo) this.discardCards([...this.tableCombo.cards]);
     const prevCombo = this.tableCombo;
     this.tableCombo = combo;
