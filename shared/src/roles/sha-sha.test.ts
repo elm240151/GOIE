@@ -1,7 +1,8 @@
 // 角色测试：煞蔱 Sharry —— 技能【约等】+【直播】（均非亡语，2026-10-06 用户裁定）。
 // 【约等】每回合一次：压别人的手牌时（触发 A），或拥有牌权时（触发 B，本回合相当于出了 0 张牌、
-//   不用摸牌），可收回刚打的那一手牌（桌面退回被压的一手），与一名随机角色均分手牌
-//   （她拿 ⌊X/2⌋、对方拿其余），从她下家继续接牌（桌面空则她重新起牌）。弃权不消耗。
+//   不用摸牌），可收回刚打的那一手牌（桌面退回被压的一手），选择一名角色均分手牌
+//   （她拿 ⌊X/2⌋、对方拿其余；2026-10-07 用户修正：由煞蔱选人、不再随机），从她下家继续接牌
+//   （桌面空则她重新起牌）。弃权不消耗。
 // 【直播】每当她打出大于一张的牌后有人压她的牌：交给对方一张牌（不能给出最后一张），或令对方摸两张牌。
 //   障目（辛歼）：指向性技能以辛歼为目标先猜手牌数——猜中照常 + 摸 1-3；猜错直播失效。
 import { describe, expect, it } from 'vitest';
@@ -75,6 +76,11 @@ describe('煞蔱：约等 + 直播', () => {
     expect(engine.playCards('p0', [deck[3]!.id]).ok).toBe(true); // 煞蔱压 ♠6 → 约等再次询问
     const c2 = ask(engine);
     expect(engine.resolveAsk('p0', { askId: c2.askId!, choice: 'yes' }).ok).toBe(true);
+    // 选人阶段：候选 = 其他存活玩家（2 人局只有 p1）
+    const pick = ask(engine);
+    expect(pick.kind).toBe('pickTarget');
+    expect(pick.targetCandidates).toEqual(['p1']);
+    expect(engine.resolveAsk('p0', { askId: pick.askId!, targetPlayerId: 'p1' }).ok).toBe(true);
     // 收回 ♠6（手牌 ♠7♠6 共 2 张）与 p1（♣5 共 1 张）均分：X = 3 → 煞蔱 1、p1 2
     const snap = engine.snapshotFor('p0');
     expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(1);
@@ -98,6 +104,10 @@ describe('煞蔱：约等 + 直播', () => {
     const a = ask(engine);
     expect(a.prompt).toContain('约等');
     expect(engine.resolveAsk('p0', { askId: a.askId!, choice: 'yes' }).ok).toBe(true);
+    // 选人：p1
+    const pick = ask(engine);
+    expect(pick.kind).toBe('pickTarget');
+    expect(engine.resolveAsk('p0', { askId: pick.askId!, targetPlayerId: 'p1' }).ok).toBe(true);
     // 回退后：桌面 = 对 2、轮到对面接牌
     let s = engine.snapshotFor('p0');
     expect(s.turnPlayerId).toBe('p1');
@@ -122,6 +132,10 @@ describe('煞蔱：约等 + 直播', () => {
     const c = ask(engine);
     expect(c.prompt).toContain('牌权');
     expect(engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' }).ok).toBe(true);
+    // 选人：p1
+    const pick = ask(engine);
+    expect(pick.kind).toBe('pickTarget');
+    expect(engine.resolveAsk('p0', { askId: pick.askId!, targetPlayerId: 'p1' }).ok).toBe(true);
     // 收回 ♠5（2 张：♠A♠5）与 p1（2 张）均分：X = 4 → 煞蔱 2、p1 2；不用摸牌
     const snap = engine.snapshotFor('p0');
     expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(2);
@@ -130,6 +144,86 @@ describe('煞蔱：约等 + 直播', () => {
     expect(snap.turnPlayerId).toBe('p0'); // 桌面空 → 她重新起牌
     expect(snap.pendingAsk).toBeNull();
     assertConserved(engine);
+  });
+
+  it('约等选人阶段弃权（含超时自动弃权）：约等不消耗、可再次触发', () => {
+    const hands = {
+      p0: [deck[1]!, deck[3]!, deck[4]!], // 煞蔱：♠4 压、♠6 压（收回）、♠7 陪洗
+      p1: [deck[0]!, deck[2]!, deck[28]!], // ♠3 起牌、♠5 压、♣5 陪洗
+    };
+    const engine = mkEngine(hands, { p0: shaSha }, 'p1');
+    expect(engine.playCards('p1', [deck[0]!.id]).ok).toBe(true);
+    expect(engine.playCards('p0', [deck[1]!.id]).ok).toBe(true); // 压 ♠4 → 约等询问
+    const c = ask(engine);
+    expect(engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' }).ok).toBe(true);
+    const pick = ask(engine);
+    expect(pick.kind).toBe('pickTarget');
+    // 选人阶段弃权（客户端无弃权按钮，超时自动弃权走此路）
+    expect(engine.resolveAsk('p0', { askId: pick.askId!, choice: 'decline' }).ok).toBe(true);
+    const s = engine.snapshotFor('p0');
+    expect((s.players.find((p) => p.id === 'p0')!.roleState as { yueDengUsed: boolean }).yueDengUsed).toBe(false);
+    expect(s.pendingAsk).toBeNull();
+    expect(s.table?.rank).toBe(4); // 桌面未回退（♠4 还在桌上）
+    // 不消耗：再次压牌仍可触发约等
+    expect(engine.playCards('p1', [deck[2]!.id]).ok).toBe(true); // p1 压 ♠5
+    expect(engine.playCards('p0', [deck[3]!.id]).ok).toBe(true); // 煞蔱压 ♠6 → 约等再次询问
+    const c2 = ask(engine);
+    expect(c2.prompt).toContain('约等');
+    expect(engine.resolveAsk('p0', { askId: c2.askId!, choice: 'yes' }).ok).toBe(true);
+    const pick2 = ask(engine);
+    expect(engine.resolveAsk('p0', { askId: pick2.askId!, targetPlayerId: 'p1' }).ok).toBe(true);
+    // 均分照常：X = 2 + 1 = 3 → 煞蔱 1、p1 2
+    const snap = engine.snapshotFor('p0');
+    expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(1);
+    expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(2);
+    assertConserved(engine);
+  });
+
+  it('约等 3 人局：候选含全部其他存活玩家，可任选其一均分', () => {
+    const hands = {
+      p0: [deck[1]!, deck[3]!, deck[4]!], // 煞蔱：♠4 压、♠6 压（收回）、♠7 陪洗
+      p1: [deck[0]!, deck[2]!, deck[28]!], // ♠3 起牌、♠5 压、♣5 陪洗
+      p2: [deck[5]!, deck[6]!], // ♠8♠9 陪洗
+    };
+    const engine = mkEngine(hands, { p0: shaSha }, 'p1');
+    expect(engine.playCards('p1', [deck[0]!.id]).ok).toBe(true);
+    expect(engine.pass('p2').ok).toBe(true); // 3 人局轮转：p1 → p2 过 → p0
+    expect(engine.playCards('p0', [deck[1]!.id]).ok).toBe(true);
+    const c = ask(engine);
+    expect(engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' }).ok).toBe(true);
+    const pick = ask(engine);
+    expect(pick.targetCandidates).toEqual(['p1', 'p2']);
+    expect(engine.resolveAsk('p0', { askId: pick.askId!, targetPlayerId: 'p2' }).ok).toBe(true);
+    // 与 p2 均分：X = 3（煞蔱收回 ♠4 后）+ 2 = 5 → 煞蔱 ⌊5/2⌋ = 2、p2 3；p1 不受影响
+    const snap = engine.snapshotFor('p0');
+    expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(2);
+    expect(snap.players.find((p) => p.id === 'p2')!.handCount).toBe(3);
+    expect(snap.players.find((p) => p.id === 'p1')!.handCount).toBe(2);
+    expect(snap.tableOwnerId).toBe('p1'); // 桌面回退到 ♠3
+    assertConserved(engine);
+  });
+
+  it('约等选辛歼 + 障目猜错：约等失效、不消耗，牌局照常继续', () => {
+    const hands = {
+      p0: [deck[1]!, deck[3]!, deck[4]!], // 煞蔱：♠4 压、♠6 压（收回）、♠7 陪洗
+      p1: [deck[0]!, deck[2]!, deck[28]!], // 辛歼：♠3 起牌、♠5 压、♣5 陪洗
+    };
+    const engine = mkEngine(hands, { p0: shaSha, p1: xinJian }, 'p1');
+    expect(engine.playCards('p1', [deck[0]!.id]).ok).toBe(true);
+    expect(engine.playCards('p0', [deck[1]!.id]).ok).toBe(true);
+    const c = ask(engine);
+    expect(engine.resolveAsk('p0', { askId: c.askId!, choice: 'yes' }).ok).toBe(true);
+    const pick = ask(engine);
+    expect(engine.resolveAsk('p0', { askId: pick.askId!, targetPlayerId: 'p1' }).ok).toBe(true);
+    // 障目：猜辛歼手牌数（实际 2 张），猜 3 → 猜错
+    const g = ask(engine);
+    expect(g.kind).toBe('guess');
+    expect(engine.resolveAsk('p0', { askId: g.askId!, guess: 3 }).ok).toBe(true);
+    const s = engine.snapshotFor('p0');
+    expect((s.players.find((p) => p.id === 'p0')!.roleState as { yueDengUsed: boolean }).yueDengUsed).toBe(false);
+    expect(s.pendingAsk).toBeNull();
+    expect(s.table?.rank).toBe(4); // 约等失效：桌面未回退（♠4 仍在桌上）
+    // 辛歼在场：162 口径不适用（私有牌堆 54 张不在快照守恒内），与既有的约等+障目猜中用例一致
   });
 
   it('直播：交给对方一张牌（不能给出最后一张）', () => {
@@ -228,6 +322,10 @@ describe('煞蔱：约等 + 直播', () => {
     const c1 = ask(engine);
     expect(c1.prompt).toContain('约等');
     expect(engine.resolveAsk('p0', { askId: c1.askId!, choice: 'yes' }).ok).toBe(true);
+    // 选人：选辛歼 → 障目门控先猜手牌数
+    const pick = ask(engine);
+    expect(pick.kind).toBe('pickTarget');
+    expect(engine.resolveAsk('p0', { askId: pick.askId!, targetPlayerId: 'p1' }).ok).toBe(true);
     // 障目：猜辛歼手牌数（♠5♣5 共 2 张）
     const g = ask(engine);
     expect(g.kind).toBe('guess');

@@ -2,16 +2,19 @@
 // 【约等】每回合（轮）限一次，两个触发点（弃权不消耗，生效才消耗）：
 //   A. 你压别人的手牌时（本手出牌者是你且上一手有归属者且不是你——归属改写后视作别人打出则不触发）；
 //   B. 你拥有牌权时（轮末你最后出牌：该回合相当于出了 0 张牌，不用摸牌即可发动，2026-10-06 用户确认）。
-//   效果：收回你刚打的那一手牌（桌面回退上一手、桌旁边牌随弃）→ 与一名随机角色均分手牌（合洗随机分，
-//   你拿 ⌊X/2⌋、对方拿其余，X 为双方手牌总数）→ 从你下家继续接牌（引擎 yueDengRevert）。
+//   效果：收回你刚打的那一手牌（桌面回退上一手、桌旁边牌随弃）→ 与一名你选定的角色均分手牌（合洗随机分，
+//   你拿 ⌊X/2⌋、对方拿其余，X 为双方手牌总数；2026-10-07 用户修正：由你选人，不再随机）→
+//   从你下家继续接牌（引擎 yueDengRevert）。
 //   非亡语（2026-10-06 用户裁定）：打光压出最后一手直接获胜，约等不再询问。
 // 【直播】每当你打出大于一张的牌后有人压你的牌，你可选择一项（可放弃、不限次）：
 //   ①交给对方一张牌（手牌 ≥2 时才有此选项，不能给出最后一张）②令对方摸两张牌。
-import type { HookContext, HookResult, RoleDef } from './types';
+import type { AskAnswer, HookContext, HookResult, RoleDef } from './types';
 
 interface ShaShaState {
   /** 本回合是否已发动约等（生效才消耗） */
   yueDengUsed: boolean;
+  /** 约等确认已答 yes、正在等待选人（pickTarget） */
+  yueDengPick: boolean;
   /** 障目再入：'yue-deng' = 约等目标待门控、'zhi-bo' = 直播待门控 */
   gate: 'yue-deng' | 'zhi-bo' | null;
   /** 障目再入：门控中的目标玩家 */
@@ -25,14 +28,34 @@ interface ShaShaState {
 const nameOf = (ctx: HookContext, id: string): string =>
   ctx.game.players().find((p) => p.id === id)?.name ?? id;
 
-/** 约等确认后：随机选一名对象（排除淘汰/血压保护者）→ 障目门控 → 提交 modify.yueDeng */
-function submitYueDeng(ctx: HookContext, st: ShaShaState): HookResult {
-  const others = ctx.game
+/** 约等选人询问（候选：其他未淘汰、非血压保护玩家） */
+function yueDengPickAsk(ctx: HookContext, st: ShaShaState): HookResult {
+  const candidates = ctx.game
     .players()
     .filter((p) => p.id !== ctx.self.id && !ctx.game.eliminated(p.id) && !ctx.game.bpProtected(p.id))
     .map((p) => p.id);
-  if (others.length === 0) return { ok: false, reason: '【约等】没有可均分的对象' };
-  const t = others[Math.floor(ctx.rng() * others.length)]!;
+  if (candidates.length === 0) return { ok: false, reason: '【约等】没有可均分的对象' };
+  st.yueDengPick = true;
+  return {
+    ok: true,
+    ask: {
+      kind: 'pickTarget',
+      prompt: '【约等】选择均分对象（你拿 ⌊X/2⌋、对方拿其余，X 为双方手牌总数）',
+      targetCandidates: candidates,
+    },
+  };
+}
+
+/** 约等选人回答：非法/弃权（含超时）= 约等放弃、不消耗 */
+function yueDengPickAnswer(ctx: HookContext, st: ShaShaState, a: AskAnswer): HookResult | void {
+  st.yueDengPick = false;
+  const t = a.targetPlayerId;
+  if (!t || t === ctx.self.id || ctx.game.eliminated(t) || ctx.game.bpProtected(t)) return;
+  return submitYueDeng(ctx, st, t);
+}
+
+/** 约等确认后：对选定对象障目门控 → 提交 modify.yueDeng */
+function submitYueDeng(ctx: HookContext, st: ShaShaState, t: string): HookResult {
   st.gate = 'yue-deng';
   st.gateTarget = t;
   const cont = (): HookResult => {
@@ -46,7 +69,7 @@ function submitYueDeng(ctx: HookContext, st: ShaShaState): HookResult {
   if (g) {
     if (st.gate && !('ask' in g)) {
       st.gate = null;
-      st.gateTarget = null; // 障目已封锁（猜错后随机目标≠辛歼）：技能失效
+      st.gateTarget = null; // 障目已封锁（猜错后对他人发动）：技能失效
     }
     return g;
   }
@@ -135,7 +158,7 @@ const shaSha: RoleDef = {
       id: 'yue-deng',
       name: '约等',
       description:
-        '每回合一次：你压别人的手牌时，或你拥有牌权时（本回合相当于出了 0 张牌、不用摸牌），可收回刚打的那一手牌（桌面退回被压的一手），与一名随机角色均分手牌（你拿 ⌊X/2⌋、对方拿其余），从你下家继续接牌。弃权不消耗。',
+        '每回合一次：你压别人的手牌时，或你拥有牌权时（本回合相当于出了 0 张牌、不用摸牌），可收回刚打的那一手牌（桌面退回被压的一手），选择一名角色与其均分手牌（你拿 ⌊X/2⌋、对方拿其余），从你下家继续接牌。弃权不消耗。',
     },
     {
       id: 'zhi-bo',
@@ -145,7 +168,7 @@ const shaSha: RoleDef = {
     },
   ],
   setup(): ShaShaState {
-    return { yueDengUsed: false, gate: null, gateTarget: null, zhiboStage: null, zhiboTarget: null };
+    return { yueDengUsed: false, yueDengPick: false, gate: null, gateTarget: null, zhiboStage: null, zhiboTarget: null };
   },
   hooks: {
     afterPlay(ctx) {
@@ -155,10 +178,12 @@ const shaSha: RoleDef = {
       if (g0) return g0;
       const a = ctx.answer;
       if (a) {
-        // 约等确认回答（无门控时才会走到这里）
+        // 约等确认/选人回答（无门控时才会走到这里）
+        if (st.yueDengPick) return yueDengPickAnswer(ctx, st, a);
         if (a.choice !== 'yes') return; // 弃权不消耗
-        return submitYueDeng(ctx, st);
+        return yueDengPickAsk(ctx, st);
       }
+      st.yueDengPick = false; // 防御：新触发重置选人残留
       if (st.yueDengUsed) return;
       // 触发 A：本手出牌者是她（归属改写后视作别人打出则不触发），压的是别人的手牌
       if (ctx.game.roundLastPlayerId() !== ctx.self.id) return;
@@ -170,7 +195,7 @@ const shaSha: RoleDef = {
         ok: true,
         ask: {
           kind: 'confirm',
-          prompt: `【约等】是否收回刚打的这手牌，与一名随机角色均分手牌？（你拿 ⌊X/2⌋、对方拿其余，X 为双方手牌总数；收回后从你下家继续接牌）`,
+          prompt: `【约等】是否收回刚打的这手牌，与一名你选定的角色均分手牌？（你拿 ⌊X/2⌋、对方拿其余，X 为双方手牌总数；收回后从你下家继续接牌）`,
         },
       };
     },
@@ -183,16 +208,19 @@ const shaSha: RoleDef = {
       if (st.yueDengUsed) return;
       const a = ctx.answer;
       if (a) {
+        // 约等确认/选人回答（无门控时才会走到这里）
+        if (st.yueDengPick) return yueDengPickAnswer(ctx, st, a);
         if (a.choice !== 'yes') return; // 弃权不消耗
-        return submitYueDeng(ctx, st);
+        return yueDengPickAsk(ctx, st);
       }
+      st.yueDengPick = false; // 防御：新触发重置选人残留
       // 触发 B：拥有牌权（该回合出了 0 张牌，不用摸牌即可发动）
       return {
         ok: true,
         ask: {
           kind: 'confirm',
           prompt:
-            '【约等】你拥有牌权（本回合相当于出了 0 张牌）：是否收回本回合打出的手牌，与一名随机角色均分手牌？（不用摸牌；收回后从你下家继续接牌）',
+            '【约等】你拥有牌权（本回合相当于出了 0 张牌）：是否收回本回合打出的手牌，与一名你选定的角色均分手牌？（不用摸牌；收回后从你下家继续接牌）',
         },
       };
     },
