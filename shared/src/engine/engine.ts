@@ -5,7 +5,7 @@
 // - 技能优先：每个判定点 = 基础规则校验 → 角色钩子覆写（allowAnyway 放行 / ok:false 否决）
 // - 角色只能通过 EngineFacade + ActionMods 有界改牌，无法破坏引擎不变量
 // - 技能询问：钩子可返回 ask 挂起动作，服务端询问玩家后 resolveAsk 重跑提问钩子（钩子须纯：返回 ask 前不得改状态）
-import { RANK_2, RANK_3, RANK_A, isJoker, isRank, pointValue, type Card, type Rank } from '../cards';
+import { JOKER_BIG, RANK_2, RANK_3, RANK_A, SUITS, isJoker, isRank, pointValue, rankLabel, type Card, type Rank } from '../cards';
 import { type RuleConfig } from '../config';
 import { canBeat, exactFollows, isExactFollow, listPlayable, ouYaCovers, parseCombo, relabelCombo, validateFlipResponse, yaoWuCovers, type Combo } from './combos';
 import { buildDeck, shuffle } from './deck';
@@ -15,6 +15,7 @@ import { type GameSnapshot } from './snapshot';
 import {
   type ActionMods,
   type AskAnswer,
+  type DevCardSpec,
   type EngineFacade,
   type HeldGroup,
   type HookContext,
@@ -41,6 +42,8 @@ export interface EngineOptions {
   scores?: Record<string, number>;
   /** 测试用：直接指定手牌（跳过发牌），剩余牌进牌堆 */
   handsOverride?: Record<string, Card[]>;
+  /** 自定义摸牌（Elm 开发者账号）：开局即开启换牌询问的玩家 id */
+  devDrawPlayerIds?: string[];
 }
 
 export type ActionResult =
@@ -182,6 +185,10 @@ export class GameEngine {
   private zhangMuBlocked = new Set<string>();
   /** 障目延迟摸牌挂账（2026-10-07 用户反馈）：技能先生效、摸 1-3 延后到动作收尾兑现 */
   private zhangMuDrawQueue: number[] = [];
+  /** 自定义摸牌（Elm 开发者账号，2026-10-07）：开关开启的玩家——摸牌照常随机，动作收尾逐张询问换牌 */
+  private devDrawOn = new Set<string>();
+  /** 自定义摸牌待换牌记录：玩家 → 刚摸到的牌（含各自来源堆，逐张换完后清空） */
+  private devPending = new Map<string, { cards: { card: Card; source: 'deck' | 'private' }[]; swapIndex: number }>();
   /** 当前正在运行的钩子条目（zhangMuCheck 续跑 applyOutcome 用） */
   private runningEntry: HookEntry | null = null;
 
@@ -201,6 +208,8 @@ export class GameEngine {
       if (this.roles.get(p.roleId)?.flipsOrderOnPlay) this.orderFlippers.add(p.id);
       if (this.roles.get(p.roleId)?.exciteOnPlay) this.exciteOwners.add(p.id);
     }
+    // 自定义摸牌（Elm 开发者账号）：开局即开启的玩家
+    for (const id of opts.devDrawPlayerIds ?? []) this.devDrawOn.add(id);
     // 神秘（辛歼）：独立牌堆 = 一整副 54 张，id 接在公共三副之后（162..215）、deck 字段 3
     const mystic = players.find((p) => this.roles.get(p.roleId)?.mystic);
     if (mystic) {
@@ -254,6 +263,8 @@ export class GameEngine {
       );
       return;
     }
+    // 自定义摸牌（Elm 开发者账号）：发牌后逐张询问换牌，全部答完再收尾开局
+    if (this.startDevSwapAsk(() => this.finishStart())) return;
     this.finishStart();
   }
 
@@ -540,6 +551,11 @@ export class GameEngine {
       return { ...answer, choice: undefined, cardIds: ask.cards.slice(0, n).map((c) => c.id) };
     }
     return answer;
+  }
+
+  /** 真实终局判定（dealing 期快照会报 finished——房间判终局/计分必须看这里，不能用快照 phase） */
+  get isFinished(): boolean {
+    return this.phase === 'finished';
   }
 
   /** 当前挂起的完整询问（服务端重连时重发给被询问者；非本人返回 null） */
@@ -1845,7 +1861,7 @@ export class GameEngine {
   private rawDraw(playerId: string, n: number): number {
     if (n <= 0) return 0;
     // 神秘（辛歼）：一切从牌堆摸的牌都从独立牌堆摸（摸空时独立弃牌堆洗回；两堆都空则摸不到）
-    if (playerId === this.mysticPlayerId) return this.privateDraw(n);
+    if (playerId === this.mysticPlayerId) return this.privateDraw(playerId, n);
     this.recycleDiscard(); // 牌堆耗尽洗回（2026-10-05 用户确认）：牌堆空时弃牌堆洗回当新牌堆
     const total = n * (this.doubleSupplyFor(playerId) ? 2 : 1);
     const actual = Math.min(total, this.deck.length);
@@ -1855,12 +1871,14 @@ export class GameEngine {
       hand.push(...drawn);
       this.checkHandLimit(playerId);
     }
+    // 自定义摸牌（Elm）：刚摸到的牌记入待换牌记录（动作收尾逐张询问换牌）
+    if (this.devDrawOn.has(playerId) && drawn.length > 0) this.recordDevDraw(playerId, 'deck', drawn);
     if (this.phase === 'playing') this.checkYaoWu(); // 耀武（阿摩）：摸牌后立即判定（发牌阶段的检查统一在 start 末尾做）
     return actual;
   }
 
   /** 神秘（辛歼）：从独立牌堆摸牌（独立弃牌堆洗回继续自己用；不翻倍、不参与公共洗回） */
-  private privateDraw(n: number): number {
+  private privateDraw(playerId: string, n: number): number {
     if (this.privateDeck.length === 0 && this.privateDiscard.length > 0) {
       this.privateDeck = shuffle(this.privateDiscard, this.rng);
       this.privateDiscard = [];
@@ -1873,6 +1891,8 @@ export class GameEngine {
       hand.push(...drawn);
       this.checkHandLimit(this.mysticPlayerId!);
     }
+    // 自定义摸牌（Elm）：独立牌堆摸的牌同样可换
+    if (this.devDrawOn.has(playerId) && drawn.length > 0) this.recordDevDraw(playerId, 'private', drawn);
     if (this.phase === 'playing') this.checkYaoWu(); // 耀武（阿摩）：摸牌后立即判定
     return actual;
   }
@@ -2474,6 +2494,149 @@ export class GameEngine {
     this.pendingAsk!.onResolve = onResolve;
   }
 
+  // ---------- 自定义摸牌（Elm 开发者账号，2026-10-07） ----------
+  // 平衡「自选 vs 方便」的定稿方案（用户确认：默认随机 + 手动开关、逐张点选）：
+  // 开关开启后，摸牌照常立即随机完成（引擎结算流零破坏），本动作收尾统一挂起「换牌询问」——
+  // 逐张问「刚摸到的 X 换成什么」：点网格指定一张（旧牌回堆、指定牌取出，守恒不变）/ 保持这张 / 剩余全部保持。
+  // 开关关闭 = 完全随机零打扰。判定摸回（takeRevealed/尖叫给回扣置牌）不走 rawDraw，天然豁免。
+
+  /** 自定义摸牌开关（服务端在 Elm 切换时调用；关闭时若有换牌询问挂起则按全部保持结束） */
+  setDevDraw(playerId: string, on: boolean): void {
+    if (on) {
+      this.devDrawOn.add(playerId);
+      return;
+    }
+    this.devDrawOn.delete(playerId);
+    this.devPending.delete(playerId);
+    if (this.pendingAsk?.playerId === playerId && this.pendingAsk.ask.kind === 'devSwap') {
+      this.pendingAsk = null; // 挂起清除：服务端随后 drainEvents + 广播快照
+    }
+  }
+
+  /** 摸牌记录：追加进该玩家的待换牌队列 */
+  private recordDevDraw(playerId: string, source: 'deck' | 'private', drawn: Card[]): void {
+    const rec = this.devPending.get(playerId);
+    if (rec) {
+      for (const c of drawn) rec.cards.push({ card: c, source });
+    } else {
+      this.devPending.set(playerId, { cards: drawn.map((c) => ({ card: c, source })), swapIndex: 0 });
+    }
+  }
+
+  /** 牌面文本（换牌播报用） */
+  private cardFaceLabel(c: Card): string {
+    return isJoker(c) ? (c.rank === JOKER_BIG ? '大王' : '小王') : SUITS[c.suit] + rankLabel(c.rank);
+  }
+
+  /** 挂起第一张换牌询问（无待换牌/已有询问挂起则返回 false）；onDone = 逐张全部答完的收尾
+   *  （构造期 = finishStart；动作期 = 空——resolveAsk 末尾的 ok() 自会排空广播） */
+  private startDevSwapAsk(onDone: () => void): boolean {
+    if (this.pendingAsk) return false;
+    for (const [pid, rec] of this.devPending) {
+      if (!this.devDrawOn.has(pid) || this.eliminated.has(pid)) {
+        this.devPending.delete(pid);
+        continue;
+      }
+      this.suspendEngine(pid, this.devSwapAsk(pid, rec), (ans) => this.devSwapStep(pid, ans, onDone));
+      return true;
+    }
+    return false;
+  }
+
+  /** 逐张换牌：换这张 → 问下一张；找不到指定牌 → 重问当前张；超时/保持 → 下一张 */
+  private devSwapStep(pid: string, ans: AskAnswer, onDone: () => void): void {
+    const rec = this.devPending.get(pid);
+    if (!rec) {
+      onDone();
+      return;
+    }
+    // 剩余全部保持 / 开关已关 / 玩家已淘汰：整条换牌链结束
+    if (ans.choice === 'restKeep' || !this.devDrawOn.has(pid) || this.eliminated.has(pid)) {
+      this.devPending.delete(pid);
+      onDone();
+      return;
+    }
+    const cur = rec.cards[rec.swapIndex]!;
+    if (ans.swapSpec) {
+      const found = this.takeSpecifiedCard(cur.source, ans.swapSpec);
+      if (!found) {
+        // 源堆里没有这张牌了：重问当前张
+        this.suspendEngine(pid, this.devSwapAsk(pid, rec, '牌堆里已经没有这张牌了，'), (a) =>
+          this.devSwapStep(pid, a, onDone),
+        );
+        return;
+      }
+      this.applyDevSwap(pid, cur.card, cur.source, found);
+      if (this.phase === 'finished') {
+        // 换牌触发耀武等立即获胜：结束换牌链（终局）
+        this.devPending.delete(pid);
+        onDone();
+        return;
+      }
+    }
+    // 无 swapSpec = 保持这张（含超时自动作答）
+    rec.swapIndex++;
+    if (rec.swapIndex >= rec.cards.length) {
+      this.devPending.delete(pid);
+      onDone();
+      return;
+    }
+    this.suspendEngine(pid, this.devSwapAsk(pid, rec), (a) => this.devSwapStep(pid, a, onDone));
+  }
+
+  /** 换牌询问载荷（hint = 找不到牌重问的提示前缀） */
+  private devSwapAsk(
+    pid: string,
+    rec: { cards: { card: Card; source: 'deck' | 'private' }[]; swapIndex: number },
+    hint?: string,
+  ): SkillAsk {
+    const label = this.cardFaceLabel(rec.cards[rec.swapIndex]!.card);
+    const progress = `${rec.swapIndex + 1}/${rec.cards.length}`;
+    const base = `【自定义摸牌】刚摸到 ${label}（第 ${progress} 张），换成什么？`;
+    return {
+      kind: 'devSwap',
+      prompt: hint ? hint + base : base,
+      cards: [rec.cards[rec.swapIndex]!.card],
+      swapIndex: rec.swapIndex,
+      swapTotal: rec.cards.length,
+      declineAllowed: false,
+      timeoutMs: 60_000, // 开发者思考/操作时间，超时保持这张
+    };
+  }
+
+  /** 从源堆找一张指定牌取出（找不到返回 null；不触发洗回） */
+  private takeSpecifiedCard(source: 'deck' | 'private', spec: DevCardSpec): Card | null {
+    const pool = source === 'private' ? this.privateDeck : this.deck;
+    const idx = pool.findIndex((c) =>
+      'joker' in spec
+        ? isJoker(c) && c.rank === spec.joker
+        : !isJoker(c) && c.suit === spec.suit && c.rank === spec.rank,
+    );
+    if (idx < 0) return null;
+    return pool.splice(idx, 1)[0]!;
+  }
+
+  /** 执行换牌：手牌里的旧牌替换为指定牌，旧牌洗回源堆随机位置（守恒不变：牌堆/手牌各一进一出） */
+  private applyDevSwap(playerId: string, oldCard: Card, source: 'deck' | 'private', newCard: Card): void {
+    const hand = this.hands.get(playerId);
+    if (hand) {
+      const hi = hand.findIndex((c) => c.id === oldCard.id);
+      if (hi >= 0) hand.splice(hi, 1, newCard);
+      else hand.push(newCard); // 极端兜底：旧牌已不在手（挂起期间无操作，不应发生），新牌照给
+    }
+    const pool = source === 'private' ? this.privateDeck : this.deck;
+    const at = Math.floor(this.rng() * (pool.length + 1));
+    pool.splice(at, 0, oldCard);
+    this.emit({
+      type: 'skill:triggered',
+      playerId,
+      roleId: 'dev',
+      skillId: 'dev-draw',
+      text: `【自定义摸牌】${this.cardFaceLabel(oldCard)} → ${this.cardFaceLabel(newCard)}`,
+    });
+    if (this.phase === 'playing') this.checkYaoWu(); // 耀武（阿摩）：换牌后立即判定（可能集齐 13 点数获胜）
+  }
+
   /**
    * 障目（辛歼）门控（2026-10-06 用户定稿）：非锁定指向性技能锁定辛歼时（目标确定后、生效前），
    * 施放者猜他的手牌数：猜错 → 技能失效、不扣次数、本回合不能再对其他人发动（对辛歼重试可再猜）；
@@ -2829,6 +2992,8 @@ export class GameEngine {
     if (this.revealedPool.length > 0 && !this.pendingAsk) throw new Error('翻牌池未清空（角色技能泄漏）');
     // 障目延迟摸牌：动作链收尾时兑现（技能先生效、再摸 1-3；若期间又挂起新询问则留到该询问结算完）
     this.flushZhangMuDraws();
+    // 自定义摸牌（Elm）：动作收尾挂起换牌询问（挂起时事件照常排空广播，逐张答完自动收尾）
+    this.startDevSwapAsk(() => {});
     const events = this.pendingEvents;
     this.pendingEvents = [];
     return { ok: true, events, suspended: !!this.pendingAsk, pendingAsk: this.pendingAsk?.ask };

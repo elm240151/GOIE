@@ -51,6 +51,7 @@ export default function GameTable() {
   const flippedCardId = useStore((s) => s.flippedCardId);
   const toggleFlipSelect = useStore((s) => s.toggleFlipSelect);
   const turnSeq = useStore((s) => s.turnSeq);
+  const setDevDraw = useStore((s) => s.setDevDraw);
 
   // 回合倒计时（以 turnSeq 为基准：同一玩家连续两轮持牌权也会重置；无轮次/终局清零）
   const [deadline, setDeadline] = useState(0);
@@ -86,6 +87,7 @@ export default function GameTable() {
 
   const players = snap?.players ?? [];
   const me = players.find((p) => p.id === myId);
+  const roomMe = room?.players.find((p) => p.id === myId); // 房间视图：含 isDev/devDraw（快照无）
   const opponents = players.filter((p) => p.id !== myId);
   const myTurn = snap?.phase === 'playing' && snap?.turnPlayerId === myId;
   const myHand: readonly CardT[] = me?.hand ?? [];
@@ -436,6 +438,16 @@ export default function GameTable() {
           )}
           {myTurn && turnLeft !== null && (
             <span className={`my-countdown ${turnLeft <= 5 ? 'urgent' : ''}`}>⏱ {turnLeft}s</span>
+          )}
+          {roomMe?.isDev && (
+            <label className="dev-draw-switch dev-draw-switch-game" title={STR.room.devDrawHint}>
+              <input
+                type="checkbox"
+                checked={roomMe.devDraw}
+                onChange={(e) => void setDevDraw(e.target.checked)}
+              />
+              <span className="dev-draw-label">{STR.room.devDraw}</span>
+            </label>
           )}
         </div>
 

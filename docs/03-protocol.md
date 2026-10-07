@@ -13,18 +13,20 @@
 | `room:ready` | `{ready: boolean}` | ok / 错误 |
 | `room:start` | — | ok / 错误（'只有房主可以开始游戏'、'至少需要 2 人'…） |
 | `room:rematch` | — | ok（全员投票通过后回到房间重选角色/重新准备，房主开局，先手给上局赢家） |
+| `room:addBot` / `room:removeBot` | removeBot 带 `{playerId}` | ok / 错误（'只有房主可以…'等；仅大厅可用，人机无 socket 由 Room 定时器驱动） |
+| `room:setDevDraw` | `{enabled: boolean}` | ok / 错误（'仅开发者账号（Elm）可用'——玩家名恰为「Elm」才可开启自定义摸牌） |
 | `room:leave` | — | 无 ack（空房间销毁） |
 | `game:play` | `{cardIds: number[], flippedCardId?: number}`（带 `flippedCardId` = 端庄（轴承）翻面接牌：翻面桌面一张牌并接牌，一次动作） | ok / `{ok:false, error: 中文原因}` |
 | `game:pass` | — | 同上 |
 | `game:useSkill` | `SkillUsePayload`（见下） | 同上 |
 
-`SkillUsePayload`：有 `askId` = **回答技能询问**（`{askId, choice?, cardIds?, targetPlayerId?}`）；无 `askId` = **发动主动技**（`{skillId}` → onSkillAction）。
+`SkillUsePayload`：有 `askId` = **回答技能询问**（`{askId, choice?, cardIds?, targetPlayerId?, guess?, swapSpec?}`——`guess` 障目猜手牌数、`swapSpec` Elm 自定义摸牌 devSwap 换牌 `{suit, rank} | {joker}`）；无 `askId` = **发动主动技**（`{skillId}` → onSkillAction）。
 
 ## 服务端事件（server → client）
 
 | 事件 | payload |
 |---|---|
-| `room:updated` | `RoomState {code, phase:'lobby'|'playing'|'finished', hostId, players[], winnerId, scoreDeltas, totals, rematchVotes}` |
+| `room:updated` | `RoomState {code, phase:'lobby'|'playing'|'finished', hostId, players[], winnerId, scoreDeltas, totals, rematchVotes}`（玩家含 `isDev/devDraw`——Elm 开发者账号标记与自定义摸牌开关，服务端权威判定） |
 | `game:snapshot` | `GameSnapshot`（按接收者过滤：只有自己的 `hand` 非 null；**神秘（辛歼）手牌数对别人发 -1（客户端显示 ??）、牌面永不可见**，`privateDeckCount/privateDiscardCount` 只有辛歼自己非 null——独立牌堆/弃牌张数；含 `pendingAsk: {askId, playerId, kind, prompt, timeoutMs} \| null`；`revealed` 翻牌展示区**所有人可见**——判定牌公开，动作内须清空；`orderReversed` 当前牌序是否倒序（海棠洄游），`table` 牌型的 rank 已按当前牌序约定解析——倒序时 rank = 最高点数；`tableRankNote: {rank} \| null` 桌面一手牌被答疑改点后的新判定点数（修勾，牌面实体不变；**`table.label` 已按新点数重写**（主显金色），界面据 note 用实体牌重建原 label 小标「改判：原X」）；`cursedPlayerIds` 陷入红楼梦的玩家（橐驼地坛，含本回合 pending 诅咒——判定成功即广播，下回合生效）；桌面可为单王牌型 `type: 'singleJoker'`（橐驼诅咒：label「王」，压一切单张、只有炸弹能压）或对王牌型 `type: 'jokerPair'`（label「对王」，压一切对子、只有炸弹能压）；`prevTable: Combo \| null` 上一手桌面牌型（轴承端庄情况一接的是它）；`tableSide: Card[]` 明置桌旁的边牌，`tableSideHidden: number[]` 其中以牌背展示的牌 id（端庄翻面牌**可见但背面**）——随当前一手牌一起弃置；`stagedDiscards: {playerId, cards}[]` 弃牌暂存区——本回合公开弃置的牌（谁弃的、弃了什么全场可见；轮末进弃牌堆，客户端据此渲染「弃牌」区）；`tableOwnerId: string \| null` 当前桌面一手牌的实际打出者（归属改写前——温柔宝贝守卫基准）；`babyIds: string[]` 温柔（组长）标定的宝贝；`babyOwnerId: string \| null` 标定者（组长）id；`heldCount/held/heldGroups` 尖叫（苗条）扣置牌——张数公开、`held` 牌面只对苗条自己可见、`heldGroups: {kind, count}[]` 类型 + 张数所有人可见（别人点扣置徽章看是范文还是尖叫鸡）） |
 | `game:event` | `GameEvent`（判别联合 + 自增 seq，见下） |
 | `game:error` | 中文原因字符串 |
@@ -44,7 +46,7 @@
 → 超时/掉线 → 服务端自动 {askId, choice:'decline'} 了结
 ```
 
-客户端弹窗按 `kind` 渲染：confirm（是/否）、suit/choice（选项按钮，答案 = 所选选项文本）、pickCards（选牌 + 数量校验；`hidden` 时显示牌背盲抽）、pickTarget（目标按钮）、cutIn（自己的手牌选接牌组合）、selfFollow（修勾狂吠：自己的手牌选牌压自己打出的牌，提交 = `choice:'yes'`+cardIds，放弃 = decline）、guess（障目：猜辛歼手牌数——数字键盘 1-20（`min`/`max` 给范围），提交 = `guess: number`、超时算猜错）、proxyPlay（讲题代打：pickTarget + 代打者选牌界面）。
+客户端弹窗按 `kind` 渲染：confirm（是/否）、suit/choice（选项按钮，答案 = 所选选项文本）、pickCards（选牌 + 数量校验；`hidden` 时显示牌背盲抽）、pickTarget（目标按钮）、cutIn（自己的手牌选接牌组合）、selfFollow（修勾狂吠：自己的手牌选牌压自己打出的牌，提交 = `choice:'yes'`+cardIds，放弃 = decline）、guess（障目：猜辛歼手牌数——数字键盘 1-20（`min`/`max` 给范围），提交 = `guess: number`、超时算猜错）、proxyPlay（讲题代打：pickTarget + 代打者选牌界面）、devSwap（Elm 自定义摸牌：当前实际摸到的牌 + 54 格选牌网格 + 第 `swapIndex`/`swapTotal` 张进度，提交 = `swapSpec` 换这张或 `choice:'keep'/'restKeep'` 保持；询问在 dealing 期以 internalKind 'engine' 挂起——引擎真实 phase 未到 playing，房间判终局须用 `engine.isFinished` 而非快照 phase）。
 
 ## 约定
 

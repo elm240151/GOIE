@@ -107,6 +107,12 @@ export class RoomManager {
     room.removeBot(playerId, botId);
   }
 
+  /** 开发者账号（Elm）开关自定义摸牌 */
+  setDevDraw(socketId: string, enabled: boolean): void {
+    const { room, playerId } = this.locate(socketId);
+    room.setDevDraw(playerId, enabled);
+  }
+
   leave(socketId: string): void {
     const hit = this.route.get(socketId);
     if (!hit) return;

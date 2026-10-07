@@ -13,6 +13,7 @@ export default function Room() {
   const leaveRoom = useStore((s) => s.leaveRoom);
   const addBot = useStore((s) => s.addBot);
   const removeBot = useStore((s) => s.removeBot);
+  const setDevDraw = useStore((s) => s.setDevDraw);
   const toast = useStore((s) => s.toast);
 
   if (!room) return null;
@@ -67,6 +68,16 @@ export default function Room() {
                 </button>
               )}
             </span>
+            {p.isDev && (
+              <label className="dev-draw-switch" title={STR.room.devDrawHint}>
+                <input
+                  type="checkbox"
+                  checked={p.devDraw}
+                  onChange={(e) => void setDevDraw(e.target.checked)}
+                />
+                <span className="dev-draw-label">{STR.room.devDraw}</span>
+              </label>
+            )}
           </div>
         ))}
       </section>

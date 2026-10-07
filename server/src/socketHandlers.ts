@@ -11,6 +11,7 @@ import {
   type RoomJoinPayload,
   type RoomRejoinPayload,
   type RoomRemoveBotPayload,
+  type RoomSetDevDrawPayload,
   type ScoreListAck,
   type SkillUsePayload,
 } from '@gdys/shared';
@@ -101,6 +102,15 @@ export function registerHandlers(io: Server, rooms: RoomManager): void {
       }
     });
 
+    socket.on(CLIENT_EVENTS.roomSetDevDraw, (payload: RoomSetDevDrawPayload | undefined, ack?: (res: AckResult) => void) => {
+      try {
+        rooms.setDevDraw(socket.id, Boolean(payload?.enabled));
+        ack?.({ ok: true });
+      } catch (e) {
+        ack?.({ ok: false, error: messageOf(e) });
+      }
+    });
+
     socket.on(CLIENT_EVENTS.roomLeave, (_payload: unknown) => {
       rooms.leave(socket.id);
     });
@@ -135,6 +145,7 @@ export function registerHandlers(io: Server, rooms: RoomManager): void {
           cardIds: Array.isArray(payload?.cardIds) ? payload!.cardIds.map(Number) : undefined,
           targetPlayerId: payload?.targetPlayerId,
           guess: payload?.guess,
+          swapSpec: payload?.swapSpec,
         });
         ack?.({ ok: true });
       } catch (e) {

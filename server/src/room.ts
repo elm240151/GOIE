@@ -33,6 +33,8 @@ interface Seat {
   isHost: boolean;
   /** 人机：无 socket、无角色、自动行动（测试注入时缩小延迟） */
   isBot: boolean;
+  /** 自定义摸牌开关（仅开发者账号 Elm 可切） */
+  devDraw: boolean;
   secret: string;
   socketId: string | null;
 }
@@ -47,7 +49,12 @@ export interface RoomOptions {
   /** 人机被技能询问时的自动作答延迟（毫秒，缺省 400） */
   botAskMs?: number;
   /** 测试注入：自定义引擎（如指定手牌）；不传则正常随机发牌 */
-  engineFactory?: (opts: { players: EnginePlayer[]; startPlayerId: string; scores: Record<string, number> }) => GameEngine;
+  engineFactory?: (opts: {
+    players: EnginePlayer[];
+    startPlayerId: string;
+    scores: Record<string, number>;
+    devDrawPlayerIds: string[];
+  }) => GameEngine;
 }
 
 export class Room {
@@ -98,6 +105,8 @@ export class Room {
         connected: s.connected,
         isHost: s.isHost,
         isBot: s.isBot,
+        isDev: s.name === 'Elm',
+        devDraw: s.devDraw,
       })),
       winnerId: this.lastWinnerId,
       scoreDeltas: this.lastDeltas,
@@ -124,6 +133,7 @@ export class Room {
       connected: true,
       isHost,
       isBot: false,
+      devDraw: false,
       secret,
       socketId: socket.id,
     });
@@ -150,6 +160,7 @@ export class Room {
       connected: true,
       isHost: false,
       isBot: true,
+      devDraw: false,
       secret: generatePlayerSecret(),
       socketId: null,
     });
@@ -164,6 +175,21 @@ export class Room {
     if (!seat) throw new Error('该座位不存在');
     if (!seat.isBot) throw new Error('只能移除人机座位');
     this.seats.splice(this.seats.indexOf(seat), 1);
+    this.broadcastState();
+  }
+
+  /** 开发者账号（Elm）开关自定义摸牌：大厅或游戏中均可切 */
+  setDevDraw(playerId: string, enabled: boolean): void {
+    const seat = this.seats.find((s) => s.id === playerId);
+    if (!seat) throw new Error('该座位不存在');
+    if (seat.name !== 'Elm') throw new Error('仅开发者账号（Elm）可用');
+    seat.devDraw = enabled;
+    if (this.engine) {
+      this.engine.setDevDraw(playerId, enabled);
+      // 关闭时若换牌询问正挂起：引擎已清挂起，把滞留事件与最新快照广播出去
+      this.dispatchEvents(this.engine.drainEvents());
+      this.syncSnapshots();
+    }
     this.broadcastState();
   }
 
@@ -218,13 +244,16 @@ export class Room {
         ? this.lastWinnerId
         : this.hostId;
     const players = this.seats.map((s) => ({ id: s.id, name: s.name, roleId: s.roleId }));
+    // 自定义摸牌（Elm）：开局前已开开关的座位 → 引擎开局即问初始手牌换牌
+    const devDrawPlayerIds = this.seats.filter((s) => s.devDraw).map((s) => s.id);
     this.engine = this.engineFactory
-      ? this.engineFactory({ players, startPlayerId, scores: this.totals })
+      ? this.engineFactory({ players, startPlayerId, scores: this.totals, devDrawPlayerIds })
       : new GameEngine(defaultRules, players, {
           rng: mulberry32(Math.floor(Math.random() * 2 ** 31)),
           startPlayerId,
           roles: this.roles,
           scores: this.totals,
+          devDrawPlayerIds,
         });
     this.phase = 'playing';
     this.engine.start();
@@ -281,6 +310,7 @@ export class Room {
             cardIds: req.cardIds,
             targetPlayerId: req.targetPlayerId,
             guess: req.guess,
+            swapSpec: req.swapSpec,
           })
         : engine.useSkillAction(playerId, { skillId: req.skillId ?? '' });
     } catch (e) {
@@ -388,7 +418,8 @@ export class Room {
     this.syncSnapshots();
     this.handlePendingAsk();
     this.scheduleBotTurn();
-    if (this.engine!.snapshotFor(this.seats[0]!.id).phase === 'finished') void this.onFinished();
+    // 终局判定看引擎真实 phase：dealing 期（如 Elm 自定义摸牌逐张询问中）快照会报 finished，不能误判终局
+    if (this.engine!.isFinished) void this.onFinished();
   }
 
   /** 动作后出现技能询问：把完整询问发给被询问者并启动超时自动弃权 */

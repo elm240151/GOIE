@@ -158,6 +158,7 @@ interface AppStore {
   rematch(): Promise<void>;
   addBot(): Promise<void>;
   removeBot(playerId: string): Promise<void>;
+  setDevDraw(enabled: boolean): Promise<void>;
   fetchScores(): Promise<void>;
 
   // 出牌
@@ -396,6 +397,11 @@ export const useStore = create<AppStore>((set, get) => ({
 
   async removeBot(playerId) {
     const res = await emitAck(CLIENT_EVENTS.roomRemoveBot, { playerId });
+    if (!res.ok) get().toast('error', (res as { error: string }).error);
+  },
+
+  async setDevDraw(enabled) {
+    const res = await emitAck(CLIENT_EVENTS.roomSetDevDraw, { enabled });
     if (!res.ok) get().toast('error', (res as { error: string }).error);
   },
 
@@ -660,8 +666,11 @@ export const useStore = create<AppStore>((set, get) => ({
         break;
       }
       case 'skill:triggered': {
+        // 自定义摸牌（Elm 开发者账号）：换牌播报（roleId 'dev' 非角色，用固定文案）
         const role = getRole(e.roleId as string);
-        const skillName = role?.skills.find((s) => s.id === e.skillId)?.name ?? (e.skillId as string);
+        const skillName = e.roleId === 'dev'
+          ? STR.game.devSwapSkillName
+          : role?.skills.find((s) => s.id === e.skillId)?.name ?? (e.skillId as string);
         // 引擎播报多数自带【技能名】前缀，去掉重复部分（2026-10-07 用户反馈：弹窗技能名写了两次）
         let text = e.text as string;
         const prefix = `【${skillName}】`;

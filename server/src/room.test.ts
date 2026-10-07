@@ -4,10 +4,12 @@ import {
   clearRoles,
   defaultRules,
   GameEngine,
+  isJoker,
   listPlayable,
   listRoles,
   mulberry32,
   SERVER_EVENTS,
+  shuffle,
   type EnginePlayer,
   type GameEvent,
   type GameSnapshot,
@@ -1367,5 +1369,116 @@ describe('私密事件路由（窃笑）', () => {
     expect(e1.some((e) => e.type === 'skill:peek')).toBe(false); // 被查看者不收手牌
     expect(e1.some((e) => e.type === 'skill:peeked')).toBe(true); // 被查看者收到提示
     expect(e2.some((e) => e.type === 'skill:peek' || e.type === 'skill:peeked')).toBe(false); // 旁人完全不知
+  });
+});
+
+describe('自定义摸牌（Elm 开发者账号）', () => {
+  /** 2 人局：房主名 Elm + 固定种子真实发牌（devSwap 依赖 rawDraw 记录，不能用 handsOverride） */
+  function mkElmSetup(): { mgr: RoomManager; sockets: FakeSocket[]; ids: string[]; secrets: Record<string, string>; code: string } {
+    const registry: RoleRegistry = new Map(listRoles().map((r) => [r.id, r]));
+    const factory: RoomOptions['engineFactory'] = ({ players, startPlayerId, devDrawPlayerIds }) =>
+      new GameEngine(defaultRules, players, {
+        rng: mulberry32(7),
+        startPlayerId,
+        roles: registry,
+        scores: {},
+        devDrawPlayerIds,
+      });
+    const mgr = new RoomManager({
+      roles: registry,
+      scoreStore: new MemoryScoreStore(),
+      autoPassMs: 30_000,
+      engineFactory: factory,
+    });
+    const sockets = [mkSocket('s0'), mkSocket('s1')];
+    const { code, playerId, secret } = mgr.create('Elm', sockets[0]!);
+    const ids = [playerId];
+    const secrets: Record<string, string> = { [playerId]: secret };
+    const r1 = mgr.join(code, '玩家2', sockets[1]!);
+    ids.push(r1.playerId);
+    secrets[r1.playerId] = r1.secret;
+    mgr.selectRole(sockets[0]!.id, 'skywalker');
+    mgr.selectRole(sockets[1]!.id, 'elm-yao');
+    mgr.setReady(sockets[0]!.id, true);
+    mgr.setReady(sockets[1]!.id, true);
+    return { mgr, sockets, ids, secrets, code };
+  }
+
+  it('仅 Elm 座位可开开关；房态广播 isDev/devDraw', () => {
+    const s = setupRoom(2);
+    // 普通玩家开开关被拒
+    expect(() => manager.setDevDraw(s.sockets[1]!.id, true)).toThrow('仅开发者账号');
+    const st = lastEmit<RoomState>(s.sockets[0]!, SERVER_EVENTS.roomUpdated)!;
+    for (const p of st.players) expect(p.isDev).toBe(false);
+
+    const elm = mkElmSetup();
+    const st0 = lastEmit<RoomState>(elm.sockets[0]!, SERVER_EVENTS.roomUpdated)!;
+    const me0 = st0.players.find((p) => p.name === 'Elm')!;
+    expect(me0.isDev).toBe(true);
+    expect(me0.devDraw).toBe(false);
+    elm.mgr.setDevDraw(elm.sockets[0]!.id, true);
+    const st1 = lastEmit<RoomState>(elm.sockets[0]!, SERVER_EVENTS.roomUpdated)!;
+    expect(st1.players.find((p) => p.name === 'Elm')!.devDraw).toBe(true);
+  });
+
+  it('Elm 开局逐张换牌询问链：换牌生效播报、restKeep 收尾开局', () => {
+    const s = mkElmSetup();
+    s.mgr.setDevDraw(s.sockets[0]!.id, true);
+    s.mgr.startGame(s.sockets[0]!.id);
+    // 发牌期挂起：先手 6 张逐张询问（种子 7 牌堆可复算，牌堆尾 6 张 = 发牌序）
+    const deck = shuffle(buildDeck(3), mulberry32(7));
+    const p0Drawn = deck.slice(156);
+    const ask1 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask1.kind).toBe('devSwap');
+    expect(ask1.swapTotal).toBe(6);
+    expect(ask1.swapIndex).toBe(0);
+    expect(ask1.cards![0]!.id).toBe(p0Drawn[0]!.id);
+    // 换成牌堆底那张（必在牌堆中——发牌只摸了尾 11 张）
+    const target = deck[0]!;
+    const spec = isJoker(target) ? { joker: target.rank } : { suit: target.suit, rank: target.rank };
+    s.mgr.useSkill(s.sockets[0]!.id, { askId: ask1.askId, swapSpec: spec });
+    // 下一张挂起
+    const ask2 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask2.kind).toBe('devSwap');
+    expect(ask2.swapIndex).toBe(1);
+    expect(ask2.cards![0]!.id).toBe(p0Drawn[1]!.id);
+    // 换牌播报（skill:triggered roleId=dev 广播）
+    const evs = emittedEvents(s.sockets[0]!);
+    expect(evs.some((e) => e.type === 'skill:triggered' && e.playerId === s.ids[0])).toBe(true);
+    // 剩余全部保持 → 开局
+    s.mgr.useSkill(s.sockets[0]!.id, { askId: ask2.askId, choice: 'restKeep' });
+    const snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.phase).toBe('playing');
+    expect(snap.pendingAsk).toBeNull();
+    const me = snap.players.find((p) => p.id === s.ids[0]!)!;
+    expect(me.hand!.some((c) => c.id === target.id)).toBe(true);
+    expect(me.hand!.some((c) => c.id === p0Drawn[0]!.id)).toBe(false);
+    // 守恒：6 + 5 + 151 = 162
+    expect(me.hand!.length + snap.players[1]!.handCount + snap.deckCount).toBe(162);
+  });
+
+  it('换牌询问超时自动保持：60 秒逐张保持完 6 张后正常开局', async () => {
+    vi.useFakeTimers();
+    const s = mkElmSetup();
+    s.mgr.setDevDraw(s.sockets[0]!.id, true);
+    s.mgr.startGame(s.sockets[0]!.id);
+    const ask1 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask1.kind).toBe('devSwap');
+    // 超时 60s → 保持第 1 张 → 自动推进第 2 张
+    await vi.advanceTimersByTimeAsync(60_000);
+    const ask2 = lastEmit<SkillAsk>(s.sockets[0]!, SERVER_EVENTS.skillAsk)!;
+    expect(ask2.kind).toBe('devSwap');
+    expect(ask2.swapIndex).toBe(1);
+    // 剩余 5 张全部超时 → 全部保持 → 开局
+    for (let i = 0; i < 5; i++) await vi.advanceTimersByTimeAsync(60_000);
+    const snap = lastEmit<GameSnapshot>(s.sockets[0]!, SERVER_EVENTS.snapshot)!;
+    expect(snap.phase).toBe('playing');
+    expect(snap.pendingAsk).toBeNull();
+    const me = snap.players.find((p) => p.id === s.ids[0]!)!;
+    expect(me.handCount).toBe(6); // 全部保持：原始发牌 6 张
+    // 全程无换牌播报
+    const evs = emittedEvents(s.sockets[0]!);
+    expect(evs.some((e) => e.type === 'skill:triggered' && e.playerId === s.ids[0])).toBe(false);
+    vi.useRealTimers();
   });
 });

@@ -1,11 +1,20 @@
-// 技能询问弹窗：按询问类型渲染（确认/选花色/选项/选牌/选目标/插队），带倒计时。
+// 技能询问弹窗：按询问类型渲染（确认/选花色/选项/选牌/选目标/插队/自定义摸牌），带倒计时。
 // 询问完整载荷由服务端定向发送（game:skill-ask），超时服务端自动按弃权处理。
 // 退场两阶段：store 清空后先淡出 0.25s 再卸载（新询问到达立即恢复；快照驱动关闭逻辑在 store）。
 import { useEffect, useMemo, useState } from 'react';
-import type { Card as CardT, SkillAsk } from '@gdys/shared';
+import { JOKER_BIG, JOKER_SMALL, RANK_2, RANK_3, type Card as CardT, type CardRank, type DevCardSpec, type SkillAsk, type Suit } from '@gdys/shared';
 import { useStore } from '../store';
 import { STR } from '../strings';
 import Card from './Card';
+
+/** 自定义摸牌（Elm）选牌网格：4 花色 × 3~2 全部点数 + 大小王（虚拟牌面，仅用于展示与选择） */
+const DEV_SWAP_GRID: DevCardSpec[] = [
+  ...Array.from({ length: 4 }, (_, suit) =>
+    Array.from({ length: RANK_2 - RANK_3 + 1 }, (_, i) => ({ suit: suit as Suit, rank: RANK_3 + i })),
+  ).flat(),
+  { joker: JOKER_SMALL },
+  { joker: JOKER_BIG },
+];
 
 /** 倒计时（秒）：用询问自带超时毫秒数 */
 function useAskCountdown(ask: SkillAsk | null): number | null {
@@ -103,7 +112,7 @@ export default function SkillAskModal() {
   const toggle = (id: number) =>
     setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
 
-  const answer = (payload: { choice?: string; cardIds?: number[]; targetPlayerId?: string; guess?: number }) =>
+  const answer = (payload: { choice?: string; cardIds?: number[]; targetPlayerId?: string; guess?: number; swapSpec?: DevCardSpec }) =>
     void answerSkill({ askId: last.askId, ...payload });
 
   let body: React.ReactNode;
@@ -175,6 +184,28 @@ export default function SkillAskModal() {
       body = <PickGrid cards={myHand} picked={picked} onToggle={toggle} />;
       canSubmit = picked.length > 0;
       break;
+    case 'devSwap':
+      // 自定义摸牌（Elm 开发者账号）：展示刚摸到的牌 + 54 格选牌网格，点格子直接换
+      body = (
+        <div className="dev-swap">
+          <div className="dev-swap-cur">
+            <span className="dev-swap-cur-label">{STR.game.devSwapKeep}</span>
+            {(last.cards ?? []).map((c) => (
+              <Card key={c.id} card={c} />
+            ))}
+          </div>
+          <div className="dev-swap-grid">
+            {DEV_SWAP_GRID.map((spec, i) => {
+              const card: CardT =
+                'joker' in spec
+                  ? { id: -1000 - i, deck: 0, suit: 0, rank: spec.joker as CardRank }
+                  : { id: -2000 - i, deck: 0, suit: spec.suit, rank: spec.rank as CardRank };
+              return <Card key={card.id} card={card} onClick={() => answer({ swapSpec: spec })} />;
+            })}
+          </div>
+        </div>
+      );
+      break;
   }
 
   // pickTarget 无弃权按钮（历史行为）；declineAllowed: false 的询问（讲题惩罚、法音弃牌、处分等
@@ -185,7 +216,7 @@ export default function SkillAskModal() {
     <div className={`modal-overlay overlay-in ${closing ? 'overlay-closing' : ''}`}>
       <div className={`modal ask-modal modal-in ${closing ? 'modal-closing' : ''}`}>
         <div className="ask-head">
-          <span className="ask-title">⚡ {STR.game.skillAsk}</span>
+          <span className="ask-title">{last.kind === 'devSwap' ? STR.game.devSwapTitle : `⚡ ${STR.game.skillAsk}`}</span>
           {left !== null && <span className={`ask-countdown ${left <= 5 ? 'ask-urgent' : ''}`}>{left}s</span>}
         </div>
         <p className="ask-prompt">{last.prompt}</p>
@@ -207,6 +238,7 @@ export default function SkillAskModal() {
               .replace('{max}', String(max))}
           </p>
         )}
+        {last.kind === 'devSwap' && <p className="ask-hint">{STR.game.devSwapHint}</p>}
         {body}
         <div className="ask-actions">
           {showDecline && (
@@ -228,6 +260,16 @@ export default function SkillAskModal() {
             <button className="btn btn-primary" disabled={!canSubmit} onClick={() => answer({ cardIds: picked })}>
               {STR.game.submit}
             </button>
+          )}
+          {last.kind === 'devSwap' && (
+            <>
+              <button className="btn btn-secondary" onClick={() => answer({ choice: 'keep' })}>
+                {STR.game.devSwapKeep}
+              </button>
+              <button className="btn btn-primary" onClick={() => answer({ choice: 'restKeep' })}>
+                {STR.game.devSwapRestKeep}
+              </button>
+            </>
           )}
         </div>
       </div>

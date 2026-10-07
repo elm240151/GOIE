@@ -1,4 +1,4 @@
-import type { Card } from '../cards';
+import type { Card, Suit } from '../cards';
 import type { RuleConfig } from '../config';
 import type { Combo } from '../engine/combos';
 import type { GameEvent } from '../engine/events';
@@ -43,7 +43,11 @@ export type AskKind =
   | 'cutIn'
   | 'selfFollow'
   | 'proxyPlay'
-  | 'guess';
+  | 'guess'
+  | 'devSwap';
+
+/** 自定义摸牌（Elm 开发者账号）指定的一张牌：花色×点数 或 王 */
+export type DevCardSpec = { suit: Suit; rank: number } | { joker: number };
 
 export interface SkillAsk {
   /** 引擎自动生成（角色可不填） */
@@ -68,6 +72,10 @@ export interface SkillAsk {
    *  （choice/suit 取第一项、pickCards 取最前的牌），用于「对别人产生的效果不能弃权」类询问
    *  （讲题惩罚、法音弃牌、处分等，2026-10-06 用户确认）；客户端据此隐藏「放弃」按钮 */
   declineAllowed?: boolean;
+  /** devSwap（Elm 自定义摸牌换牌）：当前第几张（0 起） */
+  swapIndex?: number;
+  /** devSwap：本次要逐张决定的总张数 */
+  swapTotal?: number;
 }
 
 /** 客户端对询问的回答（game:useSkill 载荷） */
@@ -79,6 +87,8 @@ export interface AskAnswer {
   targetPlayerId?: string;
   /** guess（障目猜手牌数，1-20） */
   guess?: number;
+  /** devSwap（Elm 自定义摸牌）：刚摸到的牌换成这张（不传 = 保持这张） */
+  swapSpec?: DevCardSpec;
 }
 
 /** 主动技动作请求（game:useSkill → onSkillAction） */

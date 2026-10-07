@@ -1,5 +1,7 @@
 // Socket.IO 协议：事件名常量 + 载荷类型（两端共用，避免字符串漂移）
 
+import type { DevCardSpec } from '../roles/types';
+
 export const CLIENT_EVENTS = {
   roomCreate: 'room:create',
   roomJoin: 'room:join',
@@ -11,6 +13,7 @@ export const CLIENT_EVENTS = {
   roomLeave: 'room:leave',
   roomAddBot: 'room:addBot',
   roomRemoveBot: 'room:removeBot',
+  roomSetDevDraw: 'room:setDevDraw',
   gamePlay: 'game:play',
   gamePass: 'game:pass',
   gameUseSkill: 'game:useSkill',
@@ -63,6 +66,11 @@ export interface RoomRemoveBotPayload {
   playerId: string;
 }
 
+/** 开发者账号（Elm）开关自定义摸牌 */
+export interface RoomSetDevDrawPayload {
+  enabled: boolean;
+}
+
 export interface PlayPayload {
   cardIds: number[];
   /** 端庄（轴承）翻面：翻面的桌面牌 id（缺省 = 普通出牌） */
@@ -78,6 +86,8 @@ export interface SkillUsePayload {
   targetPlayerId?: string;
   /** 障目（辛歼）猜对方手牌数（1-20） */
   guess?: number;
+  /** 自定义摸牌（Elm 开发者账号）：刚摸到的牌换成这张（devSwap 询问回答） */
+  swapSpec?: DevCardSpec;
 }
 
 /** 大厅/房间公开状态（所有成员可见，广播用） */
@@ -90,6 +100,10 @@ export interface RoomPlayerView {
   isHost: boolean;
   /** 人机（白板无角色，房主可加入/移除） */
   isBot: boolean;
+  /** 开发者账号（名字为 Elm）：拥有自定义摸牌能力 */
+  isDev: boolean;
+  /** 自定义摸牌开关（仅 Elm 可切） */
+  devDraw: boolean;
 }
 
 export interface RoomState {
