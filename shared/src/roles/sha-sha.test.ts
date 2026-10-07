@@ -183,6 +183,8 @@ describe('煞蔱：约等 + 直播', () => {
     const d = ask(engine);
     expect(d.askPlayerId).toBe('p1');
     expect(engine.resolveAsk('p1', { askId: d.askId!, choice: '摸 2 张' }).ok).toBe(true);
+    // 摸牌延后（2026-10-07 用户反馈）：直播选择询问挂起时辛歼尚未摸——技能先生效再摸
+    expect(engine.snapshotFor('p1').players.find((p) => p.id === 'p1')!.handCount).toBe(1);
     // 直播选择照常弹出
     const c = ask(engine);
     expect(c.prompt).toContain('直播');
@@ -213,6 +215,33 @@ describe('煞蔱：约等 + 直播', () => {
     expect(engine.snapshotFor('p0').phase).toBe('finished');
     // 障目只拦技能、不拦获胜判定：辛歼照常获胜（打光即胜时非亡语打断不再询问）
     expect(r.ok && r.events.some((e) => e.type === 'game:ended' && (e as { winnerId?: string }).winnerId === 'p1')).toBe(true);
+  });
+
+  it('约等 + 障目猜中：均分先结算、辛歼摸 1-3 延后到技能完成（2026-10-07 用户反馈：技能先生效再摸）', () => {
+    const hands = {
+      p0: [deck[1]!, deck[3]!, deck[4]!], // 煞蔱：♠4 压（收回）、♠6♠7 陪洗
+      p1: [deck[0]!, deck[2]!, deck[28]!], // 辛歼：♠3 起牌、♠5♣5 陪洗
+    };
+    const engine = mkEngine(hands, { p0: shaSha, p1: xinJian }, 'p1');
+    expect(engine.playCards('p1', [deck[0]!.id]).ok).toBe(true); // 辛歼起牌 ♠3
+    expect(engine.playCards('p0', [deck[1]!.id]).ok).toBe(true); // 煞蔱压 ♠4 → 约等询问
+    const c1 = ask(engine);
+    expect(c1.prompt).toContain('约等');
+    expect(engine.resolveAsk('p0', { askId: c1.askId!, choice: 'yes' }).ok).toBe(true);
+    // 障目：猜辛歼手牌数（♠5♣5 共 2 张）
+    const g = ask(engine);
+    expect(g.kind).toBe('guess');
+    expect(engine.resolveAsk('p0', { askId: g.askId!, guess: 2 }).ok).toBe(true);
+    // 猜中 → 辛歼自选摸 3 张 → 均分完成（X = 3 + 2 = 5 → 煞蔱 ⌊5/2⌋ = 2、辛歼 3）后才摸 3 → 辛歼 6
+    const d = ask(engine);
+    expect(d.askPlayerId).toBe('p1');
+    expect(engine.resolveAsk('p1', { askId: d.askId!, choice: '摸 3 张' }).ok).toBe(true);
+    const snap = engine.snapshotFor('p0');
+    expect(snap.players.find((p) => p.id === 'p0')!.handCount).toBe(2); // 均分没把新摸的牌算进去
+    expect(snap.table?.rank).toBe(3); // 桌面回退到 ♠3
+    expect(snap.turnPlayerId).toBe('p1'); // 从煞蔱下家继续接牌
+    // 神秘对别人隐藏手牌数：用辛歼自己的视角看
+    expect(engine.snapshotFor('p1').players.find((p) => p.id === 'p1')!.handCount).toBe(6); // 均分 3 + 障目摸 3
   });
 
   it('约等非亡语（2026-10-06 用户裁定）：打光压出最后一手直接获胜、不再询问', () => {

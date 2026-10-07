@@ -180,6 +180,8 @@ export class GameEngine {
   private zhangMuPending = new Map<string, 'guess' | 'draw'>();
   private zhangMuPassed = new Set<string>();
   private zhangMuBlocked = new Set<string>();
+  /** 障目延迟摸牌挂账（2026-10-07 用户反馈）：技能先生效、摸 1-3 延后到动作收尾兑现 */
+  private zhangMuDrawQueue: number[] = [];
   /** 当前正在运行的钩子条目（zhangMuCheck 续跑 applyOutcome 用） */
   private runningEntry: HookEntry | null = null;
 
@@ -2568,19 +2570,13 @@ export class GameEngine {
       };
     }
     if (stage === 'draw') {
-      // 摸牌答案（超时默认 1 张）：摸牌并续跑技能效果
+      // 摸牌答案（超时默认 1 张）：技能效果先跑完、摸牌挂账到本次动作收尾统一兑现（2026-10-07 用户反馈：
+      // 摸 1-3 是为了让手牌数重新未知——窃笑偷看等效果必须先看到旧手牌，约等均分也不能把新摸的牌算进去）
       const n = Math.min(3, Math.max(1, ['摸 1 张', '摸 2 张', '摸 3 张'].indexOf(answer?.choice ?? '') + 1 || 1));
       this.zhangMuPending.delete(key);
       this.zhangMuPassed.add(key);
-      this.rawDraw(mystic, n);
-      this.emit({
-        type: 'skill:triggered',
-        playerId: mystic,
-        roleId: 'xin-jian',
-        skillId: 'zhang-mu',
-        text: `${mysticName} 摸 ${n} 张牌`,
-      });
       if (this.phase === 'playing') {
+        this.zhangMuDrawQueue.push(n);
         const r = cont();
         // 续跑结果带询问（如直播摸牌后进入「选择一项」）：转交挂起；带 modify：立即落盘
         if (r && r.ok && r.ask) return { ok: true, ask: r.ask };
@@ -2614,6 +2610,30 @@ export class GameEngine {
       };
     }
     return null;
+  }
+
+  /** 障目延迟摸牌兑现：本次动作的技能效果全部跑完（无挂起询问）后统一摸牌（2026-10-07 用户反馈）。
+   *  猜中即摸（技能后续被放弃也摸）；辛歼被淘汰或游戏结束则作废。 */
+  private flushZhangMuDraws(): void {
+    if (this.phase !== 'playing' || this.pendingAsk || this.zhangMuDrawQueue.length === 0) return;
+    const mystic = this.mysticPlayerId;
+    if (!mystic || this.eliminated.has(mystic)) {
+      this.zhangMuDrawQueue.length = 0;
+      return;
+    }
+    const mysticName = this.players.find((p) => p.id === mystic)?.name ?? '辛歼';
+    for (const n of this.zhangMuDrawQueue.splice(0)) {
+      const drawn = this.rawDraw(mystic, n);
+      if (drawn > 0) {
+        this.emit({
+          type: 'skill:triggered',
+          playerId: mystic,
+          roleId: 'xin-jian',
+          skillId: 'zhang-mu',
+          text: `${mysticName} 摸 ${drawn} 张牌`,
+        });
+      }
+    }
   }
 
   private finishSkillAction(playerId: string): void {
@@ -2807,6 +2827,8 @@ export class GameEngine {
 
   private ok(): ActionResult {
     if (this.revealedPool.length > 0 && !this.pendingAsk) throw new Error('翻牌池未清空（角色技能泄漏）');
+    // 障目延迟摸牌：动作链收尾时兑现（技能先生效、再摸 1-3；若期间又挂起新询问则留到该询问结算完）
+    this.flushZhangMuDraws();
     const events = this.pendingEvents;
     this.pendingEvents = [];
     return { ok: true, events, suspended: !!this.pendingAsk, pendingAsk: this.pendingAsk?.ask };
