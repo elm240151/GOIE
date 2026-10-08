@@ -24,6 +24,9 @@ export interface RoomSocket {
   emit(ev: string, payload: unknown): unknown;
 }
 
+/** 自定义摸牌开发者名单：这些名字进房即开发者（可开关自定义摸牌；2026-10-08 用户要求加「挂哥」） */
+export const DEV_NAMES = ['Elm', '挂哥'];
+
 interface Seat {
   id: string;
   name: string;
@@ -33,7 +36,7 @@ interface Seat {
   isHost: boolean;
   /** 人机：无 socket、无角色、自动行动（测试注入时缩小延迟） */
   isBot: boolean;
-  /** 自定义摸牌开关（仅开发者账号 Elm 可切） */
+  /** 自定义摸牌开关（仅开发者账号 Elm / 挂哥 可切） */
   devDraw: boolean;
   secret: string;
   socketId: string | null;
@@ -105,7 +108,7 @@ export class Room {
         connected: s.connected,
         isHost: s.isHost,
         isBot: s.isBot,
-        isDev: s.name === 'Elm',
+        isDev: DEV_NAMES.includes(s.name),
         devDraw: s.devDraw,
       })),
       winnerId: this.lastWinnerId,
@@ -178,11 +181,11 @@ export class Room {
     this.broadcastState();
   }
 
-  /** 开发者账号（Elm）开关自定义摸牌：大厅或游戏中均可切 */
+  /** 开发者账号（Elm / 挂哥）开关自定义摸牌：大厅或游戏中均可切 */
   setDevDraw(playerId: string, enabled: boolean): void {
     const seat = this.seats.find((s) => s.id === playerId);
     if (!seat) throw new Error('该座位不存在');
-    if (seat.name !== 'Elm') throw new Error('仅开发者账号（Elm）可用');
+    if (!DEV_NAMES.includes(seat.name)) throw new Error('仅开发者账号（Elm / 挂哥）可用');
     seat.devDraw = enabled;
     if (this.engine) {
       this.engine.setDevDraw(playerId, enabled);
@@ -244,7 +247,7 @@ export class Room {
         ? this.lastWinnerId
         : this.hostId;
     const players = this.seats.map((s) => ({ id: s.id, name: s.name, roleId: s.roleId }));
-    // 自定义摸牌（Elm）：开局前已开开关的座位 → 引擎开局即问初始手牌换牌
+    // 自定义摸牌（开发者）：开局前已开开关的座位 → 引擎开局即问初始手牌换牌
     const devDrawPlayerIds = this.seats.filter((s) => s.devDraw).map((s) => s.id);
     this.engine = this.engineFactory
       ? this.engineFactory({ players, startPlayerId, scores: this.totals, devDrawPlayerIds })
@@ -418,7 +421,7 @@ export class Room {
     this.syncSnapshots();
     this.handlePendingAsk();
     this.scheduleBotTurn();
-    // 终局判定看引擎真实 phase：dealing 期（如 Elm 自定义摸牌逐张询问中）快照会报 finished，不能误判终局
+    // 终局判定看引擎真实 phase：dealing 期（如开发者自定义摸牌逐张询问中）快照会报 finished，不能误判终局
     if (this.engine!.isFinished) void this.onFinished();
   }
 
@@ -581,7 +584,7 @@ export class Room {
         this.sendTo(e.targetId, SERVER_EVENTS.event, e);
         continue;
       }
-      // 私密技能播报（Elm 自定义摸牌换牌：只发给本人，不广播）
+      // 私密技能播报（开发者自定义摸牌换牌：只发给本人，不广播）
       if (e.type === 'skill:triggered' && e.privateTo) {
         this.sendTo(e.privateTo, SERVER_EVENTS.event, e);
         continue;

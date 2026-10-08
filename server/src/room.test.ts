@@ -1421,6 +1421,28 @@ describe('自定义摸牌（Elm 开发者账号）', () => {
     expect(st1.players.find((p) => p.name === 'Elm')!.devDraw).toBe(true);
   });
 
+  it('挂哥（2026-10-08 用户要求新增）同样算开发者：可开开关、房态 isDev', () => {
+    const factory: RoomOptions['engineFactory'] = ({ players, startPlayerId, devDrawPlayerIds }) =>
+      new GameEngine(defaultRules, players, {
+        rng: mulberry32(7),
+        startPlayerId,
+        roles: new Map(),
+        devDrawPlayerIds,
+      });
+    const mgr = new RoomManager({
+      roles: new Map(),
+      scoreStore: new MemoryScoreStore(),
+      engineFactory: factory,
+    });
+    const sockets = [mkSocket('s0'), mkSocket('s1')];
+    const { playerId } = mgr.create('挂哥', sockets[0]!);
+    const st = lastEmit<RoomState>(sockets[0]!, SERVER_EVENTS.roomUpdated)!;
+    expect(st.players.find((p) => p.name === '挂哥')!.isDev).toBe(true);
+    mgr.setDevDraw(sockets[0]!.id, true);
+    const st1 = lastEmit<RoomState>(sockets[0]!, SERVER_EVENTS.roomUpdated)!;
+    expect(st1.players.find((p) => p.id === playerId)!.devDraw).toBe(true);
+  });
+
   it('Elm 开局逐张换牌询问链：换牌生效播报、restKeep 收尾开局', () => {
     const s = mkElmSetup();
     s.mgr.setDevDraw(s.sockets[0]!.id, true);
